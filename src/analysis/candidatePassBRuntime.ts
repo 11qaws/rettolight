@@ -1,5 +1,7 @@
 import type { PreferredPreflightRuntimeTier } from "../media/localMediaPreflight";
-import type { CandidatePassBDevice } from "./candidatePassBWorkerProtocol";
+
+/** @deprecated Local Whisper runtime selection is no longer used by Candidate Pass B. */
+export type LegacyCandidatePassBDevice = "webgpu" | "wasm";
 
 export interface CandidatePassBRuntimeCapabilitySnapshot {
   readonly preferredRuntimeTier: PreferredPreflightRuntimeTier;
@@ -31,7 +33,7 @@ async function requestDefaultWebGpuAdapter(): Promise<object | null> {
 export async function selectCandidatePassBRuntimeDevice(
   capabilities: CandidatePassBRuntimeCapabilitySnapshot,
   options: CandidatePassBRuntimeSelectionOptions = {},
-): Promise<CandidatePassBDevice | null> {
+): Promise<LegacyCandidatePassBDevice | null> {
   if (options.forceWasm === true) {
     return capabilities.webAssembly ? "wasm" : null;
   }

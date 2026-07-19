@@ -128,7 +128,7 @@ function transcriptEvidence(
         event: "presentation-only",
         why: "presentation-only",
         reviewHint: "presentation-only",
-        basisLabel: "자동 전사 단서 · 재생 확인 필요",
+        basisLabel: "Gemini 대사 단서 · 재생 확인 필요",
       },
     };
   }
@@ -140,7 +140,7 @@ function transcriptEvidence(
       event: "presentation-only",
       why: "presentation-only",
       reviewHint: "presentation-only",
-      basisLabel: "자동 전사 추정 · 빠른 근거 유지",
+      basisLabel: "Gemini 대사 추정 · 빠른 근거 유지",
     },
   };
 }
@@ -348,7 +348,7 @@ describe("buildCandidateEvidenceExplanation", () => {
     const explanation = buildCandidateEvidenceExplanation(input({ passBEvidence }));
 
     expect(explanation.eventClue.text).toContain(
-      "자동 전사 추정에서 반응 시점 부근 “내가 우승했다 상대를 이겼다”로 인식됐어요",
+      "Gemini 대사 추정에서 반응 시점 부근 “내가 우승했다 상대를 이겼다”로 인식됐어요",
     );
     expect(explanation.eventClue.text).toContain("확정하지 않아요");
     expect(explanation.eventClue.basisCodes).toContain(
@@ -365,7 +365,7 @@ describe("buildCandidateEvidenceExplanation", () => {
     const explanation = buildCandidateEvidenceExplanation(input({ passBEvidence }));
 
     expect(explanation.eventClue.text).toContain(
-      "품질 신호를 통과한 자동 전사",
+      "품질 신호를 통과한 Gemini 대사",
     );
     expect(explanation.eventClue.text).toContain("“골 넣었어”로 인식됐어요");
     expect(explanation.eventClue.text).toContain("확정하지 않아요");
@@ -387,7 +387,7 @@ describe("buildCandidateEvidenceExplanation", () => {
     expect(transcript).toMatchObject({
       basisCodes: ["transcript-no-clear", "semantic-event-unknown"],
     });
-    expect(transcript?.text).toContain("표시할 수 있는 대사 위치가 없어");
+    expect(transcript?.text).toContain("표시할 수 있는 한국어 대사 위치가 없어");
     expect(transcript?.text).not.toContain("에서 로 인식");
   });
 
@@ -779,8 +779,8 @@ describe("buildCandidateEvidenceExplanation", () => {
 
   it.each([
     ["silent", "말소리 단서를 얻지 못했어요"],
-    ["empty-transcript", "읽을 수 있는 대사 단서를 얻지 못했어요"],
-    ["low-quality-transcript", "자동 전사 품질이 낮아"],
+    ["empty-transcript", "읽을 수 있는 한국어 대사 단서를 얻지 못했어요"],
+    ["low-quality-transcript", "Gemini 대사 품질이 낮아"],
   ] as const)("keeps the %s transcript fallback non-destructive", (reason, text) => {
     const baseline = buildCandidateEvidenceExplanation(input());
     const explanation = buildCandidateEvidenceExplanation(

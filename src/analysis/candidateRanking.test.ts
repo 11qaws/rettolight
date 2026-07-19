@@ -124,10 +124,10 @@ function provisionalTranscript(
       },
     ],
     overlay: {
-      event: "자동 전사 추정",
+      event: "Gemini 대사 추정",
       why: "재생 확인 필요",
       reviewHint: "직접 확인",
-      basisLabel: "자동 전사 추정 · 빠른 근거 유지",
+      basisLabel: "Gemini 대사 추정 · 빠른 근거 유지",
     },
     quality: {
       receivedChunkCount: 1,

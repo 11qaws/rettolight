@@ -1,4 +1,5 @@
 import {
+  CANDIDATE_PASS_B_DEVICE,
   CANDIDATE_PASS_B_DTYPE,
   CANDIDATE_PASS_B_LANGUAGE,
   CANDIDATE_PASS_B_MODEL_ID,
@@ -8,6 +9,7 @@ import {
   MAX_CANDIDATE_PASS_B_SOURCE_DURATION_MS,
   MAX_CANDIDATE_PASS_B_TARGET_DURATION_MS,
   MAX_CANDIDATE_PASS_B_TARGETS,
+  candidatePassBWorkerFailureMessage,
   type CandidatePassBCandidateGap,
   type CandidatePassBCandidateGapReason,
   type CandidatePassBCandidateProgress,
@@ -21,8 +23,18 @@ import {
   type CandidatePassBWorkerRequest,
   type CandidatePassBWorkerResponse,
 } from "./candidatePassBWorkerProtocol";
+import {
+  MAX_CANDIDATE_PASS_B_INSIGHT_TEXT_LENGTH,
+  MAX_CANDIDATE_PASS_B_SEGMENT_TEXT_LENGTH,
+  MAX_CANDIDATE_PASS_B_TRANSCRIPT_SEGMENTS,
+  MAX_CANDIDATE_PASS_B_TRANSCRIPT_TEXT_LENGTH,
+  MAX_CANDIDATE_PASS_B_UNCERTAINTIES,
+  MAX_CANDIDATE_PASS_B_UNCERTAINTY_LENGTH,
+  normalizeCandidatePassBGeminiApiKey,
+} from "./candidatePassBGemini";
 
 export {
+  CANDIDATE_PASS_B_DEVICE,
   CANDIDATE_PASS_B_DTYPE,
   CANDIDATE_PASS_B_LANGUAGE,
   CANDIDATE_PASS_B_MODEL_ID,
@@ -39,6 +51,7 @@ export {
   type CandidatePassBDevice,
   type CandidatePassBModelProgress,
   type CandidatePassBTarget,
+  type CandidatePassBInsight,
   type CandidatePassBTranscriptResult,
   type CandidatePassBTranscriptSegment,
   type CandidatePassBWorkerFailureReason,
@@ -59,10 +72,6 @@ const RESPONSE_ENVELOPE_KEYS = [
   "eventId",
   "type",
 ] as const;
-const MAX_TRANSCRIPT_TEXT_LENGTH = 20_000;
-const MAX_TRANSCRIPT_SEGMENTS = 2_048;
-const MAX_SEGMENT_TEXT_LENGTH = 2_000;
-
 export interface CandidatePassBWorkerLike {
   addEventListener(type: WorkerEventType, listener: WorkerListener): void;
   removeEventListener(type: WorkerEventType, listener: WorkerListener): void;
@@ -76,6 +85,8 @@ export interface RunCandidatePassBWorkerOptions {
   readonly identity: CandidatePassBWorkerIdentity;
   readonly sourceDurationMs: number;
   readonly device: CandidatePassBDevice;
+  readonly apiKey: string;
+  readonly externalProcessingConsent: true;
   readonly targets: readonly CandidatePassBTarget[];
   readonly signal?: AbortSignal;
   readonly onModelProgress?: (progress: CandidatePassBModelProgress) => void;
@@ -145,6 +156,7 @@ export const DEFAULT_CANDIDATE_PASS_B_CANCEL_ACK_TIMEOUT_MS = 5_000;
 
 interface NormalizedRunInput {
   readonly sourceDurationMs: number;
+  readonly apiKey: string;
   readonly targets: readonly CandidatePassBTarget[];
 }
 
@@ -201,6 +213,24 @@ function isNonNegativeSafeInteger(value: unknown): value is number {
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
+}
+
+function hasBoundedCodePointLength(
+  value: unknown,
+  maximumLength: number,
+): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    Array.from(value).length <= maximumLength
+  );
+}
+
+function isBoundedKoreanText(value: unknown, maximumLength: number): boolean {
+  return (
+    hasBoundedCodePointLength(value, maximumLength) &&
+    /\p{Script=Hangul}/u.test(value)
+  );
 }
 
 function isNullableNonNegativeSafeInteger(value: unknown): boolean {
@@ -280,9 +310,51 @@ function isTranscriptSegment(value: unknown): boolean {
     hasExactKeys(value, ["startMs", "endMs", "text"]) &&
     isNonNegativeSafeInteger(value.startMs) &&
     isNonNegativeSafeInteger(value.endMs) &&
-    value.endMs >= value.startMs &&
-    typeof value.text === "string" &&
-    value.text.length <= MAX_SEGMENT_TEXT_LENGTH
+    value.endMs > value.startMs &&
+    hasBoundedCodePointLength(
+      value.text,
+      MAX_CANDIDATE_PASS_B_SEGMENT_TEXT_LENGTH,
+    ) &&
+    (value.text === "[불명]" || /\p{Script=Hangul}/u.test(value.text))
+  );
+}
+
+function isInsight(value: unknown): boolean {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, [
+      "eventSummaryKo",
+      "reactionSummaryKo",
+      "whyGoodClipKo",
+      "uncertaintiesKo",
+    ]) ||
+    !Array.isArray(value.uncertaintiesKo) ||
+    value.uncertaintiesKo.length < 1 ||
+    value.uncertaintiesKo.length > MAX_CANDIDATE_PASS_B_UNCERTAINTIES
+  ) {
+    return false;
+  }
+  const uncertainties: readonly unknown[] = value.uncertaintiesKo;
+  return (
+    isBoundedKoreanText(
+      value.eventSummaryKo,
+      MAX_CANDIDATE_PASS_B_INSIGHT_TEXT_LENGTH,
+    ) &&
+    isBoundedKoreanText(
+      value.reactionSummaryKo,
+      MAX_CANDIDATE_PASS_B_INSIGHT_TEXT_LENGTH,
+    ) &&
+    isBoundedKoreanText(
+      value.whyGoodClipKo,
+      MAX_CANDIDATE_PASS_B_INSIGHT_TEXT_LENGTH,
+    ) &&
+    uncertainties.every((uncertainty) =>
+      isBoundedKoreanText(
+        uncertainty,
+        MAX_CANDIDATE_PASS_B_UNCERTAINTY_LENGTH,
+      ),
+    ) &&
+    new Set(uncertainties).size === uncertainties.length
   );
 }
 
@@ -298,12 +370,14 @@ function isTranscriptResult(
       "sourceEndMs",
       "text",
       "segments",
+      "insight",
       "model",
       "language",
       "task",
       "sampleRateHz",
     ]) ||
     !isRecord(value.model) ||
+    !isInsight(value.insight) ||
     !Array.isArray(value.segments)
   ) {
     return false;
@@ -315,14 +389,15 @@ function isTranscriptResult(
     isNonNegativeSafeInteger(value.sourceEndMs) &&
     value.sourceEndMs > value.sourceStartMs &&
     typeof value.text === "string" &&
-    value.text.length <= MAX_TRANSCRIPT_TEXT_LENGTH &&
-    value.segments.length <= MAX_TRANSCRIPT_SEGMENTS &&
+    Array.from(value.text).length <=
+      MAX_CANDIDATE_PASS_B_TRANSCRIPT_TEXT_LENGTH &&
+    value.segments.length <= MAX_CANDIDATE_PASS_B_TRANSCRIPT_SEGMENTS &&
     value.segments.every(isTranscriptSegment) &&
     hasExactKeys(value.model, ["id", "revision", "dtype", "device"]) &&
     value.model.id === CANDIDATE_PASS_B_MODEL_ID &&
     value.model.revision === CANDIDATE_PASS_B_MODEL_REVISION &&
     value.model.dtype === CANDIDATE_PASS_B_DTYPE &&
-    (value.model.device === "webgpu" || value.model.device === "wasm") &&
+    value.model.device === CANDIDATE_PASS_B_DEVICE &&
     value.language === CANDIDATE_PASS_B_LANGUAGE &&
     value.task === CANDIDATE_PASS_B_TASK &&
     value.sampleRateHz === CANDIDATE_PASS_B_SAMPLE_RATE_HZ
@@ -360,6 +435,25 @@ function isCandidateGap(value: unknown): value is CandidatePassBCandidateGap {
   );
 }
 
+function safeCandidateGapMessage(
+  reasonCode: CandidatePassBCandidateGapReason,
+): string {
+  switch (reasonCode) {
+    case "NO_AUDIO_TRACK":
+      return "이 영상에는 분석할 오디오 트랙이 없어요.";
+    case "UNSUPPORTED_CONTAINER":
+      return "이 영상 형식은 현재 브라우저에서 읽을 수 없어요.";
+    case "UNSUPPORTED_AUDIO_CODEC":
+      return "이 브라우저에서 이 영상의 오디오 코덱을 읽을 수 없어요.";
+    case "EMPTY_AUDIO":
+      return "이 후보 구간에서 이어지는 말소리 단서를 찾지 못했어요.";
+    case "AUDIO_DECODE_FAILED":
+      return "이 후보 구간의 오디오를 읽는 중 문제가 생겼어요.";
+    case "TRANSCRIPTION_FAILED":
+      return "이 후보 구간을 정밀 분석하는 중 문제가 생겼어요.";
+  }
+}
+
 function isCompletionSummary(
   value: unknown,
 ): value is CandidatePassBCompletionSummary {
@@ -380,7 +474,12 @@ function isWorkerFailureReason(
   return (
     value === "INVALID_REQUEST" ||
     value === "WORKER_BUSY" ||
-    value === "MODEL_LOAD_FAILED" ||
+    value === "GEMINI_API_KEY_REJECTED" ||
+    value === "GEMINI_BAD_REQUEST" ||
+    value === "GEMINI_RATE_LIMITED" ||
+    value === "GEMINI_UNAVAILABLE" ||
+    value === "GEMINI_INVALID_RESPONSE" ||
+    value === "GEMINI_REQUEST_REJECTED" ||
     value === "UNEXPECTED_WORKER_FAILURE"
   );
 }
@@ -414,8 +513,7 @@ function isWorkerResponse(value: unknown): value is CandidatePassBWorkerResponse
       return (
         hasResponseKeys(value, ["reasonCode", "message"]) &&
         isWorkerFailureReason(value.reasonCode) &&
-        isNonEmptyString(value.message) &&
-        value.message.length <= 1_000
+        value.message === candidatePassBWorkerFailureMessage(value.reasonCode)
       );
     default:
       return false;
@@ -503,13 +601,16 @@ function normalizeInput(
   file: File,
   options: RunCandidatePassBWorkerOptions,
 ): NormalizedRunInput | CandidatePassBWorkerError {
+  const apiKey = normalizeCandidatePassBGeminiApiKey(options.apiKey);
   if (
     typeof file !== "object" ||
     file === null ||
     !Number.isFinite(file.size) ||
     file.size < 0 ||
     !validateIdentity(options.identity) ||
-    (options.device !== "webgpu" && options.device !== "wasm") ||
+    options.device !== CANDIDATE_PASS_B_DEVICE ||
+    apiKey === null ||
+    options.externalProcessingConsent !== true ||
     !Number.isFinite(options.sourceDurationMs)
   ) {
     return new CandidatePassBWorkerError(
@@ -569,7 +670,7 @@ function normalizeInput(
     targets.push(normalizedTarget);
   }
 
-  return { sourceDurationMs, targets };
+  return { sourceDurationMs, apiKey, targets };
 }
 
 function stageRank(stage: CandidatePassBCandidateProgress["stage"]): number {
@@ -615,9 +716,9 @@ function hasValidSegmentTimeline(result: CandidatePassBTranscriptResult): boolea
 }
 
 /**
- * Runs Korean Whisper only for the supplied score-ordered candidate ranges.
- * Partial transcripts are emitted candidate-by-candidate; raw PCM never crosses
- * the Worker boundary and the client terminates the Worker on every exit path.
+ * Sends only the supplied score-ordered candidate ranges to Gemini after the
+ * caller supplies an API key and explicit external-processing consent. Partial
+ * results remain fenced candidate-by-candidate; no key is returned in results.
  */
 export function runCandidatePassBWorker(
   file: File,
@@ -872,9 +973,13 @@ export function runCandidatePassBWorker(
         rejectMalformedMessage();
         return;
       }
+      const safeGap: CandidatePassBCandidateGap = {
+        ...gap,
+        message: safeCandidateGapMessage(gap.reasonCode),
+      };
       terminalCandidateIds.add(gap.candidateId);
-      gaps.push(gap);
-      invokeResultCallback(() => options.onCandidateGap?.(gap));
+      gaps.push(safeGap);
+      invokeResultCallback(() => options.onCandidateGap?.(safeGap));
     };
 
     const handleMessage = (event: MessageEvent<unknown> | ErrorEvent): void => {
@@ -937,7 +1042,7 @@ export function runCandidatePassBWorker(
               ok: false,
               error: new CandidatePassBWorkerError(
                 "WORKER_FAILED",
-                event.data.message,
+                candidatePassBWorkerFailureMessage(event.data.reasonCode),
                 { workerReasonCode: event.data.reasonCode },
               ),
             });
@@ -981,18 +1086,14 @@ export function runCandidatePassBWorker(
       });
     };
 
-    const handleWorkerError = (
-      event: MessageEvent<unknown> | ErrorEvent,
-    ): void => {
+    const handleWorkerError = (): void => {
       finish({
         ok: false,
         error:
           cancellationError ??
           new CandidatePassBWorkerError(
             "WORKER_FAILED",
-            event instanceof ErrorEvent && event.message.length > 0
-              ? event.message
-              : "후보 정밀 분석 작업 공간이 예기치 않게 멈췄어요.",
+            "후보 정밀 분석 작업 공간이 예기치 않게 멈췄어요.",
           ),
       });
     };
@@ -1026,7 +1127,9 @@ export function runCandidatePassBWorker(
         identity: options.identity,
         file,
         sourceDurationMs: normalized.sourceDurationMs,
-        device: options.device,
+        device: CANDIDATE_PASS_B_DEVICE,
+        apiKey: normalized.apiKey,
+        externalProcessingConsent: true,
         targets: normalized.targets,
       });
     } catch {

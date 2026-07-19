@@ -11,8 +11,8 @@ export const CANDIDATE_PASS_B_PRESENTATION_MAX_CUES = 3;
 export type CandidatePassBStatusLabel =
   | "빠른 근거만"
   | "또렷한 대사 없음"
-  | "자동 전사 추정 · 재생 확인 필요"
-  | "자동 전사 단서 · 재생 확인 필요";
+  | "Gemini 대사 추정 · 재생 확인 필요"
+  | "Gemini 대사 단서 · 재생 확인 필요";
 
 export type CandidatePassBCuePhaseLabel = "반응 전" | "반응 시점 부근" | "반응 뒤";
 
@@ -119,7 +119,7 @@ export function buildCandidatePassBPresentation(
     const presentation = basePresentation(
       candidateId,
       baseNarrative,
-      "자동 전사 추정 · 재생 확인 필요",
+      "Gemini 대사 추정 · 재생 확인 필요",
     );
     return {
       ...presentation,
@@ -140,7 +140,7 @@ export function buildCandidatePassBPresentation(
     basis: baseNarrative.basis,
     basisLabel: evidence.overlay.basisLabel,
     reviewHint: evidence.overlay.reviewHint,
-    passBStatusLabel: "자동 전사 단서 · 재생 확인 필요",
+    passBStatusLabel: "Gemini 대사 단서 · 재생 확인 필요",
     cues: evidence.cues
       .slice(0, CANDIDATE_PASS_B_PRESENTATION_MAX_CUES)
       .map(presentationCue),

@@ -460,8 +460,8 @@ function transcriptObservation(
       evidence.fallbackReason === "silent"
         ? "말소리 단서를 얻지 못했어요."
         : evidence.fallbackReason === "low-quality-transcript"
-          ? "자동 전사 품질이 낮아 대사 단서를 사건 설명에 사용하지 않았어요."
-          : "자동 전사에서 읽을 수 있는 대사 단서를 얻지 못했어요.";
+          ? "Gemini 대사 품질이 낮아 대사 단서를 사건 설명에 사용하지 않았어요."
+          : "Gemini에서 읽을 수 있는 한국어 대사 단서를 얻지 못했어요.";
     return observedStatement(
       "transcript",
       `${reason} 실제 사건과 반응은 후보를 재생해 확인해야 해요.`,
@@ -472,7 +472,7 @@ function transcriptObservation(
   if (cues.length === 0) {
     return observedStatement(
       "transcript",
-      "자동 전사 결과에 표시할 수 있는 대사 위치가 없어 사건 설명에 사용하지 않았어요. 실제 사건과 반응은 후보를 재생해 확인해야 해요.",
+      "Gemini 결과에 표시할 수 있는 한국어 대사 위치가 없어 사건 설명에 사용하지 않았어요. 실제 사건과 반응은 후보를 재생해 확인해야 해요.",
       ["transcript-no-clear", "semantic-event-unknown"],
       true,
     );
@@ -487,8 +487,8 @@ function transcriptObservation(
   return observedStatement(
     "transcript",
     provisional
-      ? `자동 전사 추정에서 ${cueSummary}로 인식됐어요. 독립적인 품질 신호가 충분하지 않아 위치 확인에만 사용해요.`
-      : `품질 신호를 통과한 자동 전사에서 ${cueSummary}로 인식됐어요. 자동 전사는 틀릴 수 있으며 문장 내용은 사건 사실이 아니에요.`,
+      ? `Gemini 대사 추정에서 ${cueSummary}로 인식됐어요. 독립적인 품질 신호가 충분하지 않아 위치 확인에만 사용해요.`
+      : `품질 신호를 통과한 Gemini 대사에서 ${cueSummary}로 인식됐어요. Gemini 대사는 틀릴 수 있으며 문장 내용은 사건 사실이 아니에요.`,
     [
       provisional ? "transcript-provisional-cue" : "transcript-qualified-cue",
       "semantic-event-unknown",
@@ -527,7 +527,7 @@ function eventClue(
   if (cue !== undefined && evidence !== undefined) {
     const provisional = evidence.status === "provisional-transcript";
     return statement(
-      `${provisional ? "자동 전사 추정" : "품질 신호를 통과한 자동 전사"}에서 ${
+      `${provisional ? "Gemini 대사 추정" : "품질 신호를 통과한 Gemini 대사"}에서 ${
         TRANSCRIPT_PHASE_LABELS[cue.phase]
       } ${quotedTranscript(cue.text)}로 인식됐어요. 이 문장만으로 실제 사건·행위자·결과를 확정하지 않아요.`,
       [
@@ -715,7 +715,7 @@ function replayFocus(
         cue.absoluteStartMs,
         effectiveRange,
       ),
-      label: `자동 전사 ${quotedTranscript(cue.text)}가 실제 발화인지 확인`,
+      label: `Gemini 대사 ${quotedTranscript(cue.text)}가 실제 발화인지 확인`,
     });
   }
   return Object.freeze({

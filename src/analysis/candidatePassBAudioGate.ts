@@ -12,7 +12,7 @@ export interface CandidatePassBAudioGateSummary {
 }
 
 /**
- * Rejects digital silence and isolated clicks before Whisper can hallucinate
+ * Rejects digital silence and isolated clicks before remote transcription can hallucinate
  * speech. It is intentionally only a conservative gate, not a speaker or
  * sound-event classifier.
  */

@@ -7,7 +7,7 @@ export const CANDIDATE_PASS_B_TERMINAL_STATUSES = [
   "failed",
 ] as const;
 
-export type CandidatePassBRuntimeDevice = "webgpu" | "wasm";
+export type CandidatePassBRuntimeDevice = "webgpu" | "wasm" | "remote";
 
 export interface CandidatePassBRunIdentity {
   readonly sessionId: string;

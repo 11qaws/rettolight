@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  CANDIDATE_PASS_B_DEVICE,
   CANDIDATE_PASS_B_DTYPE,
   CANDIDATE_PASS_B_LANGUAGE,
   CANDIDATE_PASS_B_MODEL_ID,
@@ -15,9 +16,10 @@ import {
   type CandidatePassBWorkerLike,
   type RunCandidatePassBWorkerOptions,
 } from "./candidatePassBWorkerClient";
-import type {
-  CandidatePassBWorkerRequest,
-  CandidatePassBWorkerResponsePayload,
+import {
+  candidatePassBWorkerFailureMessage,
+  type CandidatePassBWorkerRequest,
+  type CandidatePassBWorkerResponsePayload,
 } from "./candidatePassBWorkerProtocol";
 
 type WorkerEventType = "message" | "messageerror" | "error";
@@ -92,11 +94,17 @@ function transcriptFor(target: CandidatePassBTarget): CandidatePassBTranscriptRe
         text: "대박",
       },
     ],
+    insight: {
+      eventSummaryKo: "짧은 한국어 발화가 이어져 들려요.",
+      reactionSummaryKo: "목소리가 잠시 커지는 반응 단서가 들려요.",
+      whyGoodClipKo: "발화와 소리 변화가 가까워 먼저 확인할 만해요.",
+      uncertaintiesKo: ["화자와 화면 사건은 오디오만으로 확인할 수 없어요."],
+    },
     model: {
       id: CANDIDATE_PASS_B_MODEL_ID,
       revision: CANDIDATE_PASS_B_MODEL_REVISION,
       dtype: CANDIDATE_PASS_B_DTYPE,
-      device: "wasm",
+      device: CANDIDATE_PASS_B_DEVICE,
     },
     language: CANDIDATE_PASS_B_LANGUAGE,
     task: CANDIDATE_PASS_B_TASK,
@@ -127,7 +135,9 @@ function startWith(
     {
       identity,
       sourceDurationMs: 180_000,
-      device: "wasm",
+      device: CANDIDATE_PASS_B_DEVICE,
+      apiKey: "test-api-key",
+      externalProcessingConsent: true,
       targets: overrides.targets ?? targets,
       workerFactory: () => worker,
       ...(overrides.signal === undefined ? {} : { signal: overrides.signal }),
@@ -192,7 +202,9 @@ describe("runCandidatePassBWorker", () => {
       type: "candidate-pass-b-analyze",
       identity,
       sourceDurationMs: 180_000,
-      device: "wasm",
+      device: CANDIDATE_PASS_B_DEVICE,
+      apiKey: "test-api-key",
+      externalProcessingConsent: true,
       targets,
     });
 
@@ -241,7 +253,7 @@ describe("runCandidatePassBWorker", () => {
         sourceStartMs: 10_000,
         sourceEndMs: 50_000,
         reasonCode: "TRANSCRIPTION_FAILED",
-        message: "첫 후보의 말은 글로 바꾸지 못했어요.",
+        message: "이 후보 구간을 정밀 분석하는 중 문제가 생겼어요.",
       },
     });
     emit(worker, "event-6", {
@@ -292,7 +304,7 @@ describe("runCandidatePassBWorker", () => {
           sourceStartMs: 10_000,
           sourceEndMs: 50_000,
           reasonCode: "TRANSCRIPTION_FAILED",
-          message: "첫 후보의 말은 글로 바꾸지 못했어요.",
+          message: "이 후보 구간을 정밀 분석하는 중 문제가 생겼어요.",
         },
       ],
       summary: { requestedCount: 2, completedCount: 1, gapCount: 1 },
@@ -388,6 +400,89 @@ describe("runCandidatePassBWorker", () => {
     });
     expect(onPartialResult).not.toHaveBeenCalled();
     expect(worker.terminateCount).toBe(1);
+  });
+
+  it("rejects a zero-length transcript segment at the client boundary", async () => {
+    const worker = new FakeWorker();
+    const onPartialResult = vi.fn();
+    const promise = startWith(worker, {
+      targets: [targets[0] as CandidatePassBTarget],
+      onPartialResult,
+    });
+    const result = transcriptFor(targets[0] as CandidatePassBTarget);
+    const firstSegment = result.segments[0];
+    expect(firstSegment).toBeDefined();
+
+    worker.emitMessage({
+      ...identity,
+      eventId: "event-zero-length-segment",
+      type: "candidate-pass-b-partial-result",
+      result: {
+        ...result,
+        segments: [
+          {
+            ...firstSegment,
+            endMs: firstSegment?.startMs,
+          },
+        ],
+      },
+    });
+
+    await expect(promise).rejects.toMatchObject({ code: "WORKER_MESSAGE_ERROR" });
+    expect(onPartialResult).not.toHaveBeenCalled();
+  });
+
+  it("rejects an insight with an extra key before exposing it", async () => {
+    const worker = new FakeWorker();
+    const onPartialResult = vi.fn();
+    const promise = startWith(worker, {
+      targets: [targets[0] as CandidatePassBTarget],
+      onPartialResult,
+    });
+    const result = transcriptFor(targets[0] as CandidatePassBTarget);
+
+    worker.emitMessage({
+      ...identity,
+      eventId: "event-1",
+      type: "candidate-pass-b-partial-result",
+      result: {
+        ...result,
+        insight: { ...result.insight, apiKey: "must-not-cross-boundary" },
+      },
+    });
+
+    await expect(promise).rejects.toMatchObject({
+      code: "WORKER_MESSAGE_ERROR",
+    });
+    expect(onPartialResult).not.toHaveBeenCalled();
+  });
+
+  it("maps a canonical Gemini failure without accepting a raw worker error", async () => {
+    const worker = new FakeWorker();
+    const promise = startWith(worker);
+    emit(worker, "event-1", {
+      type: "candidate-pass-b-failed",
+      reasonCode: "GEMINI_RATE_LIMITED",
+      message: candidatePassBWorkerFailureMessage("GEMINI_RATE_LIMITED"),
+    });
+
+    await expect(promise).rejects.toMatchObject({
+      code: "WORKER_FAILED",
+      workerReasonCode: "GEMINI_RATE_LIMITED",
+      message: candidatePassBWorkerFailureMessage("GEMINI_RATE_LIMITED"),
+    });
+
+    const malformedWorker = new FakeWorker();
+    const malformedPromise = startWith(malformedWorker);
+    emit(malformedWorker, "event-2", {
+      type: "candidate-pass-b-failed",
+      reasonCode: "GEMINI_UNAVAILABLE",
+      message: "raw upstream body with test-api-key",
+    });
+    const error = await malformedPromise.catch((cause: unknown) => cause);
+    expect(error).toMatchObject({ code: "WORKER_MESSAGE_ERROR" });
+    expect(String(error)).not.toContain("test-api-key");
+    expect(String(error)).not.toContain("raw upstream body");
   });
 
   it("waits for a fenced cancellation ACK and reports only the real ACK", async () => {
@@ -499,6 +594,69 @@ describe("runCandidatePassBWorker", () => {
     expect(worker.terminateCount).toBe(1);
   });
 
+  it("trims the API key before the Worker boundary and requires explicit consent", async () => {
+    const worker = new FakeWorker();
+    const promise = runCandidatePassBWorker(
+      new File([new Uint8Array([1])], "source.mp4"),
+      {
+        identity,
+        sourceDurationMs: 180_000,
+        device: CANDIDATE_PASS_B_DEVICE,
+        apiKey: "  test-api-key  ",
+        externalProcessingConsent: true,
+        targets: [targets[0] as CandidatePassBTarget],
+        workerFactory: () => worker,
+      },
+    );
+    expect(worker.requests[0]).toMatchObject({ apiKey: "test-api-key" });
+    emit(worker, "event-1", {
+      type: "candidate-pass-b-candidate-progress",
+      progress: {
+        candidateId: "candidate-1",
+        candidateOrdinal: 1,
+        targetCount: 1,
+        stage: "gap",
+        ratio: 1,
+      },
+    });
+    emit(worker, "event-2", {
+      type: "candidate-pass-b-candidate-gap",
+      gap: {
+        candidateId: "candidate-1",
+        sourceStartMs: 10_000,
+        sourceEndMs: 50_000,
+        reasonCode: "EMPTY_AUDIO",
+        message: "이 후보 구간에서 이어지는 말소리 단서를 찾지 못했어요.",
+      },
+    });
+    emit(worker, "event-3", {
+      type: "candidate-pass-b-completed",
+      summary: { requestedCount: 1, completedCount: 0, gapCount: 1 },
+    });
+    await expect(promise).resolves.toMatchObject({
+      summary: { requestedCount: 1, completedCount: 0, gapCount: 1 },
+    });
+
+    let factoryCalls = 0;
+    const invalidPromise = runCandidatePassBWorker(
+      new File([new Uint8Array([1])], "source.mp4"),
+      {
+        identity,
+        sourceDurationMs: 180_000,
+        device: CANDIDATE_PASS_B_DEVICE,
+        apiKey: "   ",
+        externalProcessingConsent: false as unknown as true,
+        targets: [targets[0] as CandidatePassBTarget],
+        workerFactory: () => {
+          factoryCalls += 1;
+          return new FakeWorker();
+        },
+      },
+    );
+    await expect(invalidPromise).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    expect(factoryCalls).toBe(0);
+  });
+
   it("rejects before creating a Worker when more than twelve targets are supplied", async () => {
     let factoryCalls = 0;
     const tooManyTargets = Array.from({ length: 13 }, (_, index) => ({
@@ -512,7 +670,9 @@ describe("runCandidatePassBWorker", () => {
       {
         identity,
         sourceDurationMs: 180_000,
-        device: "wasm",
+        device: CANDIDATE_PASS_B_DEVICE,
+        apiKey: "test-api-key",
+        externalProcessingConsent: true,
         targets: tooManyTargets,
         workerFactory: () => {
           factoryCalls += 1;
@@ -522,6 +682,28 @@ describe("runCandidatePassBWorker", () => {
     );
 
     await expect(promise).rejects.toBeInstanceOf(CandidatePassBWorkerError);
+    await expect(promise).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    expect(factoryCalls).toBe(0);
+  });
+
+  it("rejects a candidate longer than sixty seconds before creating a Worker", async () => {
+    let factoryCalls = 0;
+    const promise = runCandidatePassBWorker(
+      new File([new Uint8Array([1])], "source.mp4"),
+      {
+        identity,
+        sourceDurationMs: 180_000,
+        device: CANDIDATE_PASS_B_DEVICE,
+        apiKey: "test-api-key",
+        externalProcessingConsent: true,
+        targets: [{ candidateId: "candidate-too-long", startMs: 0, endMs: 60_001 }],
+        workerFactory: () => {
+          factoryCalls += 1;
+          return new FakeWorker();
+        },
+      },
+    );
+
     await expect(promise).rejects.toMatchObject({ code: "INVALID_INPUT" });
     expect(factoryCalls).toBe(0);
   });

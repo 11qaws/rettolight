@@ -1,11 +1,6 @@
 /// <reference lib="webworker" />
 
 import {
-  env,
-  pipeline,
-  type AutomaticSpeechRecognitionPipeline,
-} from "@huggingface/transformers";
-import {
   ALL_FORMATS,
   AudioSampleSink,
   BlobSource,
@@ -16,7 +11,19 @@ import {
   type InputAudioTrack,
 } from "mediabunny";
 
+import { summarizeCandidatePassBAudioGate } from "./candidatePassBAudioGate";
 import {
+  CANDIDATE_PASS_B_GEMINI_ENDPOINT,
+  MAX_CANDIDATE_PASS_B_RESPONSE_BYTES,
+  buildCandidatePassBGeminiRequestBody,
+  classifyCandidatePassBGeminiHttpFailure,
+  encodeCandidatePassBBase64,
+  encodeCandidatePassBPcm16Wav,
+  extractCandidatePassBGeminiResponse,
+  normalizeCandidatePassBGeminiApiKey,
+} from "./candidatePassBGemini";
+import {
+  CANDIDATE_PASS_B_DEVICE,
   CANDIDATE_PASS_B_DTYPE,
   CANDIDATE_PASS_B_LANGUAGE,
   CANDIDATE_PASS_B_MODEL_ID,
@@ -26,21 +33,19 @@ import {
   MAX_CANDIDATE_PASS_B_SOURCE_DURATION_MS,
   MAX_CANDIDATE_PASS_B_TARGET_DURATION_MS,
   MAX_CANDIDATE_PASS_B_TARGETS,
+  candidatePassBWorkerFailureMessage,
   type CandidatePassBCandidateGap,
   type CandidatePassBCandidateGapReason,
   type CandidatePassBCandidateProgress,
-  type CandidatePassBDevice,
   type CandidatePassBModelProgress,
   type CandidatePassBTarget,
   type CandidatePassBTranscriptResult,
-  type CandidatePassBTranscriptSegment,
+  type CandidatePassBWorkerFailureReason,
   type CandidatePassBWorkerIdentity,
   type CandidatePassBWorkerRequest,
   type CandidatePassBWorkerResponse,
   type CandidatePassBWorkerResponsePayload,
 } from "./candidatePassBWorkerProtocol";
-import { summarizeCandidatePassBAudioGate } from "./candidatePassBAudioGate";
-import { CandidatePassBModelDownloadTracker } from "./candidatePassBModelDownloadProgress";
 
 declare const self: DedicatedWorkerGlobalScope;
 
@@ -50,36 +55,22 @@ type AnalyzeRequest = Extract<
 >;
 
 const SOURCE_CACHE_BYTES = 8 * 1024 * 1024;
-const MODEL_PROGRESS_RATIO_CEILING = 0.95;
 const CANDIDATE_DECODE_RATIO_CEILING = 0.45;
 const CANDIDATE_TRANSCRIBE_RATIO = 0.5;
 const PROGRESS_MIN_INTERVAL_MS = 150;
 const PROGRESS_MIN_RATIO_STEP = 0.01;
-const MAX_TRANSCRIPT_TEXT_LENGTH = 20_000;
-const MAX_TRANSCRIPT_SEGMENTS = 2_048;
-const MAX_SEGMENT_TEXT_LENGTH = 2_000;
-const BUNDLED_ORT_WASM_URL = new URL(
-  "../../node_modules/@huggingface/transformers/dist/ort-wasm-simd-threaded.jsep.wasm",
-  import.meta.url,
-);
 
 interface ActiveTask {
   readonly identity: CandidatePassBWorkerIdentity;
   cancelled: boolean;
   input: Input<BlobSource> | null;
   inputWasDisposed: boolean;
+  fetchAbortController: AbortController | null;
 }
 
 interface DecodedCandidate {
   readonly pcm: Float32Array;
   readonly decodedOverlapFrameCount: number;
-}
-
-class ModelLoadFailure extends Error {
-  public constructor() {
-    super("The local speech model could not be loaded.");
-    this.name = "ModelLoadFailure";
-  }
 }
 
 class CandidateFailure extends Error {
@@ -91,6 +82,16 @@ class CandidateFailure extends Error {
   ) {
     super(message);
     this.name = "CandidateFailure";
+    this.reasonCode = reasonCode;
+  }
+}
+
+class GeminiWorkerFailure extends Error {
+  public readonly reasonCode: CandidatePassBWorkerFailureReason;
+
+  public constructor(reasonCode: CandidatePassBWorkerFailureReason) {
+    super("Gemini candidate analysis failed.");
+    this.name = "GeminiWorkerFailure";
     this.reasonCode = reasonCode;
   }
 }
@@ -188,15 +189,18 @@ function isNonNegativeSafeInteger(value: unknown): value is number {
 }
 
 function isValidIdentity(value: unknown): value is CandidatePassBWorkerIdentity {
-  if (!isRecord(value) || !hasExactKeys(value, [
-    "sessionId",
-    "writerEpoch",
-    "analysisRunId",
-    "passBRunId",
-    "workerEpoch",
-    "workerInstanceId",
-    "taskId",
-  ])) {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, [
+      "sessionId",
+      "writerEpoch",
+      "analysisRunId",
+      "passBRunId",
+      "workerEpoch",
+      "workerInstanceId",
+      "taskId",
+    ])
+  ) {
     return false;
   }
   return (
@@ -214,7 +218,10 @@ function isValidTarget(
   value: unknown,
   sourceDurationMs: number,
 ): value is CandidatePassBTarget {
-  if (!isRecord(value) || !hasExactKeys(value, ["candidateId", "startMs", "endMs"])) {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, ["candidateId", "startMs", "endMs"])
+  ) {
     return false;
   }
   return (
@@ -223,22 +230,27 @@ function isValidTarget(
     isNonNegativeSafeInteger(value.endMs) &&
     value.endMs > value.startMs &&
     value.endMs <= sourceDurationMs &&
-    value.endMs - value.startMs <=
-      MAX_CANDIDATE_PASS_B_TARGET_DURATION_MS
+    value.endMs - value.startMs <= MAX_CANDIDATE_PASS_B_TARGET_DURATION_MS
   );
 }
 
 function isValidAnalyzeRequest(value: unknown): value is AnalyzeRequest {
-  if (!isRecord(value) || !hasExactKeys(value, [
-    "type",
-    "identity",
-    "file",
-    "sourceDurationMs",
-    "device",
-    "targets",
-  ])) {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, [
+      "type",
+      "identity",
+      "file",
+      "sourceDurationMs",
+      "device",
+      "apiKey",
+      "externalProcessingConsent",
+      "targets",
+    ])
+  ) {
     return false;
   }
+  const normalizedApiKey = normalizeCandidatePassBGeminiApiKey(value.apiKey);
   if (
     value.type !== "candidate-pass-b-analyze" ||
     !isValidIdentity(value.identity) ||
@@ -248,7 +260,10 @@ function isValidAnalyzeRequest(value: unknown): value is AnalyzeRequest {
     !isNonNegativeSafeInteger(value.sourceDurationMs) ||
     value.sourceDurationMs <= 0 ||
     value.sourceDurationMs > MAX_CANDIDATE_PASS_B_SOURCE_DURATION_MS ||
-    (value.device !== "webgpu" && value.device !== "wasm") ||
+    value.device !== CANDIDATE_PASS_B_DEVICE ||
+    normalizedApiKey === null ||
+    normalizedApiKey !== value.apiKey ||
+    value.externalProcessingConsent !== true ||
     !Array.isArray(value.targets) ||
     value.targets.length === 0 ||
     value.targets.length > MAX_CANDIDATE_PASS_B_TARGETS
@@ -286,13 +301,6 @@ function clamp(value: number, minimum: number, maximum: number): number {
 function round(value: number, digits = 6): number {
   const factor = 10 ** digits;
   return Math.round(value * factor) / factor;
-}
-
-function normalizeText(value: unknown, maximumLength: number): string {
-  if (typeof value !== "string") {
-    return "";
-  }
-  return value.replace(/\s+/gu, " ").trim().slice(0, maximumLength);
 }
 
 function candidateGap(
@@ -355,87 +363,6 @@ function postAllTargetsAsGaps(
   });
 }
 
-function configureBundledOrtWasm(): void {
-  const wasm = env.backends.onnx.wasm;
-  if (wasm === undefined) {
-    throw new ModelLoadFailure();
-  }
-  wasm.wasmPaths = { wasm: BUNDLED_ORT_WASM_URL };
-}
-
-async function loadTranscriber(
-  task: ActiveTask,
-  device: CandidatePassBDevice,
-): Promise<AutomaticSpeechRecognitionPipeline | null> {
-  const downloadTracker = new CandidatePassBModelDownloadTracker();
-  let highestRatio = 0;
-  let lastPostedAt = 0;
-  postModelProgress(task.identity, {
-    stage: "loading",
-    ratio: 0,
-    loadedBytes: null,
-    totalBytes: null,
-  });
-
-  try {
-    configureBundledOrtWasm();
-    const transcriber = await pipeline(
-      "automatic-speech-recognition",
-      CANDIDATE_PASS_B_MODEL_ID,
-      {
-        revision: CANDIDATE_PASS_B_MODEL_REVISION,
-        dtype: CANDIDATE_PASS_B_DTYPE,
-        device,
-        progress_callback: (rawProgress) => {
-          if (task.cancelled) {
-            return;
-          }
-          const progress = downloadTracker.update(rawProgress);
-          if (progress === null) {
-            return;
-          }
-          const nextRatio = Math.max(
-            highestRatio,
-            progress.ratio * MODEL_PROGRESS_RATIO_CEILING,
-          );
-          const now = Date.now();
-          if (
-            nextRatio - highestRatio < PROGRESS_MIN_RATIO_STEP &&
-            now - lastPostedAt < PROGRESS_MIN_INTERVAL_MS
-          ) {
-            return;
-          }
-          highestRatio = nextRatio;
-          lastPostedAt = now;
-          postModelProgress(task.identity, {
-            stage: "loading",
-            ratio: round(nextRatio),
-            loadedBytes: progress.loadedBytes,
-            totalBytes: progress.totalBytes,
-          });
-        },
-      },
-    );
-
-    if (task.cancelled) {
-      await transcriber.dispose();
-      return null;
-    }
-    postModelProgress(task.identity, {
-      stage: "ready",
-      ratio: 1,
-      loadedBytes: null,
-      totalBytes: null,
-    });
-    return transcriber;
-  } catch {
-    if (task.cancelled) {
-      return null;
-    }
-    throw new ModelLoadFailure();
-  }
-}
-
 class CandidatePcmBuilder {
   private channelScratch = new Float32Array(0);
   private monoScratch = new Float32Array(0);
@@ -479,12 +406,20 @@ class CandidatePcmBuilder {
     const mono = this.monoScratch.subarray(0, sample.numberOfFrames);
     mono.fill(0);
 
-    for (let channelIndex = 0; channelIndex < sample.numberOfChannels; channelIndex += 1) {
+    for (
+      let channelIndex = 0;
+      channelIndex < sample.numberOfChannels;
+      channelIndex += 1
+    ) {
       sample.copyTo(channel, {
         planeIndex: channelIndex,
         format: "f32-planar",
       });
-      for (let frameIndex = 0; frameIndex < sample.numberOfFrames; frameIndex += 1) {
+      for (
+        let frameIndex = 0;
+        frameIndex < sample.numberOfFrames;
+        frameIndex += 1
+      ) {
         const value = channel[frameIndex] ?? 0;
         mono[frameIndex] =
           (mono[frameIndex] ?? 0) +
@@ -651,103 +586,119 @@ async function decodeCandidate(
   return decoded;
 }
 
-function parseTranscript(
-  rawResult: unknown,
-  target: CandidatePassBTarget,
-  device: CandidatePassBDevice,
-): CandidatePassBTranscriptResult {
-  if (!isRecord(rawResult) || typeof rawResult.text !== "string") {
-    throw new CandidateFailure(
-      "TRANSCRIPTION_FAILED",
-      "이 후보 구간의 말을 글로 바꾸지 못했어요.",
-    );
-  }
-
-  const segments: CandidatePassBTranscriptSegment[] = [];
-  if (Array.isArray(rawResult.chunks)) {
-    for (const chunk of rawResult.chunks.slice(0, MAX_TRANSCRIPT_SEGMENTS)) {
-      if (!isRecord(chunk) || !Array.isArray(chunk.timestamp)) {
-        continue;
-      }
-      const timestamps: readonly unknown[] = chunk.timestamp;
-      const relativeStartSeconds = timestamps[0];
-      const rawRelativeEndSeconds = timestamps[1];
-      const relativeEndSeconds =
-        rawRelativeEndSeconds === null
-          ? (target.endMs - target.startMs) / 1_000
-          : rawRelativeEndSeconds;
-      if (
-        typeof relativeStartSeconds !== "number" ||
-        !Number.isFinite(relativeStartSeconds) ||
-        typeof relativeEndSeconds !== "number" ||
-        !Number.isFinite(relativeEndSeconds) ||
-        relativeEndSeconds < relativeStartSeconds
-      ) {
-        continue;
-      }
-      const startMs = clampInteger(
-        target.startMs + relativeStartSeconds * 1_000,
-        target.startMs,
-        target.endMs,
-      );
-      const endMs = clampInteger(
-        target.startMs + relativeEndSeconds * 1_000,
-        startMs,
-        target.endMs,
-      );
-      segments.push({
-        startMs,
-        endMs,
-        text: normalizeText(chunk.text, MAX_SEGMENT_TEXT_LENGTH),
-      });
-    }
-  }
-  segments.sort((left, right) =>
-    left.startMs - right.startMs || left.endMs - right.endMs,
-  );
-
-  return {
-    mode: "candidate-pass-b-transcript",
-    candidateId: target.candidateId,
-    sourceStartMs: target.startMs,
-    sourceEndMs: target.endMs,
-    text: normalizeText(rawResult.text, MAX_TRANSCRIPT_TEXT_LENGTH),
-    segments,
-    model: {
-      id: CANDIDATE_PASS_B_MODEL_ID,
-      revision: CANDIDATE_PASS_B_MODEL_REVISION,
-      dtype: CANDIDATE_PASS_B_DTYPE,
-      device,
-    },
-    language: CANDIDATE_PASS_B_LANGUAGE,
-    task: CANDIDATE_PASS_B_TASK,
-    sampleRateHz: CANDIDATE_PASS_B_SAMPLE_RATE_HZ,
-  };
-}
-
-async function transcribeCandidate(
-  transcriber: AutomaticSpeechRecognitionPipeline,
+async function analyzeCandidateWithGemini(
   pcm: Float32Array,
   target: CandidatePassBTarget,
-  device: CandidatePassBDevice,
-): Promise<CandidatePassBTranscriptResult> {
+  apiKey: string,
+  task: ActiveTask,
+): Promise<CandidatePassBTranscriptResult | null> {
+  const wav = encodeCandidatePassBPcm16Wav(
+    pcm,
+    CANDIDATE_PASS_B_SAMPLE_RATE_HZ,
+  );
+  const fetchAbortController = new AbortController();
+  task.fetchAbortController = fetchAbortController;
+
   try {
-    const rawResult = await transcriber(pcm, {
+    const base64Wav = encodeCandidatePassBBase64(wav);
+    const serializedRequest = JSON.stringify(
+      buildCandidatePassBGeminiRequestBody(
+        base64Wav,
+        target.endMs - target.startMs,
+      ),
+    );
+
+    let response: Response;
+    try {
+      response = await fetch(CANDIDATE_PASS_B_GEMINI_ENDPOINT, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": apiKey,
+        },
+        body: serializedRequest,
+        signal: fetchAbortController.signal,
+        credentials: "omit",
+        cache: "no-store",
+        referrerPolicy: "no-referrer",
+      });
+    } catch {
+      if (task.cancelled || fetchAbortController.signal.aborted) {
+        return null;
+      }
+      throw new GeminiWorkerFailure("GEMINI_UNAVAILABLE");
+    }
+
+    if (task.cancelled) {
+      return null;
+    }
+    if (!response.ok) {
+      throw new GeminiWorkerFailure(
+        classifyCandidatePassBGeminiHttpFailure(response.status).reasonCode,
+      );
+    }
+
+    let rawResponse: string;
+    try {
+      rawResponse = await response.text();
+    } catch {
+      if (task.cancelled || fetchAbortController.signal.aborted) {
+        return null;
+      }
+      throw new GeminiWorkerFailure("GEMINI_UNAVAILABLE");
+    }
+    if (task.cancelled) {
+      return null;
+    }
+    if (
+      new TextEncoder().encode(rawResponse).byteLength >
+      MAX_CANDIDATE_PASS_B_RESPONSE_BYTES
+    ) {
+      throw new GeminiWorkerFailure("GEMINI_INVALID_RESPONSE");
+    }
+
+    let responsePayload: unknown;
+    try {
+      responsePayload = JSON.parse(rawResponse);
+    } catch {
+      throw new GeminiWorkerFailure("GEMINI_INVALID_RESPONSE");
+    }
+    const parsed = extractCandidatePassBGeminiResponse(
+      responsePayload,
+      target.endMs - target.startMs,
+    );
+    if (!parsed.ok) {
+      throw new GeminiWorkerFailure("GEMINI_INVALID_RESPONSE");
+    }
+
+    const segments = parsed.analysis.segments.map((segment) => ({
+      startMs: target.startMs + segment.relativeStartMs,
+      endMs: target.startMs + segment.relativeEndMs,
+      text: segment.text,
+    }));
+    return {
+      mode: "candidate-pass-b-transcript",
+      candidateId: target.candidateId,
+      sourceStartMs: target.startMs,
+      sourceEndMs: target.endMs,
+      text: segments.map((segment) => segment.text).join(" "),
+      segments,
+      insight: parsed.analysis.insight,
+      model: {
+        id: CANDIDATE_PASS_B_MODEL_ID,
+        revision: CANDIDATE_PASS_B_MODEL_REVISION,
+        dtype: CANDIDATE_PASS_B_DTYPE,
+        device: CANDIDATE_PASS_B_DEVICE,
+      },
       language: CANDIDATE_PASS_B_LANGUAGE,
       task: CANDIDATE_PASS_B_TASK,
-      return_timestamps: true,
-      chunk_length_s: 30,
-      stride_length_s: 5,
-    });
-    return parseTranscript(rawResult, target, device);
-  } catch (cause) {
-    if (cause instanceof CandidateFailure) {
-      throw cause;
+      sampleRateHz: CANDIDATE_PASS_B_SAMPLE_RATE_HZ,
+    };
+  } finally {
+    if (task.fetchAbortController === fetchAbortController) {
+      task.fetchAbortController = null;
     }
-    throw new CandidateFailure(
-      "TRANSCRIPTION_FAILED",
-      "이 후보 구간의 말을 글로 바꾸지 못했어요.",
-    );
+    wav.fill(0);
   }
 }
 
@@ -766,7 +717,6 @@ async function openAudioTrack(
 }
 
 async function runTask(request: AnalyzeRequest, task: ActiveTask): Promise<void> {
-  let transcriber: AutomaticSpeechRecognitionPipeline | null = null;
   try {
     let audioTrack: InputAudioTrack | null;
     try {
@@ -827,10 +777,12 @@ async function runTask(request: AnalyzeRequest, task: ActiveTask): Promise<void>
       return;
     }
 
-    transcriber = await loadTranscriber(task, request.device);
-    if (task.cancelled || transcriber === null) {
-      return;
-    }
+    postModelProgress(task.identity, {
+      stage: "ready",
+      ratio: 1,
+      loadedBytes: null,
+      totalBytes: null,
+    });
 
     let completedCount = 0;
     let gapCount = 0;
@@ -874,13 +826,13 @@ async function runTask(request: AnalyzeRequest, task: ActiveTask): Promise<void>
           stage: "transcribing",
           ratio: CANDIDATE_TRANSCRIBE_RATIO,
         });
-        const result = await transcribeCandidate(
-          transcriber,
+        const result = await analyzeCandidateWithGemini(
           candidatePcm,
           target,
-          request.device,
+          request.apiKey,
+          task,
         );
-        if (task.cancelled) {
+        if (task.cancelled || result === null) {
           return;
         }
         postCandidateProgress(task.identity, {
@@ -899,8 +851,19 @@ async function runTask(request: AnalyzeRequest, task: ActiveTask): Promise<void>
         if (task.cancelled || cause instanceof InputDisposedError) {
           return;
         }
+        if (
+          cause instanceof GeminiWorkerFailure &&
+          cause.reasonCode !== "GEMINI_INVALID_RESPONSE"
+        ) {
+          throw cause;
+        }
         const failure =
-          cause instanceof CandidateFailure
+          cause instanceof GeminiWorkerFailure
+            ? new CandidateFailure(
+                "TRANSCRIPTION_FAILED",
+                "Gemini 응답에서 안전하게 사용할 대사 단서를 얻지 못했어요.",
+              )
+            : cause instanceof CandidateFailure
             ? cause
             : new CandidateFailure(
                 "TRANSCRIPTION_FAILED",
@@ -937,26 +900,19 @@ async function runTask(request: AnalyzeRequest, task: ActiveTask): Promise<void>
     if (task.cancelled || cause instanceof InputDisposedError) {
       return;
     }
+    const reasonCode =
+      cause instanceof GeminiWorkerFailure
+        ? cause.reasonCode
+        : "UNEXPECTED_WORKER_FAILURE";
     postResponse(task.identity, {
       type: "candidate-pass-b-failed",
-      reasonCode:
-        cause instanceof ModelLoadFailure
-          ? "MODEL_LOAD_FAILED"
-          : "UNEXPECTED_WORKER_FAILURE",
-      message:
-        cause instanceof ModelLoadFailure
-          ? "로컬 음성 인식 모델을 불러오지 못했어요."
-          : "후보 정밀 분석 작업이 예기치 않게 멈췄어요.",
+      reasonCode,
+      message: candidatePassBWorkerFailureMessage(reasonCode),
     });
   } finally {
+    task.fetchAbortController?.abort();
+    task.fetchAbortController = null;
     disposeInputOnce(task);
-    if (transcriber !== null) {
-      try {
-        await transcriber.dispose();
-      } catch {
-        // The Worker is terminated by the client after its terminal event.
-      }
-    }
     if (activeTask === task) {
       activeTask = null;
     }
@@ -972,6 +928,7 @@ function handleCancel(
   const task = activeTask;
   if (task !== null && sameIdentity(task.identity, request.identity)) {
     task.cancelled = true;
+    task.fetchAbortController?.abort();
     disposeInputOnce(task);
   }
   postResponse(request.identity, {
@@ -1029,7 +986,7 @@ self.addEventListener("message", (event: MessageEvent<unknown>) => {
       postResponse(request.identity, {
         type: "candidate-pass-b-failed",
         reasonCode: "INVALID_REQUEST",
-        message: "후보 정밀 분석 요청이 올바르지 않아요.",
+        message: candidatePassBWorkerFailureMessage("INVALID_REQUEST"),
       });
     }
     return;
@@ -1038,7 +995,7 @@ self.addEventListener("message", (event: MessageEvent<unknown>) => {
     postResponse(request.identity, {
       type: "candidate-pass-b-failed",
       reasonCode: "WORKER_BUSY",
-      message: "후보 정밀 분석 작업 공간이 이미 사용 중이에요.",
+      message: candidatePassBWorkerFailureMessage("WORKER_BUSY"),
     });
     return;
   }
@@ -1048,6 +1005,7 @@ self.addEventListener("message", (event: MessageEvent<unknown>) => {
     cancelled: false,
     input: null,
     inputWasDisposed: false,
+    fetchAbortController: null,
   };
   activeTask = task;
   void runTask(request, task);

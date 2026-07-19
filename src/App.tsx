@@ -55,7 +55,6 @@ import {
   mergeCandidatePassBEvidence,
   type CandidatePassBEvidenceById,
 } from "./analysis/candidatePassBEvidenceState";
-import { selectCandidatePassBRuntimeDevice } from "./analysis/candidatePassBRuntime";
 import {
   CANDIDATE_PASS_B_MODEL_ID,
   CANDIDATE_PASS_B_MODEL_REVISION,
@@ -225,11 +224,14 @@ interface AudioAnalysisOutcome {
   readonly coverageComplete: boolean;
 }
 
-const APP_VERSION = "0.3.6";
+const APP_VERSION = "0.3.7";
 const PERSISTENCE_SCHEMA_VERSION = "0.3.0";
 const SIGNAL_ENGINE_VERSION = "streamer-reaction-fast-pass-v1";
 const MAX_CHAT_FILE_BYTES = 32 * 1024 * 1024;
 const SIGNAL_GAP_POLICY_ID = DURABLE_SIGNAL_GAP_POLICY_ID;
+
+type CandidateGeminiInsight = CandidatePassBTranscriptResult["insight"];
+type CandidateGeminiInsightById = Readonly<Record<string, CandidateGeminiInsight>>;
 
 type RecoveryCatalogState =
   | { readonly status: "loading" }
@@ -286,9 +288,6 @@ function candidatePassBRunFailureReason(
   if (!(error instanceof CandidatePassBWorkerError)) {
     return "runtime_unavailable";
   }
-  if (error.workerReasonCode === "MODEL_LOAD_FAILED") {
-    return "model_load_failed";
-  }
   if (
     error.code === "EVENT_FENCE_REJECTED" ||
     error.code === "WORKER_MESSAGE_ERROR" ||
@@ -306,13 +305,24 @@ function candidatePassBRunFailureReason(
 function explainCandidatePassBError(error: unknown): string {
   if (error instanceof CandidatePassBWorkerError) {
     if (error.code === "ABORTED") {
-      return "대사 단서 찾기를 멈췄어요. 이미 찾은 단서는 이 탭에서 그대로 볼 수 있어요.";
+      return "Gemini 후보 분석을 멈췄어요. 이미 찾은 단서는 이 탭에서 그대로 볼 수 있어요.";
     }
-    if (error.workerReasonCode === "MODEL_LOAD_FAILED") {
-      return "음성 AI 파일을 불러오지 못했어요. 인터넷 연결이나 브라우저 호환 상태를 확인한 뒤 다시 시도해 주세요. 기존 후보는 그대로 사용할 수 있어요.";
+    switch (error.workerReasonCode) {
+      case "GEMINI_API_KEY_REJECTED":
+        return "Gemini API 키를 확인할 수 없어요. Google AI Studio에서 현재 키가 사용 가능한지 확인한 뒤 다시 입력해 주세요. 키 내용은 저장하지 않았어요.";
+      case "GEMINI_BAD_REQUEST":
+        return "Gemini가 앱의 요청 형식을 받을 수 없었어요. 자동으로 다시 보내지 않았습니다. 앱을 새로고침하거나 최신 버전을 확인해 주세요. 기존 후보는 그대로 사용할 수 있어요.";
+      case "GEMINI_RATE_LIMITED":
+        return "Gemini 사용 한도에 도달했어요. 잠시 뒤 직접 다시 시도하거나 Google AI Studio에서 할당량을 확인해 주세요. 자동으로 반복 요청하지 않았어요.";
+      case "GEMINI_UNAVAILABLE":
+        return "Gemini에 연결하지 못했어요. 인터넷 연결을 확인한 뒤 원할 때 다시 시도해 주세요. 기존 후보는 그대로 사용할 수 있어요.";
+      case "GEMINI_INVALID_RESPONSE":
+        return "Gemini 답변을 안전한 후보 단서로 확인하지 못했어요. 잘못된 문장은 표시하지 않았고 기존 후보는 그대로예요.";
+      case "GEMINI_REQUEST_REJECTED":
+        return "Gemini가 후보 분석 요청을 거절했어요. Google AI Studio의 키 상태와 이용 가능 지역을 확인해 주세요.";
     }
   }
-  return "대사 단서를 끝까지 찾지 못했어요. 기존 오디오·채팅 근거와 후보는 그대로 사용할 수 있어요.";
+  return "Gemini 후보 분석을 끝까지 마치지 못했어요. 기존 오디오·채팅 근거와 후보는 그대로 사용할 수 있어요.";
 }
 
 function candidateAudioEventRunFailureReason(
@@ -427,7 +437,7 @@ function candidateRankingTranscriptNote(entry: CandidateRankingEntry): string | 
     return "재생해 볼 대사 위치도 있어요. 대사 유무 자체는 순위 점수에 더하지 않았어요.";
   }
   if (entry.reasonCodes.includes("provisional-transcript-cue")) {
-    return "자동 전사 추정 위치도 있지만 틀릴 수 있어 순위 점수에는 더하지 않았어요.";
+    return "Gemini 대사 추정 위치도 있지만 틀릴 수 있어 순위 점수에는 더하지 않았어요.";
   }
   return null;
 }
@@ -689,14 +699,17 @@ function App() {
     useState<CandidatePassBRunState | null>(null);
   const [candidatePassBEvidenceById, setCandidatePassBEvidenceById] =
     useState<CandidatePassBEvidenceById>({});
+  const [candidateGeminiInsightById, setCandidateGeminiInsightById] =
+    useState<CandidateGeminiInsightById>({});
+  const [geminiApiKey, setGeminiApiKey] = useState("");
+  const [geminiExternalProcessingConsent, setGeminiExternalProcessingConsent] =
+    useState(false);
   const [candidatePassBModelProgress, setCandidatePassBModelProgress] =
     useState<CandidatePassBModelProgress | null>(null);
   const [candidatePassBCandidateProgress, setCandidatePassBCandidateProgress] =
     useState<CandidatePassBCandidateProgress | null>(null);
   const [candidatePassBError, setCandidatePassBError] = useState<string | null>(null);
   const [candidatePassBStartPending, setCandidatePassBStartPending] = useState(false);
-  const [candidatePassBUseCompatibilityMode, setCandidatePassBUseCompatibilityMode] =
-    useState(false);
   const [candidateAudioEventRun, setCandidateAudioEventRun] =
     useState<CandidateAudioEventRunState | null>(null);
   const [candidateAudioEventEvidenceById, setCandidateAudioEventEvidenceById] =
@@ -915,26 +928,44 @@ function App() {
         ));
   const candidatePassBStatusText =
     candidatePassBStartPending
-      ? "이 브라우저에서 가장 안정적인 음성 AI 실행 방법을 확인하고 있어요."
+      ? "Gemini로 보낼 후보 범위를 확인하고 있어요."
       : candidatePassBRun === null
-      ? "빠르게 찾은 후보는 지금 바로 검토할 수 있어요. 원할 때 대사 단서를 더 붙여 보세요."
+      ? "빠르게 찾은 후보는 지금 바로 검토할 수 있어요. 원할 때 Gemini로 한국어 대사와 사건 단서를 더 붙여 보세요."
       : candidatePassBRun.status === "idle" || candidatePassBRun.status === "preparing"
-        ? "음성 AI 작업을 준비하고 있어요."
+        ? "Gemini 후보 분석 작업을 준비하고 있어요."
         : candidatePassBRun.status === "loadingModel"
-          ? "음성 AI 파일을 준비하고 있어요. 첫 실행이 가장 오래 걸릴 수 있어요."
+          ? "Gemini 연결을 준비하고 있어요."
           : candidatePassBRun.status === "transcribing"
-            ? `후보 ${candidatePassBCurrentOrdinal}/${candidatePassBSummary?.totalCandidateCount ?? candidates.length}의 대사 단서를 확인하고 있어요.`
+            ? `후보 ${candidatePassBCurrentOrdinal}/${candidatePassBSummary?.totalCandidateCount ?? candidates.length}의 짧은 오디오에서 한국어 대사와 사건 단서를 확인하고 있어요.`
             : candidatePassBRun.status === "finalizing"
-              ? "모든 후보 결과를 마지막으로 확인하고 있어요."
+              ? "Gemini 답변과 후보 시간을 마지막으로 확인하고 있어요."
               : candidatePassBRun.status === "cancelling"
-              ? "현재 작업을 안전하게 정리하고 있어요."
+              ? "전송을 멈추고 현재 작업을 안전하게 정리하고 있어요."
               : candidatePassBRun.status === "completed"
-                ? `후보 ${candidatePassBSummary?.clueFoundCount ?? 0}개에서 재생해 확인할 자동 전사 위치를 찾았어요.`
+                ? `후보 ${candidatePassBSummary?.clueFoundCount ?? 0}개에서 Gemini 한국어 대사·사건 단서를 찾았어요.`
                 : candidatePassBRun.status === "completedWithGaps"
-                  ? `자동 전사 확인 위치 ${candidatePassBSummary?.clueFoundCount ?? 0}개 후보 · 분명한 단서 없음 ${candidatePassBSummary?.noClearSpeechCount ?? 0}개 · 건너뜀 ${candidatePassBSummary?.failedCount ?? 0}개로 마쳤어요.`
+                  ? `Gemini 단서 ${candidatePassBSummary?.clueFoundCount ?? 0}개 후보 · 분명한 대사 없음 ${candidatePassBSummary?.noClearSpeechCount ?? 0}개 · 건너뜀 ${candidatePassBSummary?.failedCount ?? 0}개로 마쳤어요.`
                   : candidatePassBRun.status === "cancelled"
-                    ? "대사 단서 찾기를 멈췄어요. 이미 찾은 단서는 그대로 남아 있어요."
-                    : "대사 단서 찾기를 마치지 못했어요. 기존 후보는 그대로 검토할 수 있어요.";
+                    ? "Gemini 후보 분석을 멈췄어요. 이미 찾은 단서는 그대로 남아 있어요."
+                     : "Gemini 후보 분석을 마치지 못했어요. 기존 후보는 그대로 검토할 수 있어요.";
+  const candidatePassBExternalTransferLabel =
+    candidatePassBStartPending
+      ? "Gemini 전송 준비"
+      : candidatePassBRun === null || candidatePassBRun.status === "idle"
+        ? "선택 시 후보만"
+        : candidatePassBRun.status === "preparing" || candidatePassBRun.status === "loadingModel"
+          ? "Gemini 전송 준비"
+          : candidatePassBRun.status === "transcribing" || candidatePassBRun.status === "finalizing"
+            ? "Gemini 전송 중"
+            : candidatePassBRun.status === "cancelling"
+              ? "Gemini 전송 중지 중"
+              : candidatePassBRun.status === "completed"
+                ? "Gemini 전송 완료"
+                : candidatePassBRun.status === "completedWithGaps"
+                  ? "Gemini 일부 전송 완료"
+                  : candidatePassBRun.status === "cancelled"
+                    ? "Gemini 전송 중지"
+                    : "Gemini 전송 실패";
   const candidateAudioEventBusy =
     candidateAudioEventStartPending ||
     (candidateAudioEventRun !== null &&
@@ -1002,7 +1033,10 @@ function App() {
   const candidatePassBRuntimeAvailable =
     preflight !== null &&
     preflight.capabilities.worker &&
-    (preflight.capabilities.webGpu || preflight.capabilities.webAssembly);
+    typeof globalThis.fetch === "function";
+  const candidatePassBTransferDurationMs = candidates
+    .slice(0, 12)
+    .reduce((total, candidate) => total + candidate.endMs - candidate.startMs, 0);
   const candidateAudioEventRuntimeAvailable =
     preflight !== null &&
     preflight.capabilities.worker &&
@@ -1175,8 +1209,9 @@ function App() {
     candidatePassBStartPendingRef.current = false;
     setCandidatePassBRun(null);
     setCandidatePassBEvidenceById({});
+    setCandidateGeminiInsightById({});
+    setGeminiExternalProcessingConsent(false);
     setCandidatePassBStartPending(false);
-    setCandidatePassBUseCompatibilityMode(false);
     setCandidatePassBModelProgress(null);
     setCandidatePassBCandidateProgress(null);
     setCandidatePassBError(null);
@@ -2351,6 +2386,8 @@ function App() {
       candidateAudioEventBusy ||
       candidateAudioEventStartPendingRef.current ||
       candidatePassBStartPendingRef.current ||
+      geminiApiKey.trim().length === 0 ||
+      !geminiExternalProcessingConsent ||
       !candidatePassBRuntimeAvailable ||
       (candidatePassBMachine.current !== null &&
         !["completed", "completedWithGaps", "cancelled", "failed"].includes(
@@ -2364,28 +2401,8 @@ function App() {
     setCandidatePassBStartPending(true);
     candidatePassBOperationEpoch.current += 1;
     const operationEpoch = candidatePassBOperationEpoch.current;
-    const runtimeDevice = await selectCandidatePassBRuntimeDevice(
-      preflight.capabilities,
-      { forceWasm: candidatePassBUseCompatibilityMode },
-    );
-    if (
-      !isMounted.current ||
-      operationEpoch !== candidatePassBOperationEpoch.current
-    ) {
-      candidatePassBStartPendingRef.current = false;
-      if (isMounted.current) {
-        setCandidatePassBStartPending(false);
-      }
-      return;
-    }
-    if (runtimeDevice === null) {
-      candidatePassBStartPendingRef.current = false;
-      setCandidatePassBStartPending(false);
-      setCandidatePassBError(
-        "이 브라우저에서 음성 AI 실행 장치를 준비하지 못했어요. 최신 Chrome이나 Edge에서 다시 열어 주세요.",
-      );
-      return;
-    }
+    const runtimeDevice = "remote" as const;
+    let apiKeyForRun = geminiApiKey.trim();
 
     const sourceDurationMs = Math.round(preflight.metadata.durationMs);
     let targets: readonly CandidatePassBCoreTarget[];
@@ -2398,7 +2415,7 @@ function App() {
       candidatePassBStartPendingRef.current = false;
       setCandidatePassBStartPending(false);
       setCandidatePassBError(
-        "대사 단서를 확인할 후보 시간을 읽지 못했어요. 빠른 분석을 다시 실행해 주세요.",
+        "Gemini로 확인할 후보 시간을 읽지 못했어요. 빠른 분석을 다시 실행해 주세요.",
       );
       return;
     }
@@ -2451,7 +2468,7 @@ function App() {
     setCandidatePassBCandidateProgress(null);
     setCandidatePassBError(null);
     if (!applyCandidatePassBEvent({ type: "START_REQUESTED" })) {
-      setCandidatePassBError("대사 단서 찾기를 시작하지 못했어요. 다시 시도해 주세요.");
+      setCandidatePassBError("Gemini 후보 분석을 시작하지 못했어요. 다시 시도해 주세요.");
       return;
     }
     if (
@@ -2461,7 +2478,7 @@ function App() {
         type: "WORKER_PREPARED",
       })
     ) {
-      setCandidatePassBError("음성 AI 작업을 준비하지 못했어요. 다시 시도해 주세요.");
+      setCandidatePassBError("Gemini 후보 분석 작업을 준비하지 못했어요. 다시 시도해 주세요.");
       return;
     }
 
@@ -2484,10 +2501,12 @@ function App() {
     };
 
     try {
-      const workerResult = await runCandidatePassBWorker(sourceFile, {
+      const workerPromise = runCandidatePassBWorker(sourceFile, {
         identity,
         sourceDurationMs,
         device: runtimeDevice,
+        apiKey: apiKeyForRun,
+        externalProcessingConsent: true,
         targets: targets.map((target) => ({
           candidateId: target.candidateId,
           startMs: target.decodeStartMs,
@@ -2546,6 +2565,11 @@ function App() {
           setCandidatePassBEvidenceById((current) =>
             isCurrentOperation()
               ? mergeCandidatePassBEvidence(current, evidence)
+              : current,
+          );
+          setCandidateGeminiInsightById((current) =>
+            isCurrentOperation()
+              ? { ...current, [result.candidateId]: result.insight }
               : current,
           );
         },
@@ -2615,6 +2639,9 @@ function App() {
           }
         },
       });
+      apiKeyForRun = "";
+      setGeminiApiKey("");
+      const workerResult = await workerPromise;
       if (!isCurrentOperation()) {
         return;
       }
@@ -2648,8 +2675,8 @@ function App() {
         });
         setCandidatePassBError(
           forcedTerminationAccepted
-            ? "대사 단서 찾기를 멈추고 작업 공간을 정리했어요. 이미 찾은 단서는 이 탭에 그대로 남아 있어요."
-            : "대사 단서 작업을 정리하지 못했어요. 기존 후보는 그대로 사용할 수 있어요.",
+            ? "Gemini 후보 분석을 멈추고 작업 공간을 정리했어요. 이미 찾은 단서는 이 탭에 그대로 남아 있어요."
+            : "Gemini 후보 분석 작업을 정리하지 못했어요. 기존 후보는 그대로 사용할 수 있어요.",
         );
         return;
       }
@@ -2670,22 +2697,11 @@ function App() {
           reasonCode: candidatePassBRunFailureReason(error),
         });
       }
-      if (
-        runtimeDevice === "webgpu" &&
-        preflight.capabilities.webAssembly &&
-        error instanceof CandidatePassBWorkerError &&
-        error.workerReasonCode === "MODEL_LOAD_FAILED"
-      ) {
-        setCandidatePassBUseCompatibilityMode(true);
-        setCandidatePassBError(
-          "그래픽 가속으로 음성 AI를 준비하지 못했어요. 아래 ‘호환 모드로 다시 시도’를 누르면 더 널리 지원되는 방식으로 새 작업을 시작해요. 기존 후보와 단서는 그대로예요.",
-        );
-      } else {
-        setCandidatePassBError(explainCandidatePassBError(error));
-      }
+      setCandidatePassBError(explainCandidatePassBError(error));
     } finally {
       if (candidatePassBAbortController.current === controller) {
         candidatePassBAbortController.current = null;
+        setGeminiExternalProcessingConsent(false);
       }
     }
   };
@@ -3643,7 +3659,7 @@ function App() {
             Retto <span>Highlight</span>
           </h1>
           <div className="rh-header-actions">
-            <span className="rh-privacy-pill">● 내 컴퓨터에서만 처리</span>
+            <span className="rh-privacy-pill">● 기본 분석은 내 컴퓨터에서</span>
             <button
               className="theme-btn"
               type="button"
@@ -3677,7 +3693,7 @@ function App() {
           <span className="status-divider" aria-hidden="true" />
           <div className="status-item">
             <span className="label">외부 전송</span>
-            <span className="val">없음</span>
+            <span className="val">{candidatePassBExternalTransferLabel}</span>
           </div>
           <span className="status-ts">v{APP_VERSION}</span>
           </div>
@@ -3721,7 +3737,7 @@ function App() {
             <p>
               방송 오디오에서 웃음·외침처럼 이어지는 음성형·큰 반응 신호를 먼저 찾고, 선택한 CHZZK 채팅 반응을 함께 봅니다.
               게임·영상 소리와 스트리머 마이크는 아직 분리하지 않으므로 실제 주체는 재생해 확인해 주세요.
-              화면 변화는 사건 전후 맥락을 보조하며, 자동 전사 문구만으로 사건 이름이나 반응 원인을 확정하지 않아요.
+              화면 변화는 사건 전후 맥락을 보조하며, Gemini 대사 문구만으로 사건 이름이나 반응 원인을 확정하지 않아요.
             </p>
           </details>
         </section>
@@ -4274,19 +4290,102 @@ function App() {
               )}
 
               {candidateReviewFeatureAvailability.showPassB && (
-                <section className="rh-passb-panel" aria-labelledby="pass-b-title">
+                <section className="rh-passb-panel rh-gemini-panel" aria-labelledby="pass-b-title">
                   <div className="rh-passb-copy">
-                    <p className="rh-eyebrow">선택 기능 · 후보 대사만 자세히</p>
-                    <h4 id="pass-b-title">대사 단서를 더 찾아볼까요?</h4>
+                    <p className="rh-eyebrow">선택 기능 · Gemini 한국어 정밀 분석</p>
+                    <h4 id="pass-b-title">후보의 한국어 대사와 사건 단서를 더 자세히 살펴볼까요?</h4>
                     <p>
-                      몇 시간짜리 원본 전체가 아니라 위에서 찾은 후보 {Math.min(12, candidates.length)}개만
-                      다시 들어 보고, 자동 전사가 추정한 짧은 문구를 반응 전후의 시간 링크로 붙여요.
-                      문구는 틀릴 수 있으므로 눌러서 실제 장면을 확인해 주세요.
+                      몇 시간짜리 원본 전체가 아니라 AI가 먼저 찾은 후보 {Math.min(12, candidates.length)}개,
+                      합계 약 {formatDuration(candidatePassBTransferDurationMs)}의 오디오만 Gemini가 들어요.
+                      한국어 대사와 오디오에서 짐작할 수 있는 사건·반응·클립으로 볼 이유를 후보마다 정리합니다.
                     </p>
                     <p className="rh-help">
-                      첫 실행에는 약 45~80MB의 음성 AI 파일을 받을 수 있어요. 영상·음성·채팅은
-                      어디에도 보내지 않고 이 브라우저 안에서만 처리합니다.
+                      원본 전체·영상 화면·채팅·파일명은 보내지 않아요. Gemini 문장은 틀릴 수 있고 화면을
+                      보지 못하므로, 시간 버튼을 눌러 실제 장면을 마지막으로 확인해 주세요.
                     </p>
+                  </div>
+                  <div className="rh-gemini-setup">
+                    <label className="rh-field" htmlFor="gemini-api-key">
+                      <span>내 Gemini API 키</span>
+                      <input
+                        id="gemini-api-key"
+                        type="password"
+                        value={geminiApiKey}
+                        autoComplete="off"
+                        autoCapitalize="none"
+                        spellCheck={false}
+                        disabled={candidatePassBBusy}
+                        aria-describedby="gemini-key-help"
+                        placeholder="Google AI Studio에서 만든 키 붙여넣기"
+                        onChange={(event) => {
+                          setGeminiApiKey(event.currentTarget.value);
+                          setCandidatePassBError(null);
+                        }}
+                      />
+                    </label>
+                    <div className="rh-gemini-key-row" id="gemini-key-help">
+                      <span>키는 저장하지 않고, 전송을 시작하면 입력칸에서도 바로 비워요.</span>
+                      <a
+                        href="https://aistudio.google.com/apikey"
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        Google AI Studio에서 키 만들기
+                      </a>
+                      {geminiApiKey.length > 0 && !candidatePassBBusy && (
+                        <button
+                          className="btn btn-secondary"
+                          type="button"
+                          onClick={() => {
+                            setGeminiApiKey("");
+                            setGeminiExternalProcessingConsent(false);
+                            setCandidatePassBError(null);
+                          }}
+                        >
+                          입력한 키 지우기
+                        </button>
+                      )}
+                    </div>
+                    <label className="rh-gemini-consent">
+                      <input
+                        type="checkbox"
+                        checked={geminiExternalProcessingConsent}
+                        disabled={candidatePassBBusy}
+                        onChange={(event) =>
+                          setGeminiExternalProcessingConsent(event.currentTarget.checked)
+                        }
+                      />
+                      <span>
+                        후보 {Math.min(12, candidates.length)}개의 짧은 오디오가 Google Gemini API로
+                        전송되고 Google 정책에 따라 처리된다는 점을 확인했어요.
+                        <strong className="rh-gemini-consent-warning">
+                          무료 사용량은 Google 제품 개선과 제한된 사람 검토에 사용될 수 있어요.
+                        </strong>
+                      </span>
+                    </label>
+                    <details className="rh-gemini-policy">
+                      <summary>키 보안·비용·Google의 데이터 처리 안내</summary>
+                      <p>
+                        GitHub Pages는 비밀을 대신 보관할 서버가 없어, 브라우저에 직접 넣는 키는 서버
+                        프록시보다 노출 위험이 큽니다. 다른 서비스와 함께 쓰지 않는 Gemini 전용 키와
+                        사용량 제한을 권장해요. 앱은 요청을 저장하지 않도록 <code>store: false</code>로
+                        보내지만 Google은 악용 방지 목적으로 요청 관련 데이터를 최대 55일 보관할 수 있어요.
+                      </p>
+                      <p>
+                        무료 사용량에서는 입력·출력이 Google 제품 개선에 사용되고 제한된 사람 검토가
+                        이뤄질 수 있습니다. 결제가 연결된 유료 프로젝트에서는 제품 개선에 사용되지
+                        않지만 요금과 악용 방지 처리는 적용될 수 있어요. 민감하거나 비밀인 방송에는
+                        무료 키를 사용하지 마세요.
+                      </p>
+                      <p>
+                        <a href="https://ai.google.dev/gemini-api/docs/api-key" target="_blank" rel="noreferrer">
+                          API 키 보안 안내
+                        </a>{" · "}
+                        <a href="https://ai.google.dev/gemini-api/terms" target="_blank" rel="noreferrer">
+                          Gemini API 데이터 이용 약관
+                        </a>
+                      </p>
+                    </details>
                   </div>
                   <div className="rh-passb-actions">
                     {!candidatePassBBusy && (
@@ -4296,16 +4395,16 @@ function App() {
                         disabled={
                           sourceFile === null ||
                           !candidatePassBRuntimeAvailable ||
+                          geminiApiKey.trim().length === 0 ||
+                          !geminiExternalProcessingConsent ||
                           selectionResult.audioGapReasonCode === "NO_AUDIO_TRACK" ||
                           candidateAudioEventBusy
                         }
                         onClick={() => void runCandidatePassB()}
                       >
                         {candidatePassBRun === null
-                          ? "대사 단서 더 보기"
-                          : candidatePassBUseCompatibilityMode
-                            ? "호환 모드로 다시 시도"
-                            : "대사 단서 다시 찾기"}
+                          ? `후보 ${Math.min(12, candidates.length)}개 · ${formatDuration(candidatePassBTransferDurationMs)}를 Gemini로 보내기`
+                          : `후보 ${Math.min(12, candidates.length)}개를 Gemini로 다시 분석`}
                       </button>
                     )}
                     {candidatePassBBusy && (
@@ -4319,10 +4418,10 @@ function App() {
                         onClick={cancelCandidatePassB}
                       >
                         {candidatePassBStartPending
-                          ? "실행 방법 확인 중…"
+                          ? "전송 범위 확인 중…"
                           : candidatePassBRun?.status === "cancelling"
                             ? "멈추는 중…"
-                            : "대사 찾기 멈추기"}
+                            : "Gemini 분석 멈추기"}
                       </button>
                     )}
                     {sourceFile === null && (
@@ -4338,20 +4437,32 @@ function App() {
                         className="rh-analysis-progress"
                         max={1}
                         value={candidatePassBProgressRatio}
-                        aria-label="후보 대사 단서 찾기 진행률"
+                        aria-label="Gemini 후보 대사와 사건 분석 진행률"
                       />
                     )}
                     {selectionResult.audioGapReasonCode === "NO_AUDIO_TRACK" && (
-                      <p>이 원본에는 읽을 소리가 없어 대사 단서 기능을 사용할 수 없어요.</p>
+                      <p>이 원본에는 읽을 소리가 없어 Gemini 오디오 분석을 사용할 수 없어요.</p>
                     )}
-                    {!candidatePassBRuntimeAvailable && (
-                      <p>이 브라우저에서는 기기 안에서 음성 AI를 실행할 수 없어요. 최신 Chrome이나 Edge에서 다시 열어 주세요.</p>
+                    {sourceFile !== null && !candidatePassBRuntimeAvailable && (
+                      <p>이 브라우저에서는 후보 오디오를 안전하게 준비할 수 없어요. 최신 Chrome이나 Edge에서 다시 열어 주세요.</p>
+                    )}
+                    {sourceFile === null && (
+                      <p>Gemini 분석을 시작하려면 먼저 같은 원본 영상 파일을 다시 연결해 주세요.</p>
+                    )}
+                    {!candidatePassBBusy && sourceFile !== null && geminiApiKey.trim().length === 0 && (
+                      <p>먼저 내 Gemini API 키를 넣어 주세요. 앱 코드와 저장 공간에는 넣지 않아요.</p>
+                    )}
+                    {!candidatePassBBusy && sourceFile !== null && geminiApiKey.trim().length > 0 && !geminiExternalProcessingConsent && (
+                      <p>전송되는 범위를 읽고 확인 칸을 선택하면 시작할 수 있어요.</p>
+                    )}
+                    {!candidatePassBBusy && candidateAudioEventBusy && (
+                      <p>반응 종류 AI 확인이 끝나면 Gemini 분석을 시작할 수 있어요.</p>
                     )}
                     {candidatePassBError !== null && <p role="alert">{candidatePassBError}</p>}
                     {candidatePassBWorkStarted && (
                       <p>
-                        자동 전사 추정은 현재 탭에서 재생 확인을 돕는 임시 단서예요. 새로고침하면 사라지며,
-                        현재 CSV·Markdown·JSON·복사 결과에는 포함되지 않아요.
+                        Gemini 대사·해석은 현재 탭에서 재생 확인을 돕는 임시 단서예요. 새로고침하면
+                        사라지며, 현재 CSV·Markdown·JSON·복사 결과에는 포함되지 않아요.
                       </p>
                     )}
                   </div>
@@ -4380,7 +4491,7 @@ function App() {
                       <p>
                         방송 오디오와 채팅 반응을 중심으로 보고 화면 변화는 문맥으로만 낮게
                         반영해요. 모든 후보를 빠짐없이 끝낸 반응 종류 분석만 오디오 근거를 조금
-                        보강하고, 자동 전사 문구는 순위 점수에 넣지 않아요.
+                        보강하고, Gemini 대사 문구는 순위 점수에 넣지 않아요.
                       </p>
                     </div>
                     <span className="rh-ranking-count" aria-hidden="true">
@@ -4611,6 +4722,8 @@ function App() {
                       candidatePassBEvidenceFromMap?.candidateId === candidate.id
                         ? candidatePassBEvidenceFromMap
                         : undefined;
+                    const candidateGeminiInsight =
+                      candidateGeminiInsightById[candidate.id];
                     const narrative = buildCandidatePassBPresentation(
                       candidate.id,
                       buildHighlightNarrative(candidate),
@@ -4796,6 +4909,23 @@ function App() {
                           <strong>먼저 볼 이유</strong>
                           {evidenceExplanation.whyWorthReviewing.text}
                         </p>
+                        {candidateGeminiInsight !== undefined && (
+                          <div
+                            className="rh-gemini-quick-summary"
+                            aria-label={`후보 ${index + 1}의 Gemini 오디오 요약`}
+                          >
+                            <div>
+                            <strong>Gemini가 오디오에서 추정한 사건 단서</strong>
+                              <span>재생 확인 필요</span>
+                            </div>
+                            <p>{candidateGeminiInsight.eventSummaryKo}</p>
+                            <p>
+                              <strong>클립으로 먼저 볼 이유</strong>
+                              {candidateGeminiInsight.whyGoodClipKo}
+                            </p>
+                            <small>영상 화면과 화자 신원은 보지 못한 모델 해석이에요.</small>
+                          </div>
+                        )}
                         <details className="rh-candidate-evidence">
                           <summary aria-label={`후보 ${index + 1}의 사건과 반응 단서 보기`}>
                             사건·반응 단서 보기
@@ -4830,6 +4960,45 @@ function App() {
                               </dd>
                             </div>
                           </dl>
+                          {candidateGeminiInsight !== undefined && (
+                            <section
+                              className="rh-gemini-insight"
+                              aria-label={`후보 ${index + 1}의 Gemini 오디오 해석`}
+                            >
+                              <div className="rh-gemini-insight-heading">
+                                <strong>Gemini 오디오 해석</strong>
+                                <span>직접 재생 확인 필요</span>
+                              </div>
+                              <p>
+                                이 내용은 영상 화면을 보지 않고 후보의 혼합 오디오만 들은 모델 해석이에요.
+                                스트리머의 말·반응이나 실제 사건으로 확정하지 마세요.
+                              </p>
+                              <dl>
+                                <div>
+                                  <dt>들린 사건 단서</dt>
+                                  <dd>{candidateGeminiInsight.eventSummaryKo || "오디오만으로 사건을 구체적으로 나누기 어려워요."}</dd>
+                                </div>
+                                <div>
+                                  <dt>들린 반응 단서</dt>
+                                  <dd>{candidateGeminiInsight.reactionSummaryKo || "반응의 주체와 종류를 오디오만으로 확인하기 어려워요."}</dd>
+                                </div>
+                                <div>
+                                  <dt>클립으로 검토할 이유</dt>
+                                  <dd>{candidateGeminiInsight.whyGoodClipKo || "아래 대사 위치와 반응 정점을 직접 재생해 판단해 주세요."}</dd>
+                                </div>
+                              </dl>
+                              {candidateGeminiInsight.uncertaintiesKo.length > 0 && (
+                                <div className="rh-gemini-uncertainties">
+                                  <strong>Gemini도 확실히 알 수 없었던 점</strong>
+                                  <ul>
+                                    {candidateGeminiInsight.uncertaintiesKo.map((uncertainty, uncertaintyIndex) => (
+                                      <li key={`${uncertaintyIndex}-${uncertainty}`}>{uncertainty}</li>
+                                    ))}
+                                  </ul>
+                                </div>
+                              )}
+                            </section>
+                          )}
                           <p className="rh-primary-replay-focus">
                             <strong>
                               {evidenceExplanation.primaryReplayFocus.insideEffectiveRange
@@ -4921,8 +5090,8 @@ function App() {
                             </div>
                           )}
                           {narrative.cues.length > 0 && (
-                            <div className="rh-transcript-cues" aria-label="시간 위치가 있는 자동 전사 추정">
-                              <strong>눌러서 바로 확인할 자동 전사 위치</strong>
+                            <div className="rh-transcript-cues" aria-label="시간 위치가 있는 Gemini 한국어 대사 추정">
+                              <strong>눌러서 바로 확인할 Gemini 한국어 대사 위치</strong>
                               <ul>
                                 {narrative.cues.map((cue) => {
                                   const cueInsideCurrentRange =
@@ -4936,7 +5105,7 @@ function App() {
                                         className="rh-transcript-cue"
                                         type="button"
                                         disabled={cueDisabled}
-                                        aria-label={`${formatDuration(cue.absoluteStartMs)} ${cue.phaseLabel}, 자동 전사 추정 “${cue.text}”${cueInsideCurrentRange ? " 재생" : ", 현재 조정한 구간 밖"}`}
+                                        aria-label={`${formatDuration(cue.absoluteStartMs)} ${cue.phaseLabel}, Gemini 한국어 대사 추정 “${cue.text}”${cueInsideCurrentRange ? " 재생" : ", 현재 조정한 구간 밖"}`}
                                         onClick={(event) =>
                                           playCandidateCue(
                                             candidate,
@@ -5175,7 +5344,7 @@ function App() {
               </p>
               {unsavedSessionWorkStarted && (
                 <p className="rh-notice" data-tone="warning" role="status">
-                  이 승인·제외 판단, 시작·끝 조정, 자동 전사 추정, 오디오 반응 종류 단서와 추천 검토
+                  이 승인·제외 판단, 시작·끝 조정, Gemini 대사·해석, 오디오 반응 종류 단서와 추천 검토
                   순서는 아직 저장되지 않았어요. 다른 영상이나 결과로 이동하면 확인을 먼저 물어봅니다.
                   정밀 AI 단서와 검토 순서는 현재 다운로드에도 포함되지 않으니, 필요한 후보를 직접
                   재생해 확인한 뒤 승인해 주세요.
@@ -5318,7 +5487,8 @@ function App() {
         </div>
 
         <footer className="rh-footer">
-          Retto Highlight는 공유 서비스가 아닌 개인 편집 어시스턴트입니다. 원본·채팅은 이 탭의 로컬 처리에만 사용됩니다.
+          Retto Highlight는 공유 서비스가 아닌 개인 편집 어시스턴트입니다. 원본 전체·영상 화면·채팅은
+          로컬에 두고, 사용자가 선택한 경우에만 짧은 후보 오디오를 Gemini로 보냅니다.
         </footer>
       </main>
     </div>
