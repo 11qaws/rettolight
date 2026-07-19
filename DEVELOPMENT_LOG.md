@@ -1,0 +1,583 @@
+# Development Log
+
+## 2026-07-19 — 제품 계획 수립
+
+### 요청
+
+- 수시간짜리 치지직·YouTube 방송 또는 로컬 원본에서 스트리머 하이라이트·클립 포인트를 기록하고 정리하는 프로그램 계획
+- 30초~1분 클립 및 긴 하이라이트 지원
+- 컴퓨터 초심자에게 친절한 UI/UX
+- GitHub Pages에서 동작
+
+### 적용한 공용 규칙
+
+- `C:\Users\Qumin\.claude\CLAUDE.md` 전체 확인
+- 초심자 중심, 기본값만으로 완주, 단방향 시각 흐름
+- Before/After, 리스크와 2차 파급 검토
+- GitHub Pages의 CORS·라우팅·백엔드·비밀값 제약 선제 반영
+- 에이전트별 작업공간 규칙에 따라 `Codex/workspace` 사용
+- 사용자 승인 전 커밋하지 않음
+
+### 저장소 상태
+
+- `D:\Agents\rettohighlight`는 시작 시 비어 있었고 Git 저장소가 아니었음
+- 다른 서비스 작업 폴더와 분리해 이 문서만 `Codex/workspace`에 생성
+
+### 조사 결과
+
+- YouTube IFrame API는 현재 시각·탐색·구간 재생을 지원하지만 영상 프레임·오디오·파일을 제공하지 않음
+- 2026년 4월부터 새 시청자 Clips는 시작 시각 공유로 대체되어 종료 시각은 앱 내부 데이터로 보존해야 함
+- CHZZK 공식 Open API에는 일반 VOD 재생·바이트·클립 생성·다운로드 기능이 없고 Client Secret/CORS 때문에 Pages 직접 호출도 핵심 설계로 부적합
+- 실제 파일 출력은 사용자가 권리를 가진 로컬 원본에서만 설계
+- 장시간 파일은 Mediabunny의 streaming I/O + WebCodecs를 1차 후보로, ffmpeg.wasm은 2GB 미만 지연 폴백 후보로 판단
+- GitHub Pages에서 COOP/COEP 응답 헤더를 전제로 하지 않아 SharedArrayBuffer 필수 멀티스레드 WASM은 핵심 경로에서 제외
+
+### 제품 결정 초안
+
+- 흐름: 영상 고르기 → 보면서 장면 표시 → 한 장면씩 검토 → 결과 받기
+- 기본 빠른 후보: 클릭 시점 앞 20초 + 뒤 25초 = 45초
+- 기록 시 재생을 멈추거나 제목 입력을 요구하지 않음
+- 겹친 후보는 자동 병합하지 않고 검토 때 제안
+- IndexedDB에는 기록만 저장하고 원본 영상은 복사하지 않음
+- JSON·CSV·Markdown을 항상 보장하고 실제 영상 파일은 사전 검사 통과 시 제공
+- 자동 추천은 수동 흐름 뒤에 추가
+
+### 생성·수정 파일
+
+- `PRODUCT_PLAN.md`: 제품, UX, 플랫폼 제약, 데이터 모델, 아키텍처, 미디어 처리, 테스트, 로드맵
+- `DEVELOPMENT_LOG.md`: 조사와 결정 이력
+
+### 미해결·검증 필요
+
+- 실제 대용량 샘플로 Mediabunny의 정확 trim, 빠른 trim, 디스크 스트리밍 검증
+- MP4/WebM/MKV와 코덱별 브라우저 능력표 작성
+- CHZZK 공식 임베드 범위가 바뀌는지 구현 직전 재확인
+- 제품 이름과 첫 MVP의 실제 영상 출력 포함 범위 사용자 승인
+
+### 커밋
+
+- 수행하지 않음. 공용 규칙에 따라 검토 보고 후 사용자 승인 필요.
+
+### 최종 문서 검증
+
+- UTF-8로 다시 읽어 대체 문자(`U+FFFD`)와 인코딩 손상 없음 확인
+- Markdown 코드 펜스 개수가 짝수인지 확인
+- 플랫폼·기술 주장은 2026-07-19 기준 공식 YouTube, CHZZK, GitHub, MDN, 각 미디어 엔진 문서로 교차 확인
+- 링크 소스와 로컬 원본의 결과 차이를 문서 처음·시나리오·결과 화면에서 반복 확인
+- 대용량 처리에서 전체 파일 RAM/WASM/IndexedDB 복사 금지, 순차 렌더, OPFS/직접 디스크 폴백을 명시
+- 서버 FFmpeg, ffmpeg.wasm 중심, 화면 녹화, 네이티브 앱, 타임코드 전용 대안의 장단점 추가
+- 문서 작업뿐이어서 코드 빌드·런타임 테스트는 수행하지 않음. 단계 0의 실파일 검증이 구현 전 필수
+
+## 2026-07-19 — 사용자 피드백에 따른 AI-first 전면 개정
+
+### 방향 수정 요청
+
+- 몇 시간짜리 원본을 사람이 처음부터 끝까지 보는 부담을 없애는 것이 제품의 가장 중요한 이유
+- AI가 하이라이트 지점을 먼저 골라야 하며, 사람은 후보만 검토
+- 가능하면 CHZZK 라이브 채팅 반응도 하이라이트 신호로 분석
+- 전체 UI는 StreamSaver의 모양과 CSS를 기준으로 하되 Retto 전용 CSS를 별도로 유지
+
+### 기존 결정 중 폐기·강등
+
+- `영상 고르기 → 보면서 수동 표시 → 검토`를 핵심 흐름으로 삼은 결정 폐기
+- 수동 마커 MVP를 AI보다 먼저 출시하는 로드맵 폐기
+- 수동 표시는 `AI가 놓친 장면 추가`와 분석 실패 시 안전망으로 강등
+- `AI는 후속 실험`이라는 설명 폐기
+
+### 새 핵심 흐름
+
+1. 로컬 원본과 선택적 자막·채팅 로그 선택
+2. AI가 전체 방송을 저비용 신호로 먼저 스캔
+3. 첫 후보가 생기는 즉시 부분 결과 공개
+4. 전체 길이의 상위 5~12% 후보 구간만 Whisper·음향·희소 영상으로 정밀 분석
+5. `맥락 → 사건 → 반응` 기준으로 30~60초 경계 제안
+6. 중복 억제·다양성 정렬 뒤 사람이 후보만 승인·제외·수정
+7. JSON·CSV·Markdown과 조건부 실제 클립 출력
+
+### 로컬 AI 조사·결정
+
+- 일반 YouTube·CHZZK iframe 링크는 재생 제어만 가능하고 미디어 PCM·프레임을 AI가 읽는 완전 분석 경로가 아님
+- 완전 분석은 로컬 원본 또는 CORS+Range가 허용된 직접 미디어 URL에 한정
+- Mediabunny+WebCodecs streaming decode, 전체 파일·PCM·프레임 RAM 복사 금지
+- 기본 전체 pass: 16k mono DSP, streaming VAD, 음향 사건 feature, 4~5초당 희소 프레임, 채팅 집계
+- 정밀 pass: 후보 구간만 다국어 Whisper 한국어 전사, 1~2fps 영상, 음향 사건 재분석
+- 실행 tier: Dedicated Worker WebGPU → 단일 thread WASM SIMD → signals-only
+- GitHub Pages에서 COOP/COEP를 핵심 전제로 하지 않아 WASM multi-thread 기본 제외
+- 모델은 Pages에 포함하지 않고 immutable revision·hash로 지연 다운로드·캐시·삭제
+- 3분 분산 표본으로 실제 RTF를 측정한 뒤 예상 시간을 범위로 표시
+
+### CHZZK 채팅 조사·결정
+
+- 공식 Session API는 연결 이후 CHAT/DONATION/SUBSCRIPTION 실시간 push를 제공
+- CHAT에는 `messageTime`, `senderChannelId`, `content`, `emojis`가 있으나 공식 과거 VOD 전체 채팅 조회·다운로드 API는 확인되지 않음
+- DONATION·SUBSCRIPTION 공식 이벤트 표에는 timestamp가 없어 수집기가 UTC `receivedAt`과 local `seq`를 붙여야 함
+- 임의 공개 채널 URL 구독 방식이 아니며 스트리머 측 Access Token·OAuth 동의가 필요한 구조
+- Client 인증과 OAuth code 교환·갱신에 Client Secret이 필요하므로 GitHub Pages 번들에 직접 구현 금지
+- Pages 핵심 경로는 JSONL·JSON·CSV 가져오기와 시간 동기화
+- 공식 실시간 수집은 별도 로컬 동반 도구 또는 비밀값을 보관하는 백엔드로 분리
+- 프로젝트별 participant HMAC, 닉네임 기본 폐기, 원문 opt-in, 1~10초 aggregate, GAP 보존
+- 채팅량 외에 고유 참여자·반응 다양성·반복성·후원·구독을 별도 feature로 사용
+
+### StreamSaver UI 기준 반영
+
+- 확인한 실제 원본: `D:\Agents\StreamSaver\Opencode\workspace\index.html`
+- 원본에는 standalone CSS가 없고 `<style>` 블록이 567줄·24,514자였음
+- 별도 LICENSE/NOTICE 파일은 발견되지 않아 reference 파일에 출처와 확인 필요 사항을 남김
+- `styles/streamsaver-reference.css`: 원본 style block 스냅샷, 수정 금지
+- `styles/retto-highlight.css`: `.rh-` 접두사의 AI 진행·후보·근거·반응 지도·접근성 전용 스타일
+- load order는 reference 먼저, Retto stylesheet 다음
+- StreamSaver 샘플 PNG는 UI 시안이 아니라 영상 프레임이어서 CSS 자체를 디자인 근거로 사용
+
+### 문서 변경
+
+- `PRODUCT_PLAN.md`를 `0.1.0`에서 `0.2.0`으로 올림
+- 핵심 정의·첫 화면·분석 화면·플랫폼 시나리오·아키텍처·상태 머신·폴더 구조·데이터 모델을 AI-first로 개정
+- 계층형 분석, robust local baseline, 채팅 지연·도배 보정, 멀티모달 점수, MMR, 경계 목적식, 모델 캐시, 복구, 개인화를 상세화
+- AI 벤치마크 데이터셋·Recall@K·Precision@K·검토 시간·하위 그룹·ablation 출시 gate 추가
+- 단계 1 종료 조건에 실제 AI 후보 생성과 검토 시간 절감을 명시
+
+### 생성 파일
+
+- `styles/streamsaver-reference.css`
+- `styles/retto-highlight.css`
+
+### 커밋
+
+- 수행하지 않음. 사용자 검토 후 승인 전까지 커밋 금지 규칙 유지.
+
+### 최종 검증·트러블슈팅
+
+- StreamSaver 원본 style block과 reference 파일의 출처 주석 이후 내용을 LF 정규화·trim 기준으로 문자 단위 비교: 일치
+- `PRODUCT_PLAN.md` Markdown 코드 펜스 28개로 짝수 확인
+- 네 파일 모두 UTF-8 `U+FFFD` 0개, CSS/문서 중괄호 개수 일치
+- 최초 SHA-256 출력에 사용한 `.NET SHA256.HashData`·`Convert.ToHexString`이 현재 Windows PowerShell 런타임에 없어 실패
+- 파일 변경 문제는 아니었으며 호환되는 `Get-FileHash -Algorithm SHA256`으로 다시 검증 성공
+
+## 2026-07-19 — 최신 공용 지침 재감사와 개인 편집 어시스턴트 확정
+
+### 요청과 최종 제품 결정
+
+- 다른 프로젝트를 통해 갱신된 전역 지침을 다시 읽고 현재 계획을 추가 검토
+- 추가 검토 결과까지 제품·기술 계획에 반영
+- 공유 서비스는 포함하지 않고 제품 정체성을 `개인 편집 어시스턴트`로 확정
+- 계정·팀·공동 편집·공용 백엔드·원격 프로젝트 DB·기기간 자동 동기화·클라우드 AI는 범위 밖
+- 같은 GitHub Pages 주소를 여러 사람이 각자 사용할 수는 있지만 데이터와 작업은 서로 독립
+- CHZZK 공식 실시간 채팅은 공용 서비스가 아니라 선택형 로컬 동반 수집기로만 검토
+
+### 다시 읽은 지침과 안전 조치
+
+- `C:\Users\Qumin\.codex\AGENTS.md` 확인: 모든 작업 전 `~/.claude/CLAUDE.md`를 함께 적용하고 더 구체적인 프로젝트 지시를 우선
+- `C:\Users\Qumin\.claude\CLAUDE.md` 전체 재확인
+- 새 핵심 규칙은 9절 `상태와 생애주기 모델링`과 10절 `소규모 서비스 운영 완성도`
+- 비교를 위해 `C:\Users\Qumin\.gemini\config\AGENTS.md`도 읽었으며 1~7절까지만 가진 이전 계열임을 확인
+- 공용 지침에 따라 `C:\Users\Qumin\.claude\CLOUD_CONNECTIONS.md`의 기존 연결 패턴을 읽었으나, 이번 프로젝트는 공유·클라우드 구성을 쓰지 않기로 확정
+- 연결 문서의 비밀값·식별값을 계획서, 로그, 대화, 명령 출력에 복사하지 않았고 외부 resource를 생성·수정하지 않음
+- 프로젝트 지시가 공유 서비스 기본값보다 구체적이므로 개인용 Pages-only 경계를 명시적 예외로 기록
+
+### 상태·생애주기 감사 결과
+
+기존 `PRODUCT_PLAN.md`의 단일 상태 목록은 source 검사, 분석 stage, 검토 화면, 렌더, 저장 오류처럼 동시에 참일 수 있는 값을 섞고 있었다. 특히 다음 위험이 확인되었다.
+
+- `pause`·`cancel`의 요청, Worker 정지 진행, checkpoint/정리 확정을 구분하지 않음
+- `partial`, `complete`, `failed`가 실행 상태와 결과 coverage 의미를 섞음
+- 새로고침·재시도 뒤 이전 Worker callback을 막는 ID·stale event 규칙이 부족
+- 정밀 AI 결과가 먼저 공개된 후보를 사용자가 편집·승인한 뒤 늦게 도착해 사람 값을 덮어쓸 수 있음
+- 저장·렌더가 실제 transaction/file close 전에 성공처럼 보일 수 있음
+- 두 탭이 같은 IndexedDB 프로젝트에 동시에 쓸 때 마지막 저장이 앞선 판단을 덮어쓸 수 있음
+
+이를 다음처럼 개정했다.
+
+- Project, SourceDefinition/Binding/Check, ChatSource/ChatImport/LocalLiveCaptureRun, AnalysisJob/Spec/Run/Chunk, CandidateProposal/Segment/ReviewDecision, RangeCapture, ModelArtifact/Download, SaveCommit, MigrationRun, ExportJob, RenderBatch/Item, AppSession을 수명별로 분리
+- 중심 lifecycle과 stage·coverage·runtime tier·storage health·source availability를 분리
+- `현재 상태 + event + guard + side effect + 확정 조건 → 다음 상태` 전이표 작성
+- `requested → in progress → committed/confirmed`를 명시적으로 분리
+- 정상 완료, gap 완료, 사용자 취소, 실패, 브라우저 중단을 별도 terminal로 보존
+- `projectId → analysisJobId → analysisSpecId → runId → taskId/chunkId/eventId` 식별 계층과 writer/worker epoch, snapshot hash, expected revision 도입
+- 새로고침·Worker crash·입력 변경은 새 run을 발급하고 호환 checkpoint만 `resumedFromRunId`로 참조
+- AI proposal revision과 사람 user revision을 분리하고 승인·수정 필드에 늦은 AI가 쓰지 못하게 함
+- 렌더는 `segmentId + userRevision` snapshot을 고정
+- Web Locks + BroadcastChannel의 프로젝트당 single writer와 IndexedDB lease fallback 추가
+- 허용·금지 전이, stale·중복·역순 event, crash, multi-tab, transaction 실패를 자동 테스트 gate로 추가
+
+### 개인용 운영 완성도 재해석
+
+공유 서버를 도입하는 대신 한 사람의 장시간 작업을 안전하게 지키는 운영 계약을 추가했다.
+
+- GitHub Pages 정적 artifact와 브라우저 로컬 Worker·IndexedDB·Cache API·선택형 로컬 백업 폴더로 배포 경계 고정
+- 원본 영상은 사용자 파일, 프로젝트 기록은 IndexedDB 확정 revision, 장기 복구는 `.retto-highlight.json`이라는 진실 공급원 구분
+- local/test/preview/production 공개 설정과 프런트엔드 secret 금지
+- typecheck → lint → unit → transition/property → migration → Worker → build → Pages subpath E2E → 접근성 → artifact hash CI gate
+- 작업 중 자동 새로고침 금지, service worker waiting, smoke test, release record, 직전 artifact rollback
+- quota 경고·고용량 작업 차단, model/thumbnail/OPFS/진단/원문 채팅 보존 상한
+- 원격 telemetry 대신 redacted local ring buffer와 사용자 주도 진단 JSON
+- 저장 공간, model hash, WebGPU/Worker, IndexedDB, service worker, source 권한, 브라우저 중단, 렌더, 로컬 채팅 수집기 장애 runbook
+- 두 탭·8시간/10GB·중단 복구·백업/migration·네트워크 media 업로드 0건을 개인용 출시 gate에 포함
+
+### 생성·수정 파일
+
+- `PRODUCT_PLAN.md`: `0.2.0`에서 `0.3.0`으로 개정, 개인용 경계·상태 요약·데이터 revision·운영·테스트·로드맵 반영
+- `STATE_LIFECYCLE.md`: 도메인별 canonical 상태·전이·불변식·안전 편집 경계·전이 테스트 계약
+- `OPERATIONS.md`: 개인용 Pages 배포·백업·복구·quota·진단·장애 대응·rollback 계획
+- `AGENTS.md`: 이 작업공간에 적용할 프로젝트 전용 지시와 공용 지침 예외
+- `DEVELOPMENT_LOG.md`: 이번 감사, 폐기 결정, 변경, 검증 이력
+
+### 폐기한 구조
+
+- 공용 지침의 일반 기본값만 따라 Cloudflare/Oracle에 사용자·프로젝트·동기화 계층을 만드는 안 폐기
+- Pages와 별도 공용 CHZZK 채팅 수집 백엔드를 두는 안 폐기
+- 사용자 소유 백엔드, 팀 공유, 클라우드 AI, 게시 연동을 단계 7에 넣는 기존 문구 폐기
+- 하나의 거대한 `app status`가 source·분석·검토·저장·렌더를 모두 표현하는 안 폐기
+
+### 버전·커밋
+
+- 이번 변경은 AI-first 핵심을 유지하면서 데이터·상태·운영 계약을 확장하므로 `0.3.0` minor 개정으로 판단
+- Git 저장소와 commit은 만들지 않음. 공용 규칙에 따라 검토 결과를 먼저 보고하고 사용자 승인 전 commit 금지
+
+### 최종 정합성 검증
+
+- `PRODUCT_PLAN.md`, `STATE_LIFECYCLE.md`, `OPERATIONS.md`의 기준 버전을 모두 `0.3.0`으로 일치시킴
+- AnalysisRun lifecycle과 stage 집합, 정상 pause 같은-session 재개, crash 뒤 새 run, `completedWithGaps`, AI/user revision 명칭을 계획서와 상태 명세에서 일치시킴
+- 논리 `SourceDefinition`과 기기 로컬 `SourceBinding`을 분리하고 handle·permission의 프로젝트 export 금지를 두 문서에서 일치시킴
+- terminal `RangeCapture`를 같은 ID로 되살리는 전이를 새 capture 생성으로 수정하고, migration의 미확정 새로고침 상태를 terminal `interrupted`가 아닌 `recoveryPending`으로 분리
+- 모든 Markdown 파일에서 UTF-8 대체 문자 `U+FFFD`와 NUL 0개
+- backtick·tilde 코드 fence 개수 모두 짝수, Markdown 표의 열 구분 개수 불일치 0개
+- 폐기한 이전 상태·엔터티 naming의 현재 계획·명세 본문 잔존 0개
+- 비밀값 형식의 엄격 패턴 검사 결과 0개
+- 모든 상호 참조 문서·CSS 파일 존재 확인
+- 두 CSS 파일의 중괄호 균형과 `U+FFFD` 0개 확인
+- StreamSaver 원본 `<style>`과 `streamsaver-reference.css`의 출처 주석 이후 payload 재비교: 정확히 일치
+- CSS SHA-256 기록: reference `8F6B2F35662CBBD18B830EA6D1F272593225213734E7C503B60D2E992997A1E1`, Retto `2266B415041005EBF9E4FC995B1A8C9952FD6B79EC4D8833242BFCAB3BE045E8`
+- 현재 프로젝트는 Git worktree가 아니며 commit·push·배포 없음
+- 이번 작업은 계획·명세 문서 개정이므로 코드 build·런타임 test는 수행하지 않음. 구현 단계 0에서 transition/property/migration/Pages E2E를 필수 gate로 실행
+
+## 2026-07-19 — `rettolight` 저장소 생성과 첫 실행 가능한 수직 슬라이스
+
+### 요청과 범위
+
+- 공용·프로젝트 지침을 다시 적용한 뒤 계획에 머물지 않고 첫 구현을 진행
+- 제품 정체성을 계정·공유·게시 기능이 없는 **개인 편집 어시스턴트**로 고정
+- 몇 시간짜리 원본을 사람이 먼저 보지 않도록 앱이 하이라이트 후보를 먼저 고르는 흐름을 최우선으로 구현
+- CHZZK 라이브 채팅 기록을 선택적 반응 신호로 포함
+- StreamSaver에서 추출한 참조 CSS는 수정하지 않고 Retto 전용 CSS에서만 UI를 확장
+- GitHub Pages의 `/rettolight/` 하위 경로에서 동작하는 정적 웹앱으로 구성
+
+### 저장소
+
+- GitHub 사용자 `11qaws` 아래 공개 빈 저장소 `rettolight` 생성: `https://github.com/11qaws/rettolight`
+- 로컬 저장소의 기본 브랜치를 `main`으로 초기화하고 `origin`을 위 저장소로 연결
+- 검토·승인 전 커밋 금지 규칙에 따라 commit, push, Pages 활성화는 수행하지 않음
+
+### 구현 구조
+
+- React 19, TypeScript, Vite 기반 정적 SPA 뼈대와 `/rettolight/` base 경로 구성
+- GitHub Pages 공식 custom workflow 구조를 따라 검사, build, artifact upload, deploy job을 분리
+- `src/media/localMediaPreflight.ts`
+  - 로컬 영상의 메타데이터·길이·탐색 가능성 확인
+  - WebGPU·WASM·signals-only 실행 등급을 보수적으로 추천
+  - 성공·오류·timeout 모든 경로에서 media probe와 Object URL 정리
+- `src/analysis/chatImport.ts`
+  - JSON 배열, `messages` 객체, JSONL, 인용 CSV 읽기
+  - 상대 초·밀리초·`HH:MM:SS`와 절대 ISO·epoch 시각 정규화
+  - 잘못된 행만 격리하고 닉네임은 원문을 보존하지 않는 내부 식별자로 즉시 변환
+- `src/analysis/highlightSelector.ts`
+  - 5초 bucket과 median/MAD 기준선
+  - 채팅 폭발, 고유 참여자, 반응 표현 가점
+  - 반복 문구, 단일 작성자 도배 감점
+  - local peak, 비중첩 선택, 방송 경계 보정으로 45초 후보 생성
+  - 결정적 후보 ID와 원문이 없는 집계 근거만 반환
+- `src/domain/`
+  - SourceCheck와 AnalysisRun의 lifecycle·결과 상태 분리
+  - terminal 상태 흡수, pause/resume/gap/cancel/failure 전이
+  - session·writer·run·worker·task fence와 event 중복 차단
+  - 사용자가 승인·제외·수정한 후보를 늦게 도착한 AI proposal이 덮지 못하는 merge 규칙
+- `src/App.tsx`
+  - 초심자용 4단계 흐름: 원본 고르기 → AI가 먼저 찾기 → 후보 검토 → 결과 받기
+  - 파일 끌어놓기, 링크의 지원 범위 설명, 채팅 시간 보정, 실제 후보 승인·제외, 집계 JSON 내려받기
+  - 채팅이 없을 때 가짜 후보를 만들지 않고 영상·음성 AI가 다음 단계임을 화면에서 명시
+- `styles/streamsaver-reference.css`는 원본 payload를 변경하지 않고, 모든 추가 규칙은 `.rh-` 접두사의 `styles/retto-highlight.css`에 작성
+
+### 이번 단계의 정직한 기능 경계
+
+- 실제로 동작함: 로컬 영상 사전 검사, 채팅 파일 가져오기, 채팅 반응 기반 후보 선택, 사람 검토, 집계 결과 JSON 내보내기
+- 아직 동작하지 않음: 영상 프레임·음성·대사 멀티모달 모델, 브라우저 Worker 분할 분석, 실제 영상 자르기·렌더, IndexedDB 프로젝트 복구, 선택형 로컬 라이브 채팅 수집기
+- YouTube·CHZZK 링크는 주소 형식과 지원 범위만 설명하며 원격 영상을 읽었다고 표시하지 않음
+- 원본 영상과 채팅 원문은 서버로 전송하지 않으며 이번 구현에는 사용자 데이터용 백엔드가 없음
+
+### 문제 해결 기록
+
+- TypeScript 7 prerelease 계열과 `typescript-eslint` peer 범위가 맞지 않아 안정 범위의 TypeScript 6으로 고정
+- ESLint flat config가 설정 파일 자체에 typed parser를 적용하던 문제를 TypeScript 소스 glob으로 한정해 해결
+- 로컬 preview의 4173·4174 포트가 이미 사용 중이어서 이 작업의 서버만 4175에서 실행
+- 브라우저 자동 검사의 지원 대기 조건에 `networkidle`이 없어 `load` 기준과 화면 상태 검증으로 변경
+
+### 검증
+
+- 단위 테스트 7개 파일, 총 67개 테스트 통과
+- TypeScript typecheck, ESLint, Vite production build 통과
+- build 결과의 CSS·JavaScript 경로가 `/rettolight/assets/`를 사용하는지 확인
+- 실제 짧은 MP4와 합성 CHZZK 형식 JSONL로 파일 검사 → 채팅 가져오기 → 45초 후보 생성 → 승인 흐름을 브라우저에서 확인
+- 데스크톱·390px 모바일, 밝은·어두운 테마, 키보드에 필요한 기본 control, 수평 overflow 부재 확인
+- 브라우저 console error와 warning 0개
+- 상세 구조는 `graphify-out/graph.json`, `graphify-out/graph.html`, `graphify-out/GRAPH_REPORT.md`에 기록
+
+### 커밋·배포 상태
+
+- 사용자 검토를 위해 작업 트리만 준비한 상태
+- commit, push, GitHub Pages 활성화·배포 없음
+
+### 후속 통합 감사와 보강 — 위 첫 슬라이스 기록을 대체하는 현재 상태
+
+첫 구현을 브라우저에서 다시 따라가며 `채팅이 없으면 핵심 가치가 동작하지 않음`, `완료 문구가 실제 저장 확정을 뜻하지 않음`, `영상 File을 보존하지 않아 후보 재생이 불가능함`을 확인했다. 계획서의 AI-first·상태 생애주기 계약과 맞추기 위해 다음을 추가했다.
+
+- `src/media/localVideoVisualAnalysis.ts`, `localVideoVisualAnalysisCore.ts`
+  - 숨은 video element로 원본을 구간별 탐색하고 32×18 canvas의 희소 프레임 밝기 지문을 계산
+  - 최대 720개 표본의 적응형 간격, median/MAD 장면 변화 기준선, 45초 후보, 방송 시작·끝 경계 보정
+  - 정지 화면에서는 후보를 만들지 않고, 진행률·AbortSignal·timeout·Object URL 정리를 지원
+  - File, 프레임, Object URL은 결과나 IndexedDB에 기록하지 않음
+- `src/analysis/chatAnalysis.worker.ts`, protocol, client
+  - 채팅 후보 계산을 Dedicated Worker로 분리
+  - session/writer/run/worker/task/event 식별자를 결과까지 왕복해 stale 결과를 차단
+  - 완료·오류·취소 뒤 Worker를 종료하고 AbortSignal을 전파
+- `src/analysis/highlightFusion.ts`
+  - 영상과 채팅의 원점수가 서로 다른 단위이므로 각 신호 안에서 rank+MAD 정규화
+  - 가까운 구간만 결합하고 단일 신호 후보도 보존하며, 중복 억제·최대 12개·결정적 ID 적용
+- `src/storage/analysisResultStore.ts`
+  - IndexedDB에 source capability snapshot, 분석 manifest, provisional result, final result, failure를 분리 저장
+  - transaction `complete` 전에는 성공으로 취급하지 않고, final을 다시 열어 signature·engine version·payload 동일성을 검증한 뒤에만 AnalysisRun을 완료
+  - File·handle·blob URL·채팅 원문·닉네임·message payload가 저장 객체에 들어오면 거부
+- `src/security/contentFingerprint.ts`
+  - 원본 정체성·길이·채팅 내용·시간 보정·엔진 버전을 길이 구분 SHA-256 입력 signature로 묶어 서로 다른 분석 결과의 오인 재사용을 방지
+- `src/App.tsx`
+  - 채팅 없이도 영상 빠른 분석을 실행
+  - 선택한 File은 현재 탭에서만 보존하고 후보의 시작~끝을 내장 플레이어로 재생
+  - 실제 IndexedDB commit/reopen 검증 뒤에만 완료 표시
+  - 승인한 후보만 JSON으로 내보내며 원본 파일명·채팅 원문·사용자 식별자는 제외
+  - 학습된 의미 이해 AI가 아닌 장면 변화 기반 자동 선별 기준선임을 화면에 명시
+
+채팅 가져오기는 32MB로 제한했고, 방송 범위 밖 메시지는 기본적으로 후보 계산에서 제외한다. 작성자 원문은 import마다 순번형 별칭으로 즉시 치환해 서로 다른 프로젝트 사이에서 같은 사람을 추적할 수 있는 안정 해시를 만들지 않는다.
+
+### 현재의 정직한 기능 경계
+
+- 실제 동작: 로컬 영상 프레임 장면 변화 분석, 선택적 CHZZK 채팅 분석, 두 신호 결합, 후보 미리보기·승인·제외, IndexedDB 확정·재개방 검증, 승인 후보 JSON 요청
+- 아직 없음: 학습된 영상 의미·음향·대사 멀티모달 모델, 실제 30~60초 영상 파일 인코딩, 저장된 프로젝트·검토 UI 복원, 선택형 로컬 라이브 채팅 수집기, 다중 탭 writer lock 연결
+- 분석 결과 레코드는 새로고침 뒤에도 남을 수 있지만 현재 UI에서 목록을 다시 여는 기능은 없으므로 `프로젝트 복구 완료`로 간주하지 않음
+- candidate merge와 사용자 revision 보호 도메인 규칙은 테스트되어 있으나 현재 one-shot 분석 UI의 점진적 늦은 proposal 경로에는 아직 연결하지 않음
+
+### 후속 통합·경쟁 상태 감사
+
+- storage await 사이의 취소가 조용히 return되어 상태가 고착될 수 있던 경로를 같은 epoch의 cancel과 새 입력의 stale operation으로 분리
+- 영상·채팅 병렬 작업 중 하나가 실패하면 전체 AbortSignal을 중단하고 `Promise.allSettled`로 양쪽 cleanup을 확인한 뒤에만 실패·취소를 확정
+- Worker 응답의 전체 identity envelope와 결과 구조를 런타임 검증하고 malformed message, 동기 `postMessage` 실패, 생성 실패, 60초 무응답을 모두 cleanup·terminate 경로로 통합
+- `currentTime` 설정 직후 이전 decoded frame을 캡처할 수 있던 fast path를 제거하고 실제 `seeked`, `seeking=false`, 목표 시각 근접을 확인
+- 영상 표본 계획·완료 개수와 채팅 계획·처리 개수, active task 수, gap 정책·승인 근거를 final payload에 기록하고 readback 값으로 coverage terminal을 재계산
+- IndexedDB schema v2에 실행당 하나의 `terminalDisposition` store를 추가. final/failure artifact가 함께 남더라도 이 pointer가 없는 실행은 복구 시 확정 결과로 간주하지 않음
+- 채팅 파일의 `reading/ready/failed` 상태를 분리하고 읽기·비식별화 중에는 분석 시작을 차단
+- Worker 미지원·CSP·timeout이면 영상 결과를 버리지 않고 사전 고지된 정책에 따라 `completedWithGaps`로 확정
+- 0개 후보도 가짜 후보 없이 4단계 종착으로 처리하고, committing/finalizing/cancelling/failing 진행 상태를 활성 색으로 표시
+- 독립 최종 감사 결과 현재 동작을 깨는 P1 race·terminal split은 없음
+
+남은 구조적 P2는 저장된 terminal을 시작 화면에서 나열·복원하는 project index/UI, 원본 byte 표본 또는 streaming hash 기반 입력 서명, key blacklist가 아닌 record별 allowlist 개인정보 DTO다. 현재 App 경로에서 원본 채팅·닉네임 저장은 발견되지 않았지만 다음 저장·복구 단계 전에 이 세 항목을 gate로 다룬다.
+
+### 후속 검증
+
+- 단위 테스트 12개 파일, 총 122개 테스트 통과
+- TypeScript typecheck, ESLint, Vite production build 통과
+- production artifact가 `/rettolight/assets/` 하위 경로만 참조함을 확인
+- 120초 합성 MP4를 사용한 브라우저 검사에서 채팅 없이 실제 영상 후보 1개 생성, 후보 구간 재생, 승인 뒤 JSON 다운로드 요청 상태까지 확인
+- 같은 영상에 합성 CHZZK JSONL을 추가해 영상 후보와 채팅 후보가 각각 보존된 2개 결과 및 근거 표시 확인
+- 390×844 모바일 viewport에서 단일 열 흐름과 수평 overflow 부재 확인
+- 브라우저 자동화 도구가 blob 다운로드 이벤트를 포착하지 못했으므로 파일시스템 저장 완료로 과장하지 않고, 앱의 blob URL 생성·anchor 요청·상태 전이와 단위 검증까지만 확인한 것으로 기록
+- 아래 기록의 `67개 테스트`, `채팅 반응만`, `Worker/IndexedDB 미구현` 설명은 이 후속 통합 상태로 대체됨
+- commit, push, GitHub Pages 활성화·배포는 계속 수행하지 않음
+
+## 2026-07-19 — 앱 0.2.0 완료 분석 복구·내용 샘플 지문·영속 개인정보 allowlist
+
+직전 감사에서 P2로 남긴 세 경계를 한 수직 슬라이스로 닫았다. 이 단계의 제품 명칭은 `프로젝트 전체 복원`이 아니라 `완료한 AI 분석 결과 다시 열기`다. 원본 File과 승인·제외 판단은 아직 영속하지 않는다.
+
+### 완료 결과 발견과 복구 권위
+
+- 새 recent-project/index store를 만들지 않고 `analysisTerminalDispositions`를 복구 목록의 유일한 기준으로 사용
+- `listTerminalRecords()`는 transaction complete 뒤 최신순으로 반환하며, 손상된 행은 원문을 반사하지 않고 격리 개수만 보고
+- terminal만 없는 final artifact는 목록에 나타나지 않음
+- 완료 terminal마다 manifest와 final을 다시 열어 `runId`, schema, input signature, model manifest를 교차 검증
+- 모든 분석 artifact에 `artifactId`, terminal에 `resultArtifactId`를 추가해 같은 run envelope 안에서 final이 교체되는 경우도 차단
+- final의 source input, 후보 수·중복 ID·시간 범위, visual/chat coverage, gap 정책·승인, active task 0 조건을 read-time에 재검증
+- 손상된 최신 pointer가 있어도 더 오래된 정상 완료 결과를 계속 찾아 최대 5개 표시
+- 복원 결과는 과거 `AnalysisRunState`를 현재 session 소유 run으로 위조하지 않고 별도 recovery UI state로 개방
+- 이전 0.1.0 형식처럼 새 artifact pointer나 strict payload가 없는 기록은 자동 삭제·포괄 변환하지 않고 복구 목록에서 격리
+
+### 로컬 영상 내용 샘플 지문
+
+- `src/security/localFileFingerprint.ts` 추가
+- 파일명, MIME, 마지막 수정 시각, 경로를 digest 입력에서 제외
+- 큰 파일은 시작·균등 중간·끝의 기본 9개 64KiB 구간, 최대 576KiB를 읽고 작은 파일은 예산 안에서 전체를 읽음
+- 설정 가능한 절대 읽기 상한 8MiB, `AbortSignal`, 읽기·digest 진행률, in-flight 취소 경합 지원
+- Web Crypto SHA-256이 없으면 약한 fallback으로 원본 일치를 주장하지 않고 명시적으로 중단
+- `local-file-sampled-sha256-v1:<64 hex>`를 input signature에 넣고, 복원 원본은 지문·크기·길이·media kind가 모두 맞아야 preview에 연결
+- 이 지문은 전체 파일 바이트 동일성 증명이 아니라 강한 재연결 신호임을 UI·문서에 명시
+
+### 영속 개인정보 경계
+
+- blacklist 기반 임의 JSON `result` 계약을 manifest, provisional/final, failure, terminal, source snapshot별 exact-key DTO로 교체
+- 실제 우회 예시 `{ entries: [{ speaker: "nick", body: "raw line" }] }`를 정상 payload의 root·candidate·evidence 위치에 넣어 모두 거부하는 회귀 테스트 추가
+- 후보의 임의 `reason` 문장을 IndexedDB에서 제거하고 `signalKinds`와 집계 숫자만 저장; 한국어 설명은 화면 projection에서 재생성
+- raw MIME·extension·파일명 대신 알려진 media container enum만 저장
+- gap/failure reason, 정책·승인, candidate ID, fingerprint, timestamp, schema, run/artifact/source ID를 enum·literal·정규식·길이로 제한
+- source capability signature는 임의 문자열이 아니라 저장된 boolean/tier에서 계산한 값과 정확히 일치해야 함
+- accessor, symbol, sparse/circular/non-JSON 객체, File/handle/Object URL과 extra field를 저장 전·읽기 후 모두 차단
+
+### 초심자 UI
+
+- 첫 화면에 `지난 AI 분석 결과를 이어볼까요?` 카드를 추가하고 완료 시 목록을 즉시 다시 감사
+- 결과를 열면 원본 영상이 저장되지 않았고 승인·제외 판단은 `검토 전`으로 시작한다고 지속 안내
+- 원본 미연결 상태에서는 후보 시간표와 근거는 볼 수 있지만 재생 버튼은 `원본 연결 필요`로 비활성화
+- 다른 영상을 고르면 복원 후보를 지우지 않고 명확한 mismatch 안내를 표시
+- 같은 원본이 확인되면 내용 샘플·크기·길이 일치 문구와 함께 preview를 다시 활성화
+- 복원 결과에서도 후보를 다시 승인하면 개인정보가 제거된 JSON 정리표 버튼이 활성화
+- 복원 결과를 연 동안 채팅 입력을 잠가 과거 입력을 실수로 바꾸지 못하게 하고, `새 영상으로 시작`은 이전 원본·미리보기 상태까지 함께 초기화
+- 완료 terminal을 run별 write-once로 바꿔 동일 payload의 멱등 재시도만 허용하고, 일시적 readback 오류 뒤 `completed → failed`로 덮어쓰는 경로를 IndexedDB 단일 transaction에서 차단
+- 분석 중 원본·채팅 입력 잠금, 미저장 review 이동 확인, dirty 안내, 복구 source/chat epoch 폐기, 잘못된 재연결 때 기존 정상 preview 보존을 추가
+- 첫 input-signature await 전 start-pending fence, 시간 보정 재분석 전이, beforeunload 경고를 추가하고 새 원본은 이전 방송 채팅을 자동으로 비움
+- 완료 readback과 즉시 재감사가 모두 일시 실패해도 terminal은 보존하면서 현재 탭을 busy 상태에서 풀고 목록 재확인을 안내
+- 복구 단계 표시·키보드 초점을 원본 재연결로 맞추고, 결과 목록 재시도·컨테이너/채팅 식별 정보·스크린리더 완료 문구·reduced-motion scroll을 보강
+
+### 검증
+
+- `npm run check`: TypeScript, ESLint, 14개 파일의 147개 Vitest 테스트 통과
+- `npm run build`: GitHub Pages `/rettolight/assets/` 경로 확인, JS 317.97kB, CSS 39.59kB, Worker 5.34kB
+- 75초 합성 MP4 브라우저 검사: 실제 영상 분석 → 후보 1개 → 완료 목록 즉시 표시 → 승인 → 새로고침 → 결과 다시 열기
+- 복원 뒤 승인 상태가 영속된 것처럼 보이지 않고 `검토 전`으로 초기화되는지 확인
+- 다른 75초 MP4 재연결은 거부하면서 후보 1개가 보존되고, 원래 MP4 재연결 뒤 preview 버튼이 다시 활성화되는지 확인
+- 복원 후보 재승인 뒤 JSON 정리표 버튼 활성화 확인
+- 390×844 viewport에서 document/body 수평 overflow 없음, 후보·복구 카드 폭이 viewport 안에 머무름
+- 브라우저 console error·warning 0개
+- commit, push, GitHub Pages 활성화·배포는 사용자 검토·승인 전 계속 수행하지 않음
+
+### 여전히 남은 경계
+
+- 승인·제외·수동 수정의 SaveCommit과 전체 Project 복원
+- 비종료 AnalysisRun의 interrupted 확정·checkpoint 재개
+- Web Locks/BroadcastChannel 기반 다중 탭 writer lease
+- 전체 파일 바이트 해시가 필요한 고보증 모드
+- 실제 30~60초 영상 인코딩, 학습된 영상·음성·대사 로컬 멀티모달 AI, 선택형 로컬 CHZZK 라이브 채팅 수집기
+
+## 2026-07-19 — 앱 0.2.1 기본 완주 화면·편집 시간표 출력
+
+이번 슬라이스는 상세 복구 엣지 케이스보다 초심자가 기본 흐름을 한 번 완주하는 데 집중했다. 완료 기준을 `영상 선택 → AI 자동 후보 → 사람 검토 → 실제 편집 시간표 받기`로 좁혔고, 실제 영상 인코딩은 별도 RenderJob 단계로 유지했다.
+
+### 단방향 초심자 흐름
+
+- 첫 화면의 빈 상태바와 빈 복구 카드를 숨겨 `영상 파일 고르기`를 유일한 주 행동으로 배치
+- 로컬 파일 드롭 영역 전체를 file input label로 만들어 클릭·드롭 경로를 하나로 통합
+- YouTube·CHZZK 링크 입력은 현재 원격 방송을 직접 읽지 못한다는 안내와 함께 접힌 도움말로 이동
+- 완료 기록이 있을 때만 `지난 분석 결과 N개` disclosure를 표시
+- 원본 검사가 끝난 뒤에만 선택형 CHZZK 채팅과 `AI로 하이라이트 찾기`를 공개
+- WebGPU/WASM, fast pass, Worker timeout 같은 기술 용어를 기본 흐름에서 숨기고 제한 설명 안으로 이동
+- 후보 근거 숫자는 `AI가 이 장면을 고른 이유` disclosure로 이동
+- 모바일 4단계 표시를 세로 네 줄이 아닌 압축된 4열로 유지
+
+### 편집에 쓸 수 있는 결과
+
+- `src/exports/highlightExport.ts`를 추가해 UI와 분리된 순수 formatter로 CSV·Markdown·JSON·클립보드 문자열 생성
+- 승인 후보만 시작 시각 순으로 정렬하고 모든 화면·텍스트 결과에 `HH:MM:SS` 사용
+- Excel용 CSV에 UTF-8 BOM·CRLF·quote escaping·formula injection 방어 적용
+- Markdown에는 원본 길이, 승인 장면, 이유·신호·근거와 함께 실제 영상 파일이 아님을 명시
+- JSON은 원본 파일명·경로·File·Blob URL·채팅 원문·닉네임을 계속 제외
+- 후보 목록 아래에 별도 `4단계 · 결과 받기` 패널을 추가하고 CSV를 주 행동, 복사·Markdown을 보조 행동, JSON을 고급 형식으로 배치
+- 다운로드 완료를 과장하지 않고 브라우저에 `다운로드를 요청했어요`라고 표시
+
+### 실제 클립 파일 방향
+
+- 이번 기본판에는 대용량 인코딩을 섞지 않음
+- 후속 구현은 GitHub Pages에서 COOP/COEP 없이 동작하고 File을 범위 읽기할 수 있는 Mediabunny + WebCodecs를 1차 경로로 유지
+- ffmpeg.wasm은 2GB 입력 제한과 큰 runtime·메모리 비용 때문에 작은 파일 폴백으로만 검토
+- 실제 클립보다 CSV·Markdown·JSON을 항상 실패 안전망으로 유지
+
+### 검증
+
+- `npm run check`: TypeScript, ESLint, 15개 파일의 153개 Vitest 테스트 통과
+- `npm run build`: GitHub Pages `/rettolight/assets/` 경로 확인, JS 323.06kB, CSS 42.90kB, Worker 5.34kB
+- 75초 합성 MP4로 파일 검사 → 로컬 영상 장면 분석 → AI 후보 1개 → 승인 → 타임코드 복사 → CSV·Markdown·JSON 요청까지 실제 브라우저 완주
+- 내려받은 CSV의 `EF BB BF` BOM, 한글 열, `00:00:30–00:01:15` 값을 확인
+- 내려받은 JSON의 schema/app `0.2.1`, 승인 후보 1개, 파일명·채팅 원문 필드 부재 확인
+- 생성한 브라우저 QA 다운로드 파일은 확인 뒤 삭제했고 기존 사용자 파일은 건드리지 않음
+- Graphify 갱신: 883 nodes, 1,769 edges, 43 communities; multigraph dangling/missing/collapsed edge 0; 평균 질의 token 8.0배 절감
+- commit, push, GitHub Pages 활성화·배포는 사용자 검토·승인 전 수행하지 않음
+
+### 다음 핵심 슬라이스
+
+1. 후보 시작·끝을 ±5초 또는 현재 재생 위치로 다듬는 간단한 경계 조정
+2. 승인 후보 한 개씩 Mediabunny + WebCodecs로 MP4/WebM 생성
+3. 실제 음성·대사 의미를 보는 로컬 AI 정밀 분석
+
+## 2026-07-19 — 앱 0.3.0 스트리머 반응 우선 오디오 fast pass
+
+이번 슬라이스는 “화려한 장면 전환이 아니라 스트리머의 반응을 클립으로 본다”는 제품 기준을 실제 기본 검출기로 교체했다. 몇 시간짜리 영상을 사람이 먼저 보지 않아도 되게 하는 것이 목적이므로, 오디오·채팅을 후보 anchor로 쓰고 영상 변화는 문맥 보조로 강등했다. 결과 화면에는 단순 점수 대신 사건·스트리머 반응·시청자 반응·추천 이유를 분리해 표시한다.
+
+### 알려진 방법 재검토와 채택 결정
+
+- Twitch Auto Clips의 공개 설명은 채팅 활동, vocal inflection, on-screen event를 결합하고 스트리머의 audible reaction이 포함된 구간을 권장한다.
+- Ringer·Nicolaou의 라이브 스트리밍 연구에서는 game-only 정확도 29%에 비해 face+audio 74%, face+game+audio 77%로 반응 모달리티 추가 효과가 컸다.
+- Fu 등은 영상 단독 F1 72.2에서 chat+video 74.7로 개선됐고, 사건 뒤 약 7초 채팅이 유용하다고 보고했다. Lightor는 채팅 위치·반복·잡음 보정의 필요성을 보여 준다.
+- Eklipse의 현재 공개 방식도 게임 UI 신호, 마이크의 고함·웃음, chat velocity를 함께 쓴다. 반대로 Medal의 event/replay capture는 지원 게임 사건에는 강하지만 토크·합방·스트리머 반응 일반화에는 부족한 비교 기준으로 남겼다.
+- 스포츠 연구는 해설자의 pitch·에너지, 관중 함성의 크기·지속 시간, 선수 반응, 리플레이·그래픽을 함께 쓴다. Retto에서는 해설자→스트리머 오디오, 관중→채팅, 리플레이/UI→시각 문맥으로 역할을 번역했다.
+- ICCV 2021의 joint audio/visual 접근처럼 신호를 결합하되, 품질이 나쁜 모달리티가 전체를 망치지 않도록 coverage·gap과 visual-only 저신뢰 탐색 경로를 분리했다.
+
+### 오디오 순차 분석 Worker
+
+- `mediabunny@1.50.9`를 추가하고 8MiB 제한 `BlobSource` + `AudioSampleSink`로 오디오를 순서대로 디코딩한다.
+- 전체 파일이나 전체 PCM을 메모리에 올리지 않는다. sample은 집계 직후 닫고 `Input`은 모든 종료 경로에서 한 번만 dispose한다.
+- 1초 window마다 RMS, peak, zero-crossing rate, 300~3400Hz 음성 대역 에너지 비율을 계산한다.
+- 디코더에서 아예 도착하지 않은 1초 window는 무음으로 꾸며 채우지 않고 coverage gap으로 남긴다. 실제 인코딩된 무음은 zero-energy sample로 정상 집계한다.
+- 약 2분 지역 median/MAD 기준선으로 방송마다 다른 마이크 음량과 BGM을 정규화한다.
+- 무음, 단발 click형 spike, 12초 이상 평탄하게 큰 배경음을 억제하고 `short-loudness-burst`와 `sustained-vocal-reaction`을 구분한다.
+- 스테레오 역상으로 실제 반응이 사라지지 않게 RMS·peak는 채널별 에너지로 합치고, downmix·채널·에너지 scratch buffer를 재사용한다.
+- 최대 12개, 비중첩, 결정적 순서의 30~60초 후보를 만든다. 기본 후보는 45초이며 반응 정점 앞 문맥을 넉넉히 둔다.
+- Worker 진행률, 2시간 기본 timeout, event fence, 취소 ACK 뒤 terminate, malformed response 차단을 구현했다.
+- 오디오 없음·컨테이너 미지원·코덱 미지원은 복구 가능한 결과로, decode·signal engine·Worker 장애는 안전한 gap으로 구분한다.
+
+### 반응 anchor fusion과 설명
+
+- 새 `fuseReactionHighlightCandidates(...)`는 오디오·채팅만 anchor로 인정한다. 오디오 peak를 우선하고 canonical 근거 순서는 `audio → chat → visual`이다.
+- 가까운 시각 신호는 문맥 증거와 최대 `0.04` 보너스만 제공한다. anchor가 없으면 시각 탐색 후보는 최대 2개, 점수 상한 `0.32`로 제한한다.
+- 반응 정점이 전체 후보의 약 62.5% 지점에 오도록 앞 문맥을 확보한다. 30~60초 제한과 원본 경계, NMS, 결정성을 유지한다.
+- `buildHighlightNarrative(...)`가 후보마다 제목, 무슨 일이 있었나, 스트리머 반응, 시청자 반응, 왜 볼 만한가, 근거 종류와 검토 안내를 만든다.
+- 현재는 전사·의미 모델이 없으므로 “게임에서 승리했다” 같은 사건을 꾸며내지 않는다. `신호 기반 추정` 배지와 “사건 종류 확인 전” 문구를 쓰며, 실제 사건·원인을 설명하는 단계는 상위 후보 로컬 Whisper·음향 사건 분류 뒤로 둔다.
+- 오디오 peak, 채팅 bucket, 화면 변화 frame의 실제 시각 범위를 비교해 선후가 증명될 때만 “먼저/뒤”라고 설명한다. 범위가 겹치거나 시각 정보가 없으면 인과와 순서를 단정하지 않는다.
+
+### 저장·복구·내보내기
+
+- 앱·schema를 `0.3.0`, 신호 엔진을 `streamer-reaction-fast-pass-v1`로 올렸다. 기존 `0.2.x` visual/chat 결과는 계속 읽는다.
+- final summary와 coverage에 계획·처리 오디오 window 수, 오디오 gap reason을 추가하고 여러 signal gap을 한 정책 승인 레코드로 정확히 맞춘다.
+- 오디오 evidence는 사건 종류와 집계 숫자만 허용한다. `transcript(s)`·`utterance(s)`와 원문·파일 정보는 저장 경계에서 거부한다.
+- CSV·Markdown·JSON에 사건, 스트리머 반응, 시청자 반응, 추천 이유, 설명 근거를 추가했다. JSON에는 생성한 interpretation이 들어가지만 원본 파일명·오디오·전사·채팅 원문은 없다.
+- 복구 목록은 오디오 gap도 `completedWithGaps`로 표시하며, old result는 과거 화면·채팅 신호 문구로 구분한다.
+- schema version과 payload 모양을 함께 검증해 `0.2.x` 결과를 `0.3.0`으로 이름만 바꿔 통과시킬 수 없게 했다. 과거 결과의 미기록 오디오 정보는 내보낼 때 `0개 분석`으로 꾸미지 않고 `해당 버전에는 정보 없음`으로 보존한다.
+
+### 초심자 UI와 CSS
+
+- 분석 안내를 “영상 전체의 스트리머 오디오 반응을 먼저 훑는다”로 바꾸고 오디오·영상 진행률을 하나의 쉬운 진행 막대로 합쳤다.
+- 후보 카드에 `신호 기반 추정`, 구조화 설명 4칸, 오디오 반응 종류·평소 대비 배수·방송 내 percentile, 반응 정점을 표시한다.
+- 오디오 트랙 없음, 형식 미지원, Worker 장애를 서로 다른 다음 행동 문장으로 안내하고 가능한 결과는 버리지 않는다.
+- 첫 취소 클릭 즉시 버튼을 숨기고 `안전하게 멈추는 중`을 표시한다. Worker가 끝난 뒤 최종 결과와 종료 기록을 검증·저장하는 짧은 구간에는 `결과 저장 중` 안내를 보여, 중복 취소나 이미 취소할 수 없는 버튼이 남아 있지 않게 했다. 파생 상태는 순수 함수와 상태표 테스트로 고정했다.
+- StreamSaver reference CSS는 수정하지 않았다. Retto 전용 `styles/retto-highlight.css`에 narrative grid·basis badge·review hint만 추가했다.
+
+### 검증
+
+- `npm run check`: TypeScript, ESLint, 19개 파일의 213개 Vitest 테스트 통과.
+- `npm run build`: GitHub Pages `/rettolight/` 산출 성공. main JS 353.12kB(gzip 107.18kB), CSS 43.79kB(gzip 8.79kB), audio Worker 333.57kB, chat Worker 5.34kB.
+- 40초 합성 MP4 브라우저 검사: 15~19초의 큰 음성형 반응을 넣고, 오디오 40/40 window 처리, 반응 정점 00:00:18, 후보 1개, 평소 음량 24.6배·오디오 상위 1% 근거를 확인했다.
+- 같은 검사에서 구체 사건을 꾸며내지 않고 `사건 종류 확인 전`, `지속되는 반응일 가능성`, `채팅 근거 없음`, 검토 필요를 분리해 표시했다.
+- 후보 승인 뒤 CSV·타임코드·Markdown 결과 버튼 활성화와 CSV 요청 상태를 확인했다. 내장 브라우저의 blob download event 가로채기는 timeout이어서 실제 파일 내용은 formatter 단위 테스트로 검증했다.
+- 390×844 override에서 document·body scroll width가 client width 375와 같고 candidate/export panel이 305px 안에 머물러 수평 overflow가 없음을 확인했다.
+- 새 build로 `dist`를 교체한 뒤 이미 열려 있던 이전 탭은 사라진 Worker hash를 참조해 첫 분석이 gap으로 끝났다. 새로고침 후 현재 HTML·Worker 조합에서는 console error·warning 0개로 정상 완주했다. 따라서 배포 smoke test에 app shell/Worker hash 일치를 명시적으로 추가했다.
+- Graphify code graph를 1,107 nodes, 2,265 edges, 65 communities로 갱신하고 오디오 Worker → 반응 fusion → 설명 → 저장·내보내기 경로를 useful memory로 남겼다.
+- QA 합성 파일과 임시 preview 파일은 최종 확인 뒤 삭제한다.
+- commit, push, GitHub Pages 활성화·배포는 사용자 검토·승인 전 수행하지 않았다.
+
+### 다음 품질 슬라이스
+
+1. 상위 fast-pass 후보만 로컬 한국어 Whisper로 전사해 구체 사건·반응 원인과 자연스러운 문장 경계를 설명한다.
+2. 웃음·함성·박수·비명·군중 같은 소형 음향 사건 모델을 golden-vector와 실제 방송으로 검증해 DSP 근거에 더한다.
+3. 권리 확보한 2시간·8시간 표본에서 1시간당 상위 6개 recall, 검토 시간 감소, 오디오/BGM/채팅 ablation과 peak RAM을 측정한다.
+4. 후보 시작·끝 ±5초 조정과 승인 후보 MP4/WebM 생성은 별도 RenderJob으로 구현한다.
