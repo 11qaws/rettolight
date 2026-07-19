@@ -581,3 +581,11 @@
 2. 웃음·함성·박수·비명·군중 같은 소형 음향 사건 모델을 golden-vector와 실제 방송으로 검증해 DSP 근거에 더한다.
 3. 권리 확보한 2시간·8시간 표본에서 1시간당 상위 6개 recall, 검토 시간 감소, 오디오/BGM/채팅 ablation과 peak RAM을 측정한다.
 4. 후보 시작·끝 ±5초 조정과 승인 후보 MP4/WebM 생성은 별도 RenderJob으로 구현한다.
+
+## 2026-07-19 — 앱 0.3.1 최초 GitHub Pages 배포 준비
+
+- 사용자 승인 후 `11qaws/rettolight` 공개 저장소의 `main`에 최초 커밋을 push하고 Pages 배포 원본을 GitHub Actions로 활성화했다.
+- 첫 Actions 실행은 Ubuntu의 npm 11.16 `npm ci`에서 optional peer인 `@emnapi/core`·`@emnapi/runtime` 항목이 기존 lockfile에 없어 중단됐다. 앱 코드나 테스트 실패가 아니라 Windows의 npm 11.6에서 만들어진 lockfile과 CI npm 해석 차이였다.
+- CI와 같은 npm 11.16으로 lockfile을 다시 생성해 top-level 1.11.2와 Rolldown WASI 하위 1.11.1 항목을 모두 고정했다.
+- `npx npm@11.16.0 ci`를 로컬에서 그대로 재현해 181개 패키지 설치와 취약점 0건을 확인했다.
+- Graphify의 로컬 Python 절대 경로, 캐시, 날짜별 임시 스냅샷은 공개 저장소에서 제외하고 `graph.json`·`graph.html`·보고서·portable manifest·질의 메모만 handoff artifact로 유지했다.
