@@ -66,7 +66,8 @@ interface ActiveTask {
   cancelled: boolean;
   input: Input<BlobSource> | null;
   inputWasDisposed: boolean;
-  fetchAbortController: AbortController | null;
+  /** Every candidate may be in flight at the same time during Pass B. */
+  readonly fetchAbortControllers: Set<AbortController>;
 }
 
 interface DecodedCandidate {
@@ -609,7 +610,7 @@ async function analyzeCandidateWithGemini(
     CANDIDATE_PASS_B_SAMPLE_RATE_HZ,
   );
   const fetchAbortController = new AbortController();
-  task.fetchAbortController = fetchAbortController;
+  task.fetchAbortControllers.add(fetchAbortController);
 
   try {
     const base64Wav = encodeCandidatePassBBase64(wav);
@@ -724,9 +725,7 @@ async function analyzeCandidateWithGemini(
       sampleRateHz: CANDIDATE_PASS_B_SAMPLE_RATE_HZ,
     };
   } finally {
-    if (task.fetchAbortController === fetchAbortController) {
-      task.fetchAbortController = null;
-    }
+    task.fetchAbortControllers.delete(fetchAbortController);
     wav.fill(0);
   }
 }
@@ -815,6 +814,8 @@ async function runTask(request: AnalyzeRequest, task: ActiveTask): Promise<void>
 
     let completedCount = 0;
     let gapCount = 0;
+    const fatalProxyFailures: ProxyWorkerFailure[] = [];
+    const inFlight = new Set<Promise<void>>();
     for (let index = 0; index < request.targets.length; index += 1) {
       if (task.cancelled) {
         return;
@@ -855,35 +856,78 @@ async function runTask(request: AnalyzeRequest, task: ActiveTask): Promise<void>
           stage: "transcribing",
           ratio: CANDIDATE_TRANSCRIBE_RATIO,
         });
-        const result = await analyzeCandidateWithGemini(
-          candidatePcm,
-          target,
-          task,
+        const pcmForRequest = candidatePcm;
+        candidatePcm = null;
+        const requestPromise = (async (): Promise<void> => {
+          try {
+            const result = await analyzeCandidateWithGemini(
+              pcmForRequest,
+              target,
+              task,
+            );
+            if (task.cancelled || result === null) {
+              return;
+            }
+            postCandidateProgress(task.identity, {
+              candidateId: target.candidateId,
+              candidateOrdinal,
+              targetCount: request.targets.length,
+              stage: "complete",
+              ratio: 1,
+            });
+            postResponse(task.identity, {
+              type: "candidate-pass-b-partial-result",
+              result,
+            });
+            completedCount += 1;
+          } catch (cause) {
+            if (task.cancelled || cause instanceof InputDisposedError) {
+              return;
+            }
+            if (
+              cause instanceof ProxyWorkerFailure &&
+              cause.reasonCode !== "PROXY_INVALID_RESPONSE"
+            ) {
+              fatalProxyFailures.push(cause);
+              return;
+            }
+            const failure =
+              cause instanceof ProxyWorkerFailure
+                ? new CandidateFailure(
+                    "TRANSCRIPTION_FAILED",
+                    "Gemini 응답에서 안전하게 후보 설명을 읽지 못했습니다.",
+                  )
+                : cause instanceof CandidateFailure
+                  ? cause
+                  : new CandidateFailure(
+                      "TRANSCRIPTION_FAILED",
+                      "후보 구간을 분석하는 중 문제가 발생했습니다.",
+                    );
+            postGap(
+              task.identity,
+              target,
+              candidateOrdinal,
+              request.targets.length,
+              failure.reasonCode,
+              failure.message,
+            );
+            gapCount += 1;
+          } finally {
+            pcmForRequest.fill(0);
+          }
+        })();
+        inFlight.add(requestPromise);
+        void requestPromise.then(
+          () => {
+            inFlight.delete(requestPromise);
+          },
+          () => {
+            inFlight.delete(requestPromise);
+          },
         );
-        if (task.cancelled || result === null) {
-          return;
-        }
-        postCandidateProgress(task.identity, {
-          candidateId: target.candidateId,
-          candidateOrdinal,
-          targetCount: request.targets.length,
-          stage: "complete",
-          ratio: 1,
-        });
-        postResponse(task.identity, {
-          type: "candidate-pass-b-partial-result",
-          result,
-        });
-        completedCount += 1;
       } catch (cause) {
         if (task.cancelled || cause instanceof InputDisposedError) {
           return;
-        }
-        if (
-          cause instanceof ProxyWorkerFailure &&
-          cause.reasonCode !== "PROXY_INVALID_RESPONSE"
-        ) {
-          throw cause;
         }
         const failure =
           cause instanceof ProxyWorkerFailure
@@ -914,6 +958,12 @@ async function runTask(request: AnalyzeRequest, task: ActiveTask): Promise<void>
       }
     }
 
+    await Promise.all(inFlight);
+    const fatalReasonCode = fatalProxyFailures[0]?.reasonCode;
+    if (fatalReasonCode !== undefined) {
+      throw new ProxyWorkerFailure(fatalReasonCode);
+    }
+
     if (!task.cancelled) {
       postResponse(task.identity, {
         type: "candidate-pass-b-completed",
@@ -938,8 +988,10 @@ async function runTask(request: AnalyzeRequest, task: ActiveTask): Promise<void>
       message: candidatePassBWorkerFailureMessage(reasonCode),
     });
   } finally {
-    task.fetchAbortController?.abort();
-    task.fetchAbortController = null;
+    for (const controller of task.fetchAbortControllers) {
+      controller.abort();
+    }
+    task.fetchAbortControllers.clear();
     disposeInputOnce(task);
     if (activeTask === task) {
       activeTask = null;
@@ -956,7 +1008,9 @@ function handleCancel(
   const task = activeTask;
   if (task !== null && sameIdentity(task.identity, request.identity)) {
     task.cancelled = true;
-    task.fetchAbortController?.abort();
+    for (const controller of task.fetchAbortControllers) {
+      controller.abort();
+    }
     disposeInputOnce(task);
   }
   postResponse(request.identity, {
@@ -1033,7 +1087,7 @@ self.addEventListener("message", (event: MessageEvent<unknown>) => {
     cancelled: false,
     input: null,
     inputWasDisposed: false,
-    fetchAbortController: null,
+    fetchAbortControllers: new Set(),
   };
   activeTask = task;
   void runTask(request, task);

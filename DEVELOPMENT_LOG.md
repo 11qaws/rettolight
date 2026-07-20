@@ -1,5 +1,11 @@
 # Development Log
 
+## 2026-07-21 `0.3.17` parallel candidate explanations
+
+- Pass B now starts Gemini requests as soon as each candidate is decoded instead of waiting for the previous candidate's explanation to finish. Multiple audio+frame requests can be in flight together, while existing candidate-ID fencing, partial persistence, gaps, and completion counts remain unchanged.
+- Cancellation now aborts every active candidate request, and each request clears its own PCM buffer after completion. A regression test verifies that the second candidate request starts before the first Gemini response arrives.
+- Verification: typecheck, ESLint, and the full Vitest suite pass.
+
 ## 2026-07-21 `0.3.16` candidate timeline overview
 
 - Added a full-source candidate timeline before the detailed cards. Each candidate is marked by an `O` at its peak position on the source-duration line, with start/end labels and a clickable marker.

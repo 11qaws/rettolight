@@ -258,6 +258,85 @@ describe("candidatePassB.worker remote lifecycle", () => {
     ).toBe(false);
   });
 
+  it("starts the next candidate request before the previous Gemini response arrives", async () => {
+    let messageHandler: ((event: MessageEvent<unknown>) => void) | null = null;
+    const responses: CandidatePassBWorkerResponse[] = [];
+    const deferredResponses: Array<(response: Response) => void> = [];
+    const validAnalysis = {
+      segments: [
+        { relativeStartMs: 1_000, relativeEndMs: 2_000, text: "테스트 발화" },
+      ],
+      eventSummaryKo: "후보 사건 요약",
+      reactionSummaryKo: "스트리머 반응 요약",
+      whyGoodClipKo: "반응이 분명한 후보",
+      uncertaintiesKo: ["화면 맥락은 재생 확인이 필요합니다."],
+    };
+    const fetchMock = vi.fn(
+      () =>
+        new Promise<Response>((resolve) => {
+          deferredResponses.push(resolve);
+        }),
+    );
+    vi.stubGlobal("self", {
+      crypto: globalThis.crypto,
+      addEventListener(
+        type: string,
+        handler: (event: MessageEvent<unknown>) => void,
+      ): void {
+        if (type === "message") {
+          messageHandler = handler;
+        }
+      },
+      postMessage(message: CandidatePassBWorkerResponse): void {
+        responses.push(message);
+      },
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await import("./candidatePassB.worker");
+    (messageHandler as ((event: MessageEvent<unknown>) => void) | null)?.(
+      new MessageEvent("message", {
+        data: {
+          type: "candidate-pass-b-analyze",
+          identity,
+          file: new File([new Uint8Array([1])], "source.mp4"),
+          sourceDurationMs: 60_000,
+          device: CANDIDATE_PASS_B_DEVICE,
+          targets: [
+            { candidateId: "candidate-1", startMs: 0, endMs: 30_000 },
+            { candidateId: "candidate-2", startMs: 0, endMs: 30_000 },
+          ],
+        } satisfies CandidatePassBWorkerRequest,
+      }),
+    );
+
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    expect(deferredResponses).toHaveLength(2);
+    for (const resolve of deferredResponses) {
+      resolve(
+        new Response(
+          JSON.stringify({
+            candidates: [
+              {
+                finishReason: "STOP",
+                content: { parts: [{ text: JSON.stringify(validAnalysis) }] },
+              },
+            ],
+          }),
+          { status: 200 },
+        ),
+      );
+    }
+    await vi.waitFor(() =>
+      expect(
+        responses.some((response) => response.type === "candidate-pass-b-completed"),
+      ).toBe(true),
+    );
+    expect(
+      responses.find((response) => response.type === "candidate-pass-b-completed"),
+    ).toMatchObject({ summary: { requestedCount: 2, completedCount: 2, gapCount: 0 } });
+  });
+
   it("maps a network rejection to a key-free safe Worker failure", async () => {
     let messageHandler: ((event: MessageEvent<unknown>) => void) | null = null;
     const responses: CandidatePassBWorkerResponse[] = [];
