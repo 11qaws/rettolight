@@ -70,6 +70,29 @@ describe("local audio reaction scoring core", () => {
     expect(result.candidates[0]?.evidence.activeWindowCount).toBeGreaterThanOrEqual(2);
   });
 
+  it("does not turn a quiet harmonic music change into a dialogue signal", () => {
+    const windows: AudioReactionFeatureWindow[] = baseline(100).map((window) => ({
+      ...window,
+      rms: 0.08,
+      peak: 0.12,
+      speechBandEnergyRatio: 0.36,
+      zeroCrossingRate: 0.1,
+    }));
+    for (const [offset, speechBandEnergyRatio] of [0.72, 0.8].entries()) {
+      const index = 46 + offset;
+      windows[index] = speechWindow(index, {
+        rms: 0.08,
+        peak: 0.12,
+        speechBandEnergyRatio,
+        zeroCrossingRate: 0.22 + offset * 0.03,
+      });
+    }
+
+    const result = selectAudioReactionHighlights(windows, 100_000);
+
+    expect(result.candidates).toEqual([]);
+  });
+
   it("ignores a fixed non-vocal opening or ending burst", () => {
     const windows = baseline(180);
     for (const index of [4, 5, 6]) {

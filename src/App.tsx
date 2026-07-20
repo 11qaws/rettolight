@@ -234,7 +234,7 @@ interface AudioAnalysisOutcome {
   readonly coverageComplete: boolean;
 }
 
-const APP_VERSION = "0.3.14";
+const APP_VERSION = "0.3.15";
 const PERSISTENCE_SCHEMA_VERSION = "0.3.0";
 const SIGNAL_ENGINE_VERSION = "streamer-reaction-fast-pass-v2";
 const MAX_CHAT_FILE_BYTES = 32 * 1024 * 1024;
@@ -4062,6 +4062,7 @@ function App() {
             <span className="rh-brand-mark" aria-hidden="true">E</span>
             Ex<span>Clipper</span>
           </h1>
+          <h2 id="page-title" className="rh-header-title">클립 분석 AI</h2>
           <div className="rh-header-actions">
             <span className="rh-privacy-pill">개인 편집 어시스턴트</span>
             <button
@@ -4129,10 +4130,6 @@ function App() {
             );
           })}
         </ol>
-
-        <section className="rh-page-heading" aria-labelledby="page-title">
-          <h2 id="page-title">클립 후보 분석 AI</h2>
-        </section>
 
         {showRecoveryPanel && (
         <details

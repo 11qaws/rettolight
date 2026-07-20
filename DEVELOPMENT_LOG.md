@@ -1,5 +1,11 @@
 # Development Log
 
+## 2026-07-21 — `0.3.15` header title and music false-positive guard
+
+- The header now centers `클립 분석 AI` between the ExClipper brand and the personal-editor label at the same desktop scale as the brand. The duplicate page heading was removed so the title has one clear location.
+- The `dialogue-issue-signal` path introduced in `0.3.13` allowed quiet, novel speech-band changes without a loudness rise. Harmonic/compressed music can satisfy that proxy, so the dialogue lead now also requires a modest within-window crest; loud streamer reactions continue through the normal vocal-reaction path.
+- Added a regression fixture for a quiet harmonic music change and preserved the quiet dialogue fixture.
+
 ## 2026-07-21 — `0.3.14` automatic phase, recovery, and fixed-segment guard
 
 - Candidate Pass B evidence and Gemini insights now use a dedicated IndexedDB record keyed by analysis run. Partial snapshots are serialized in order, recovered snapshots are filtered to the current candidate set, and a write epoch blocks late writes after a new source/run starts.

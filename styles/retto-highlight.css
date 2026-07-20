@@ -77,6 +77,24 @@
   max-width: var(--rh-content);
 }
 
+.rh-header-inner {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+}
+
+.rh-header-title {
+  margin: 0;
+  color: var(--text);
+  font-size: 1.25rem;
+  font-weight: 700;
+  letter-spacing: -.02em;
+  text-align: center;
+}
+
+.rh-header-inner .rh-header-actions {
+  justify-self: end;
+}
+
 .rh-brand-mark {
   display: inline-grid;
   width: 30px;
@@ -2219,6 +2237,10 @@
 @media (max-width: 640px) {
   .rh-shell {
     padding-inline: 16px;
+  }
+
+  .rh-header-title {
+    font-size: 1rem;
   }
 
   .rh-stepper {

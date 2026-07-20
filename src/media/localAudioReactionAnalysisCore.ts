@@ -27,6 +27,10 @@ const SUSTAINED_BACKGROUND_MS = 12_000;
 const DIALOGUE_SIGNAL_SPEECH_RATIO = 0.42;
 const DIALOGUE_SIGNAL_NOVELTY = 2.25;
 const DIALOGUE_SIGNAL_ZERO_CROSSING_NOVELTY = 1.05;
+// Harmonic/compressed music can also move the speech-band ratio abruptly.
+// Require a modest within-window crest so a quiet band-only music change does
+// not become a dialogue review lead. Loud reactions still use the normal path.
+const DIALOGUE_SIGNAL_MIN_CREST_DB = 6;
 const PROGRAM_EDGE_GUARD_MS = 90_000;
 
 export interface AudioReactionFeatureWindow {
@@ -377,6 +381,7 @@ function scoreWindow(
     speechBandEnergyRatio >= DIALOGUE_SIGNAL_SPEECH_RATIO &&
     speechBandNovelty >= DIALOGUE_SIGNAL_NOVELTY &&
     zeroCrossingNovelty >= DIALOGUE_SIGNAL_ZERO_CROSSING_NOVELTY &&
+    crestDb >= DIALOGUE_SIGNAL_MIN_CREST_DB &&
     crestDb < IMPULSE_CREST_DB;
   const highCrestWithoutVocalAnchor =
     crestDb >= IMPULSE_CREST_DB && !hasStrongVocalSupport;
