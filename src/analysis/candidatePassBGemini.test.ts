@@ -106,6 +106,21 @@ describe("candidatePassBGemini", () => {
     expect(Object.keys(request)).toEqual(["audioBase64", "candidateDurationMs"]);
   });
 
+  it("attaches bounded representative JPEG frames to both Gemini request layers", () => {
+    const frames = [
+      { timestampMs: 1_200, mimeType: "image/jpeg" as const, dataBase64: "aGVsbG8=" },
+      { timestampMs: 22_000, mimeType: "image/jpeg" as const, dataBase64: "d29ybGQ=" },
+    ];
+    const request = buildCandidatePassBGeminiRequestBody("UklGRg==", 45_000, frames);
+    expect(request.contents[0].parts).toHaveLength(4);
+    expect(request.contents[0].parts[2]).toEqual({
+      inlineData: { mimeType: "image/jpeg", data: "aGVsbG8=" },
+    });
+    expect(buildCandidatePassBProxyRequestBody("UklGRg==", 45_000, frames)).toMatchObject({
+      videoFrames: frames,
+    });
+  });
+
   it("rejects audio that is longer than the disclosed sixty-second candidate limit", () => {
     expect(() =>
       buildCandidatePassBGeminiRequestBody("UklGRg==", 60_001),

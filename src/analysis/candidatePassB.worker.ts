@@ -31,6 +31,8 @@ import {
   CANDIDATE_PASS_B_TASK,
   MAX_CANDIDATE_PASS_B_SOURCE_DURATION_MS,
   MAX_CANDIDATE_PASS_B_TARGET_DURATION_MS,
+  MAX_CANDIDATE_PASS_B_VIDEO_FRAME_BASE64_LENGTH,
+  MAX_CANDIDATE_PASS_B_VIDEO_FRAMES,
   MAX_CANDIDATE_PASS_B_TARGETS,
   candidatePassBWorkerFailureMessage,
   type CandidatePassBCandidateGap,
@@ -219,8 +221,26 @@ function isValidTarget(
 ): value is CandidatePassBTarget {
   if (
     !isRecord(value) ||
-    !hasExactKeys(value, ["candidateId", "startMs", "endMs"])
+    (!hasExactKeys(value, ["candidateId", "startMs", "endMs"]) &&
+      !hasExactKeys(value, ["candidateId", "startMs", "endMs", "videoFrames"]))
   ) {
+    return false;
+  }
+  const rawFrames = "videoFrames" in value ? value.videoFrames : [];
+  if (!Array.isArray(rawFrames) || rawFrames.length > MAX_CANDIDATE_PASS_B_VIDEO_FRAMES) {
+    return false;
+  }
+  if (!rawFrames.every((frame) =>
+    isRecord(frame) &&
+    hasExactKeys(frame, ["timestampMs", "mimeType", "dataBase64"]) &&
+    Number.isSafeInteger(frame.timestampMs) &&
+    (frame.timestampMs as number) >= 0 &&
+    (frame.timestampMs as number) <= MAX_CANDIDATE_PASS_B_TARGET_DURATION_MS &&
+    frame.mimeType === "image/jpeg" &&
+    typeof frame.dataBase64 === "string" &&
+    frame.dataBase64.length > 0 &&
+    frame.dataBase64.length <= MAX_CANDIDATE_PASS_B_VIDEO_FRAME_BASE64_LENGTH
+  )) {
     return false;
   }
   return (
@@ -597,6 +617,7 @@ async function analyzeCandidateWithGemini(
       buildCandidatePassBProxyRequestBody(
         base64Wav,
         target.endMs - target.startMs,
+        target.videoFrames ?? [],
       ),
     );
 

@@ -931,3 +931,9 @@
 
 - `src/media/clipRenderer.test.ts`에서 MP4/WebM 선택, 결정적 파일명, 범위 검증을 확인했다.
 - `npm run check`와 `npm run build`를 통과시켰으며, Mediabunny는 초기 화면 번들에서 분리된 지연 chunk로 유지했다. 실제 브라우저에서는 카드 내 미리보기·개별 다운로드·전체 다운로드의 성공 경로와 다운로드 허용 안내를 확인한다.
+## 2026-07-20 — `0.3.12` Gemini 후보 오디오·화면 멀티모달 분석
+
+- Gemini 후보 정밀 분석이 더 이상 오디오만 보내지 않는다. 각 30~60초 후보에서 10%, 37%, 63%, 90% 지점의 대표 JPEG 화면을 최대 4장 샘플링해 오디오와 함께 `generateContent` 이미지 파트로 전달한다.
+- 프레임은 후보 상대 시각·JPEG MIME·Base64 길이를 검증하고, 프록시 요청 전체 크기를 제한한다. 화면 디코드·seek·캔버스 실패 또는 취소가 발생해도 해당 후보는 오디오만으로 계속한다.
+- Gemini 고정 prompt는 화면에서 실제로 보이는 장면과 스트리머 반응을 우선 설명하되 보이지 않는 사건·주체·인과를 추측하지 않도록 갱신했다. 기존 provisional transcript와 점수·ranking·경계·승인 분리는 유지한다.
+- `npm run check` 결과: 42개 test file, 571개 test 통과. 대표 프레임 timestamp 및 멀티모달 요청 builder 회귀 테스트를 추가했다.

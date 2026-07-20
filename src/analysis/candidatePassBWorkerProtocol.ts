@@ -8,6 +8,15 @@ export const CANDIDATE_PASS_B_SAMPLE_RATE_HZ = 16_000 as const;
 export const MAX_CANDIDATE_PASS_B_TARGETS = 12 as const;
 export const MAX_CANDIDATE_PASS_B_SOURCE_DURATION_MS = 12 * 60 * 60_000;
 export const MAX_CANDIDATE_PASS_B_TARGET_DURATION_MS = 60_000;
+export const MAX_CANDIDATE_PASS_B_VIDEO_FRAMES = 4;
+export const MAX_CANDIDATE_PASS_B_VIDEO_FRAME_BASE64_LENGTH = 360_000;
+
+export interface CandidatePassBVideoFrame {
+  /** Timestamp relative to the candidate range. */
+  readonly timestampMs: number;
+  readonly mimeType: "image/jpeg";
+  readonly dataBase64: string;
+}
 
 /**
  * A Pass B run has its own identity in addition to the fast-pass analysis run.
@@ -27,6 +36,8 @@ export interface CandidatePassBTarget {
   readonly candidateId: string;
   readonly startMs: number;
   readonly endMs: number;
+  /** Optional representative screenshots sampled from this candidate. */
+  readonly videoFrames?: readonly CandidatePassBVideoFrame[];
 }
 
 /**
@@ -73,7 +84,7 @@ export interface CandidatePassBTranscriptSegment {
   readonly text: string;
 }
 
-/** Safe, API-key-free interpretation grounded only in the candidate audio. */
+/** Safe, API-key-free interpretation grounded in candidate audio and sampled video. */
 export interface CandidatePassBInsight {
   readonly eventSummaryKo: string;
   readonly reactionSummaryKo: string;

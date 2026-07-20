@@ -9,6 +9,8 @@ import {
   MAX_CANDIDATE_PASS_B_SOURCE_DURATION_MS,
   MAX_CANDIDATE_PASS_B_TARGET_DURATION_MS,
   MAX_CANDIDATE_PASS_B_TARGETS,
+  MAX_CANDIDATE_PASS_B_VIDEO_FRAME_BASE64_LENGTH,
+  MAX_CANDIDATE_PASS_B_VIDEO_FRAMES,
   candidatePassBWorkerFailureMessage,
   type CandidatePassBCandidateGap,
   type CandidatePassBCandidateGapReason,
@@ -641,10 +643,44 @@ function normalizeInput(
         "후보 정밀 분석 구간이 올바르지 않아요.",
       );
     }
+    const rawFrames: readonly unknown[] =
+      "videoFrames" in target && Array.isArray(target.videoFrames)
+        ? target.videoFrames
+        : [];
+    if (
+      !Array.isArray(rawFrames) ||
+      rawFrames.length > MAX_CANDIDATE_PASS_B_VIDEO_FRAMES ||
+      !rawFrames.every(
+        (frame) =>
+          isRecord(frame) &&
+          Object.keys(frame).sort().join(",") === "dataBase64,mimeType,timestampMs" &&
+          Number.isSafeInteger(frame.timestampMs) &&
+          (frame.timestampMs as number) >= 0 &&
+          (frame.timestampMs as number) <= MAX_CANDIDATE_PASS_B_TARGET_DURATION_MS &&
+          frame.mimeType === "image/jpeg" &&
+          typeof frame.dataBase64 === "string" &&
+          frame.dataBase64.length > 0 &&
+          frame.dataBase64.length <= MAX_CANDIDATE_PASS_B_VIDEO_FRAME_BASE64_LENGTH,
+      )
+    ) {
+      return new CandidatePassBWorkerError(
+        "INVALID_INPUT",
+        "후보 화면 샘플 형식이 올바르지 않아요.",
+      );
+    }
     const normalizedTarget = {
       candidateId: target.candidateId,
       startMs: Math.round(target.startMs),
       endMs: Math.round(target.endMs),
+      ...(rawFrames.length > 0
+        ? {
+            videoFrames: rawFrames.map((frame) => ({
+              timestampMs: (frame as Record<string, unknown>).timestampMs as number,
+              mimeType: "image/jpeg" as const,
+              dataBase64: (frame as Record<string, unknown>).dataBase64 as string,
+            })),
+          }
+        : {}),
     };
     if (
       normalizedTarget.startMs < 0 ||

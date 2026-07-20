@@ -51,6 +51,7 @@ import {
   type CandidatePassBTarget as CandidatePassBCoreTarget,
 } from "./analysis/candidatePassB";
 import { buildCandidatePassBPresentation } from "./analysis/candidatePassBPresentation";
+import { sampleCandidateVideoFrames } from "./analysis/candidateVideoFrames";
 import {
   mergeCandidatePassBEvidence,
   type CandidatePassBEvidenceById,
@@ -225,7 +226,7 @@ interface AudioAnalysisOutcome {
   readonly coverageComplete: boolean;
 }
 
-const APP_VERSION = "0.3.11";
+const APP_VERSION = "0.3.12";
 const PERSISTENCE_SCHEMA_VERSION = "0.3.0";
 const SIGNAL_ENGINE_VERSION = "streamer-reaction-fast-pass-v2";
 const MAX_CHAT_FILE_BYTES = 32 * 1024 * 1024;
@@ -1031,7 +1032,7 @@ function App() {
         ));
   const candidatePassBStatusText =
     candidatePassBStartPending
-      ? "Gemini가 살펴볼 후보 범위를 확인하고 있어요."
+      ? "Gemini가 후보 오디오와 대표 화면을 함께 준비하고 있어요."
       : candidatePassBRun === null
       ? "빠르게 찾은 후보는 지금 바로 검토할 수 있어요. 원할 때 Gemini로 한국어 대사와 사건 단서를 더 붙여 보세요."
       : candidatePassBRun.status === "idle" || candidatePassBRun.status === "preparing"
@@ -1039,7 +1040,7 @@ function App() {
         : candidatePassBRun.status === "loadingModel"
           ? "Gemini 연결을 준비하고 있어요."
           : candidatePassBRun.status === "transcribing"
-            ? `후보 ${candidatePassBCurrentOrdinal}/${candidatePassBSummary?.totalCandidateCount ?? candidates.length}의 짧은 오디오에서 한국어 대사와 사건 단서를 확인하고 있어요.`
+            ? `후보 ${candidatePassBCurrentOrdinal}/${candidatePassBSummary?.totalCandidateCount ?? candidates.length}의 짧은 오디오와 대표 화면에서 한국어 대사·사건 단서를 확인하고 있어요.`
             : candidatePassBRun.status === "finalizing"
               ? "Gemini 답변과 후보 시간을 마지막으로 확인하고 있어요."
             : candidatePassBRun.status === "cancelling"
@@ -2537,6 +2538,27 @@ function App() {
     candidatePassBAbortController.current?.abort();
     const controller = new AbortController();
     candidatePassBAbortController.current = controller;
+    setCandidatePassBError(null);
+    const videoFramesByCandidateId = new Map<
+      string,
+      Awaited<ReturnType<typeof sampleCandidateVideoFrames>>
+    >();
+    await Promise.all(
+      targets.map(async (target) => {
+        const frames = await sampleCandidateVideoFrames(
+          sourceFile,
+          target.decodeStartMs,
+          target.decodeEndMs,
+          { signal: controller.signal },
+        );
+        videoFramesByCandidateId.set(target.candidateId, frames);
+      }),
+    );
+    if (controller.signal.aborted) {
+      candidatePassBStartPendingRef.current = false;
+      setCandidatePassBStartPending(false);
+      return;
+    }
     const identity: CandidatePassBWorkerIdentity = {
       sessionId: appSessionId,
       writerEpoch,
@@ -2618,6 +2640,7 @@ function App() {
           candidateId: target.candidateId,
           startMs: target.decodeStartMs,
           endMs: target.decodeEndMs,
+          videoFrames: videoFramesByCandidateId.get(target.candidateId) ?? [],
         })),
         signal: controller.signal,
         onModelProgress: (progress) => {
@@ -4557,7 +4580,7 @@ function App() {
                     <p>
                       AI가 먼저 찾은 후보 {Math.min(12, candidates.length)}개, 합계 약 {formatDuration(candidatePassBTransferDurationMs)}를
                       Gemini가 차례로 살펴봐요.
-                      한국어 대사와 오디오에서 짐작할 수 있는 사건·반응·클립으로 볼 이유를 후보마다 정리합니다.
+                      한국어 대사와 후보 구간의 대표 화면을 함께 보며 사건·스트리머 반응·클립으로 볼 이유를 후보마다 정리합니다.
                     </p>
                     <p className="rh-help">
                       Gemini 문장은 틀릴 수 있으므로 시간 버튼을 눌러 실제 장면을 마지막으로 확인해 주세요.
@@ -4592,7 +4615,7 @@ function App() {
                         onClick={cancelCandidatePassB}
                       >
                         {candidatePassBStartPending
-                          ? "후보 범위 확인 중…"
+                          ? "오디오와 대표 화면 준비 중…"
                           : candidatePassBRun?.status === "cancelling"
                             ? "멈추는 중…"
                             : "Gemini 분석 멈추기"}

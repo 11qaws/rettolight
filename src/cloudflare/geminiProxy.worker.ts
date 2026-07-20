@@ -7,6 +7,9 @@ import {
   CANDIDATE_PASS_B_MODEL_ID,
   CANDIDATE_PASS_B_SAMPLE_RATE_HZ,
   MAX_CANDIDATE_PASS_B_TARGET_DURATION_MS,
+  MAX_CANDIDATE_PASS_B_VIDEO_FRAME_BASE64_LENGTH,
+  MAX_CANDIDATE_PASS_B_VIDEO_FRAMES,
+  type CandidatePassBVideoFrame,
 } from "../analysis/candidatePassBWorkerProtocol";
 
 const ENDPOINT_PATH = "/v1/candidate-insights";
@@ -22,7 +25,10 @@ const MAX_WAV_BYTES =
     PCM_BYTES_PER_SAMPLE *
     (MAX_CANDIDATE_PASS_B_TARGET_DURATION_MS / 1_000);
 const MAX_AUDIO_BASE64_LENGTH = 4 * Math.ceil(MAX_WAV_BYTES / 3);
-const MAX_REQUEST_BODY_BYTES = MAX_AUDIO_BASE64_LENGTH + 1_024;
+const MAX_REQUEST_BODY_BYTES =
+  MAX_AUDIO_BASE64_LENGTH +
+  MAX_CANDIDATE_PASS_B_VIDEO_FRAMES * MAX_CANDIDATE_PASS_B_VIDEO_FRAME_BASE64_LENGTH +
+  8_192;
 const MAX_UPSTREAM_ERROR_BYTES = 16 * 1024;
 const UPSTREAM_TIMEOUT_MS = 90_000;
 const DEFAULT_UPSTREAM_RETRY_DELAYS_MS = Object.freeze([1_000, 2_000]);
@@ -45,6 +51,7 @@ export interface GeminiProxyEnvironment {
 interface CandidateInsightRequest {
   readonly audioBase64: string;
   readonly candidateDurationMs: number;
+  readonly videoFrames: readonly CandidatePassBVideoFrame[];
 }
 
 type FetchImplementation = (
@@ -186,7 +193,8 @@ function parseCandidateRequest(bytes: Uint8Array): CandidateInsightRequest | nul
   }
   if (
     !isRecord(value) ||
-    !hasExactKeys(value, ["audioBase64", "candidateDurationMs"]) ||
+    (!hasExactKeys(value, ["audioBase64", "candidateDurationMs"]) &&
+      !hasExactKeys(value, ["audioBase64", "candidateDurationMs", "videoFrames"])) ||
     typeof value.audioBase64 !== "string" ||
     value.audioBase64.length === 0 ||
     value.audioBase64.length > MAX_AUDIO_BASE64_LENGTH ||
@@ -196,9 +204,36 @@ function parseCandidateRequest(bytes: Uint8Array): CandidateInsightRequest | nul
   ) {
     return null;
   }
+  const rawFrames = "videoFrames" in value ? value.videoFrames : [];
+  if (!Array.isArray(rawFrames) || rawFrames.length > MAX_CANDIDATE_PASS_B_VIDEO_FRAMES) {
+    return null;
+  }
+  const videoFrames: CandidatePassBVideoFrame[] = [];
+  for (const frame of rawFrames) {
+    if (
+      !isRecord(frame) ||
+      !hasExactKeys(frame, ["timestampMs", "mimeType", "dataBase64"]) ||
+      !Number.isSafeInteger(frame.timestampMs) ||
+      (frame.timestampMs as number) < 0 ||
+      (frame.timestampMs as number) > MAX_CANDIDATE_PASS_B_TARGET_DURATION_MS ||
+      frame.mimeType !== "image/jpeg" ||
+      typeof frame.dataBase64 !== "string" ||
+      frame.dataBase64.length === 0 ||
+      frame.dataBase64.length > MAX_CANDIDATE_PASS_B_VIDEO_FRAME_BASE64_LENGTH ||
+      decodeStrictBase64(frame.dataBase64) === null
+    ) {
+      return null;
+    }
+    videoFrames.push({
+      timestampMs: frame.timestampMs as number,
+      mimeType: "image/jpeg",
+      dataBase64: frame.dataBase64,
+    });
+  }
   return {
     audioBase64: value.audioBase64,
     candidateDurationMs: value.candidateDurationMs as number,
+    videoFrames,
   };
 }
 
@@ -622,6 +657,7 @@ export async function handleGeminiProxyRequest(
       buildCandidatePassBGeminiRequestBody(
         candidateRequest.audioBase64,
         candidateRequest.candidateDurationMs,
+        candidateRequest.videoFrames,
       ),
     );
   } catch {

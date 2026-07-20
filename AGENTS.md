@@ -17,7 +17,7 @@
 
 ## 3. 데이터·보안 경계
 
-- Gemini 정밀 분석은 빠른 분석이 고른 최대 12개의 30~60초 후보만 고정 스키마로 처리한다. 원본 전체·영상 프레임·파일명·채팅·후보 점수·사람 검토 상태는 Gemini 요청에 포함하지 않는다.
+- Gemini 정밀 분석은 빠른 분석이 고른 최대 12개의 30~60초 후보만 고정 스키마로 처리한다. 원본 전체·파일명·채팅·후보 점수·사람 검토 상태는 Gemini 요청에 포함하지 않으며, 후보마다 제한된 대표 JPEG 화면 최대 4장만 오디오와 함께 보낸다.
 - 비밀 API key, CHZZK Client Secret, access/refresh token을 Pages 번들, URL, localStorage, IndexedDB, 프로젝트 JSON, 로그, fixture, 문서에 넣지 않는다. Gemini 키는 Cloudflare Worker Secret으로만 주입하고 오류 원문에도 복사하지 않는다.
 - 중계 Worker는 고정 Origin, 고정 요청 스키마, 요청 크기·시간·횟수 제한, upstream timeout, 응답 크기 제한을 적용한다. 브라우저에는 키·provider 오류 원문을 반환하지 않는다.
 - 원본 영상 전체와 완성 클립 전체를 IndexedDB에 복사하지 않는다.
