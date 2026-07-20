@@ -313,7 +313,7 @@ function explainCandidatePassBError(error: unknown): string {
       case "PROXY_BAD_REQUEST":
         return "Gemini가 앱의 요청 형식을 받을 수 없었어요. 자동 재시도하지 않았습니다. 앱을 새로고침하거나 최신 버전을 확인해 주세요. 기존 후보는 그대로 사용할 수 있어요.";
       case "PROXY_RATE_LIMITED":
-        return "Gemini 사용 한도에 도달했어요. 잠시 뒤 직접 다시 시도하거나 Google AI Studio에서 할당량을 확인해 주세요. 자동으로 반복 요청하지 않았어요.";
+        return "Gemini 분석 요청이 잠시 많아요. 1분 정도 기다린 뒤 직접 다시 시도해 주세요. 자동으로 반복 요청하지 않았어요.";
       case "PROXY_UNAVAILABLE":
         return "Gemini에 연결하지 못했어요. 인터넷 연결을 확인한 뒤 원할 때 다시 시도해 주세요. 기존 후보는 그대로 사용할 수 있어요.";
       case "PROXY_INVALID_RESPONSE":
