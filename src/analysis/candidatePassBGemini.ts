@@ -1,12 +1,11 @@
 import {
-  MAX_CANDIDATE_PASS_B_API_KEY_LENGTH,
   MAX_CANDIDATE_PASS_B_TARGET_DURATION_MS,
   type CandidatePassBInsight,
   type CandidatePassBWorkerFailureReason,
 } from "./candidatePassBWorkerProtocol";
 
-export const CANDIDATE_PASS_B_GEMINI_ENDPOINT =
-  "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent" as const;
+export const CANDIDATE_PASS_B_PROXY_ENDPOINT =
+  "https://rettohighlight-gemini.11qaws.workers.dev/v1/candidate-insights" as const;
 export const MAX_CANDIDATE_PASS_B_RESPONSE_BYTES = 256 * 1024;
 export const MAX_CANDIDATE_PASS_B_TRANSCRIPT_TEXT_LENGTH = 20_000;
 export const MAX_CANDIDATE_PASS_B_TRANSCRIPT_SEGMENTS = 128;
@@ -45,7 +44,7 @@ export interface CandidatePassBGeminiRequestBody {
   readonly generationConfig: {
     readonly responseFormat: {
       readonly text: {
-        readonly mimeType: "application/json";
+        readonly mimeType: "APPLICATION_JSON";
         readonly schema: Readonly<Record<string, unknown>>;
       };
     };
@@ -55,40 +54,42 @@ export interface CandidatePassBGeminiRequestBody {
   readonly store: false;
 }
 
+/** The complete browser-to-proxy request body for one candidate. */
+export interface CandidatePassBProxyRequestBody {
+  readonly audioBase64: string;
+  readonly candidateDurationMs: number;
+}
+
 export type CandidatePassBGeminiParseOutcome =
   | { readonly ok: true; readonly analysis: CandidatePassBGeminiAnalysis }
   | { readonly ok: false };
 
-export interface CandidatePassBGeminiHttpFailure {
+export interface CandidatePassBProxyHttpFailure {
   readonly reasonCode: Extract<
     CandidatePassBWorkerFailureReason,
-    | "GEMINI_API_KEY_REJECTED"
-    | "GEMINI_BAD_REQUEST"
-    | "GEMINI_RATE_LIMITED"
-    | "GEMINI_UNAVAILABLE"
-    | "GEMINI_REQUEST_REJECTED"
+    | "PROXY_AUTH_REJECTED"
+    | "PROXY_BAD_REQUEST"
+    | "PROXY_RATE_LIMITED"
+    | "PROXY_UNAVAILABLE"
+    | "PROXY_INVALID_RESPONSE"
+    | "PROXY_REQUEST_REJECTED"
   >;
 }
 
 const RESPONSE_SCHEMA = Object.freeze({
   type: "object",
-  additionalProperties: false,
   properties: {
     segments: {
       type: "array",
-      maxItems: MAX_CANDIDATE_PASS_B_TRANSCRIPT_SEGMENTS,
       items: {
         type: "object",
-        additionalProperties: false,
         properties: {
           relativeStartMs: {
             type: "integer",
-            minimum: 0,
             description: "오디오 시작을 0으로 둔 발화 시작 밀리초",
           },
           relativeEndMs: {
             type: "integer",
-            minimum: 1,
             description: "오디오 시작을 0으로 둔 발화 끝 밀리초",
           },
           text: {
@@ -113,8 +114,6 @@ const RESPONSE_SCHEMA = Object.freeze({
     },
     uncertaintiesKo: {
       type: "array",
-      minItems: 1,
-      maxItems: MAX_CANDIDATE_PASS_B_UNCERTAINTIES,
       items: {
         type: "string",
         description: "오디오만으로 확정할 수 없어 영상 재생 확인이 필요한 점",
@@ -178,21 +177,6 @@ function normalizeKoreanText(
 ): string | null {
   const normalized = normalizeText(value, maximumLength);
   return normalized !== null && /\p{Script=Hangul}/u.test(normalized)
-    ? normalized
-    : null;
-}
-
-export function normalizeCandidatePassBGeminiApiKey(
-  value: unknown,
-): string | null {
-  if (typeof value !== "string") {
-    return null;
-  }
-  if (/[\p{Cc}\p{Cf}]/u.test(value)) {
-    return null;
-  }
-  const normalized = value.trim();
-  return normalized.length > 0 && normalized.length <= MAX_CANDIDATE_PASS_B_API_KEY_LENGTH
     ? normalized
     : null;
 }
@@ -304,13 +288,30 @@ export function buildCandidatePassBGeminiRequestBody(
     ],
     generationConfig: {
       responseFormat: {
-        text: { mimeType: "application/json", schema: RESPONSE_SCHEMA },
+        text: { mimeType: "APPLICATION_JSON", schema: RESPONSE_SCHEMA },
       },
       thinkingConfig: { thinkingLevel: "MEDIUM" },
       maxOutputTokens: 4_096,
     },
     store: false,
   };
+}
+
+export function buildCandidatePassBProxyRequestBody(
+  audioBase64: string,
+  candidateDurationMs: number,
+): CandidatePassBProxyRequestBody {
+  if (
+    typeof audioBase64 !== "string" ||
+    audioBase64.length === 0 ||
+    audioBase64.length > MAX_BASE64_WAV_LENGTH ||
+    !Number.isSafeInteger(candidateDurationMs) ||
+    candidateDurationMs <= 0 ||
+    candidateDurationMs > MAX_CANDIDATE_PASS_B_TARGET_DURATION_MS
+  ) {
+    throw new RangeError("Invalid candidate proxy request input.");
+  }
+  return { audioBase64, candidateDurationMs };
 }
 
 export function parseCandidatePassBGeminiAnalysis(
@@ -461,20 +462,56 @@ export function extractCandidatePassBGeminiResponse(
   return parseCandidatePassBGeminiAnalysis(parsed, candidateDurationMs);
 }
 
-export function classifyCandidatePassBGeminiHttpFailure(
+export function classifyCandidatePassBProxyHttpFailure(
   status: number,
-): CandidatePassBGeminiHttpFailure {
-  if (status === 401 || status === 403) {
-    return { reasonCode: "GEMINI_API_KEY_REJECTED" };
+  payload?: unknown,
+): CandidatePassBProxyHttpFailure {
+  const proxyCode =
+    isRecord(payload) &&
+    isRecord(payload.error) &&
+    typeof payload.error.code === "string"
+      ? payload.error.code
+      : null;
+  if (proxyCode === "PROXY_NOT_CONFIGURED") {
+    return { reasonCode: "PROXY_AUTH_REJECTED" };
   }
-  if (status === 400) {
-    return { reasonCode: "GEMINI_BAD_REQUEST" };
+  if (
+    proxyCode === "UPSTREAM_INVALID_RESPONSE" ||
+    proxyCode === "UPSTREAM_RESPONSE_FORMAT_REJECTED"
+  ) {
+    return { reasonCode: "PROXY_INVALID_RESPONSE" };
+  }
+  if (
+    proxyCode === "RATE_LIMITED" ||
+    proxyCode === "UPSTREAM_RATE_LIMITED"
+  ) {
+    return { reasonCode: "PROXY_RATE_LIMITED" };
+  }
+  if (
+    proxyCode === "INVALID_REQUEST" ||
+    proxyCode === "INVALID_AUDIO" ||
+    proxyCode === "PAYLOAD_TOO_LARGE" ||
+    proxyCode === "UNSUPPORTED_MEDIA_TYPE"
+  ) {
+    return { reasonCode: "PROXY_BAD_REQUEST" };
+  }
+  if (
+    proxyCode === "UPSTREAM_INVALID_ARGUMENT" ||
+    proxyCode === "UPSTREAM_REJECTED"
+  ) {
+    return { reasonCode: "PROXY_REQUEST_REJECTED" };
+  }
+  if (status === 401 || status === 403) {
+    return { reasonCode: "PROXY_AUTH_REJECTED" };
+  }
+  if (status === 400 || status === 413 || status === 415 || status === 422) {
+    return { reasonCode: "PROXY_BAD_REQUEST" };
   }
   if (status === 429) {
-    return { reasonCode: "GEMINI_RATE_LIMITED" };
+    return { reasonCode: "PROXY_RATE_LIMITED" };
   }
   if (status >= 500 && status <= 599) {
-    return { reasonCode: "GEMINI_UNAVAILABLE" };
+    return { reasonCode: "PROXY_UNAVAILABLE" };
   }
-  return { reasonCode: "GEMINI_REQUEST_REJECTED" };
+  return { reasonCode: "PROXY_REQUEST_REJECTED" };
 }

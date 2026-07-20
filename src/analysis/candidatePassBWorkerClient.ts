@@ -30,7 +30,6 @@ import {
   MAX_CANDIDATE_PASS_B_TRANSCRIPT_TEXT_LENGTH,
   MAX_CANDIDATE_PASS_B_UNCERTAINTIES,
   MAX_CANDIDATE_PASS_B_UNCERTAINTY_LENGTH,
-  normalizeCandidatePassBGeminiApiKey,
 } from "./candidatePassBGemini";
 
 export {
@@ -85,8 +84,6 @@ export interface RunCandidatePassBWorkerOptions {
   readonly identity: CandidatePassBWorkerIdentity;
   readonly sourceDurationMs: number;
   readonly device: CandidatePassBDevice;
-  readonly apiKey: string;
-  readonly externalProcessingConsent: true;
   readonly targets: readonly CandidatePassBTarget[];
   readonly signal?: AbortSignal;
   readonly onModelProgress?: (progress: CandidatePassBModelProgress) => void;
@@ -156,7 +153,6 @@ export const DEFAULT_CANDIDATE_PASS_B_CANCEL_ACK_TIMEOUT_MS = 5_000;
 
 interface NormalizedRunInput {
   readonly sourceDurationMs: number;
-  readonly apiKey: string;
   readonly targets: readonly CandidatePassBTarget[];
 }
 
@@ -474,12 +470,12 @@ function isWorkerFailureReason(
   return (
     value === "INVALID_REQUEST" ||
     value === "WORKER_BUSY" ||
-    value === "GEMINI_API_KEY_REJECTED" ||
-    value === "GEMINI_BAD_REQUEST" ||
-    value === "GEMINI_RATE_LIMITED" ||
-    value === "GEMINI_UNAVAILABLE" ||
-    value === "GEMINI_INVALID_RESPONSE" ||
-    value === "GEMINI_REQUEST_REJECTED" ||
+    value === "PROXY_AUTH_REJECTED" ||
+    value === "PROXY_BAD_REQUEST" ||
+    value === "PROXY_RATE_LIMITED" ||
+    value === "PROXY_UNAVAILABLE" ||
+    value === "PROXY_INVALID_RESPONSE" ||
+    value === "PROXY_REQUEST_REJECTED" ||
     value === "UNEXPECTED_WORKER_FAILURE"
   );
 }
@@ -601,7 +597,6 @@ function normalizeInput(
   file: File,
   options: RunCandidatePassBWorkerOptions,
 ): NormalizedRunInput | CandidatePassBWorkerError {
-  const apiKey = normalizeCandidatePassBGeminiApiKey(options.apiKey);
   if (
     typeof file !== "object" ||
     file === null ||
@@ -609,8 +604,6 @@ function normalizeInput(
     file.size < 0 ||
     !validateIdentity(options.identity) ||
     options.device !== CANDIDATE_PASS_B_DEVICE ||
-    apiKey === null ||
-    options.externalProcessingConsent !== true ||
     !Number.isFinite(options.sourceDurationMs)
   ) {
     return new CandidatePassBWorkerError(
@@ -670,7 +663,7 @@ function normalizeInput(
     targets.push(normalizedTarget);
   }
 
-  return { sourceDurationMs, apiKey, targets };
+  return { sourceDurationMs, targets };
 }
 
 function stageRank(stage: CandidatePassBCandidateProgress["stage"]): number {
@@ -716,9 +709,9 @@ function hasValidSegmentTimeline(result: CandidatePassBTranscriptResult): boolea
 }
 
 /**
- * Sends only the supplied score-ordered candidate ranges to Gemini after the
- * caller supplies an API key and explicit external-processing consent. Partial
- * results remain fenced candidate-by-candidate; no key is returned in results.
+ * Sends only the supplied score-ordered candidate ranges to the fixed owner
+ * proxy. Partial results remain fenced candidate-by-candidate; no credential
+ * exists in the browser request protocol or returned result.
  */
 export function runCandidatePassBWorker(
   file: File,
@@ -1128,8 +1121,6 @@ export function runCandidatePassBWorker(
         file,
         sourceDurationMs: normalized.sourceDurationMs,
         device: CANDIDATE_PASS_B_DEVICE,
-        apiKey: normalized.apiKey,
-        externalProcessingConsent: true,
         targets: normalized.targets,
       });
     } catch {

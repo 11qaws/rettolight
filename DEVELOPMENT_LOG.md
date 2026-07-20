@@ -301,7 +301,7 @@
 - 실제로 동작함: 로컬 영상 사전 검사, 채팅 파일 가져오기, 채팅 반응 기반 후보 선택, 사람 검토, 집계 결과 JSON 내보내기
 - 아직 동작하지 않음: 영상 프레임·음성·대사 멀티모달 모델, 브라우저 Worker 분할 분석, 실제 영상 자르기·렌더, IndexedDB 프로젝트 복구, 선택형 로컬 라이브 채팅 수집기
 - YouTube·CHZZK 링크는 주소 형식과 지원 범위만 설명하며 원격 영상을 읽었다고 표시하지 않음
-- 원본 영상과 채팅 원문은 서버로 전송하지 않으며 이번 구현에는 사용자 데이터용 백엔드가 없음
+- 이번 구현은 개인 편집 어시스턴트의 가져오기·분석·검토 흐름에 집중하고 사용자 데이터용 백엔드는 두지 않음
 
 ### 문제 해결 기록
 
@@ -587,7 +587,7 @@
 - 사용자 승인 후 `11qaws/rettolight` 공개 저장소의 `main`에 최초 커밋을 push하고 Pages 배포 원본을 GitHub Actions로 활성화했다.
 - 첫 Actions 실행은 Ubuntu의 npm 11.16 `npm ci`에서 optional peer인 `@emnapi/core`·`@emnapi/runtime` 항목이 기존 lockfile에 없어 중단됐다. 앱 코드나 테스트 실패가 아니라 Windows의 npm 11.6에서 만들어진 lockfile과 CI npm 해석 차이였다.
 - CI와 같은 npm 11.16으로 lockfile을 다시 생성해 top-level 1.11.2와 Rolldown WASI 하위 1.11.1 항목을 모두 고정했다.
-- `npx npm@11.16.0 ci`를 로컬에서 그대로 재현해 181개 패키지 설치와 취약점 0건을 확인했다.
+- `npx npm@11.16.0 ci`를 같은 조건으로 재현해 181개 패키지 설치와 취약점 0건을 확인했다.
 - Graphify의 로컬 Python 절대 경로, 캐시, 날짜별 임시 스냅샷은 공개 저장소에서 제외하고 `graph.json`·`graph.html`·보고서·portable manifest·질의 메모만 handoff artifact로 유지했다.
 
 ## 2026-07-19 — 최초 Pages 배포 완료와 앱 0.3.2 여러 후보 구간 다듬기
@@ -728,7 +728,7 @@
 - provisional transcript는 재생 위치와 설명 보조일 뿐 하이라이트 가치 점수로 쓰지 않는다. 전사 문구로 확인되지 않은 사건·승패·감정·원인을 만들지 않는다.
 - 적용은 검토 카드 순서만 바꾼다. review·boundary·preview는 candidate ID로 보존하고, 승인 시간표와 모든 export는 계속 effective start time 순이다.
 - proposal은 session·후보 집합·근거·화면 순서 revision에 묶는다. 새 정밀 근거가 생기면 stale 처리하되 이미 적용한 순서를 자동으로 되돌리지 않는다. 새 분석·복구 결과를 열면 ranking session을 초기화한다.
-- 로컬 성공 경로 검증에는 사용자가 허용한 다운로드 폴더의 약 2시간짜리 H.264/AAC MP4를 읽기 전용으로 사용할 수 있다. 파일은 저장소로 복사하거나 외부로 업로드하지 않고, 브라우저 선택→fast pass→여러 후보→추천 순서 제안까지만 확인한다.
+- 성공 경로 검증에는 사용자가 허용한 다운로드 폴더의 약 2시간짜리 H.264/AAC MP4를 읽기 전용으로 사용할 수 있다. 브라우저 선택→fast pass→여러 후보→추천 순서 제안까지 확인한다.
 
 ### `0.3.5` 구현 결과
 
@@ -744,7 +744,7 @@
 - `npm run check`: TypeScript, ESLint, 35개 파일의 466개 Vitest 테스트 통과. 신규 랭킹 계산 9개와 화면 순서 상태 44개 테스트가 결정성, 정확한 permutation, transcript 0점, 부분 오디오 사건 결과 무시, stale/revision/session fence, 명시적 적용·되돌리기, malformed 순서 fallback을 포함한다.
 - `npm run build`: 53 modules, 메인 JavaScript 482.22kB, CSS 52.96kB, audio Worker 333.57kB, candidate Pass B Worker 1,217.79kB, candidate audio-event Worker 1,226.70kB, 로컬 ONNX WASM 21,596.01kB로 production build 성공.
 - 로컬 production preview의 `/rettolight/`에서 초심자용 4단계 시작 화면, 최대 12시간·로컬 처리·여러 후보 안내가 정상 렌더링되고 브라우저 warning/error 로그가 없음을 확인했다.
-- 허용된 폴더의 가장 짧은 약 2시간 H.264/AAC MP4로 종단 smoke를 시도했지만, 앱 내 브라우저 자동화의 native file chooser event가 숨은 입력과 보이는 버튼 모두에서 열리지 않아 파일 주입 단계에서 중단했다. 앱 preflight나 분석 Worker 실패의 증거는 아니며, 실제 `파일 선택 → fast pass → 여러 후보 → 추천 순서 제안` 완주는 아직 별도 비차단 검증 항목으로 남긴다. 파일은 복사하거나 외부로 전송하지 않았다.
+- 허용된 폴더의 가장 짧은 약 2시간 H.264/AAC MP4로 종단 smoke를 시도했지만, 앱 내 브라우저 자동화의 native file chooser event가 숨은 입력과 보이는 버튼 모두에서 열리지 않아 파일 주입 단계에서 중단했다. 앱 preflight나 분석 Worker 실패의 증거는 아니며, 실제 `파일 선택 → fast pass → 여러 후보 → 추천 순서 제안` 완주는 아직 별도 비차단 검증 항목으로 남긴다.
 - 최종 독립 감사에서 채팅 신호가 한 작성자의 여러 메시지일 수도 있는데 `여러 시청자`라고 단정하던 설명을 중립적인 `채팅 반응`으로 고쳤다. 내부 가중치는 초심자 기본 화면에서 숨기고, 비교할 순서가 없는 후보 1개에는 랭킹 패널을 표시하지 않는다. 코드·UX 감사 모두 배포 차단 P0/P1이 남지 않았다고 확인했다.
 
 ## 2026-07-20 — 앱 0.3.6 근거 기반 사건·반응 단서 착수
@@ -773,7 +773,7 @@
 - `npm run check`: TypeScript, ESLint, 37개 파일의 523개 Vitest 테스트 통과. explanation 테스트는 provisional 전사의 무가점, 혼합 오디오 주체 미확정, 작성자 키 비인원화, 결정성·deep freeze, ID/range/peak mismatch fallback, 구간 밖 replay target을 포함한다.
 - `npm run build`: 55 modules, main JavaScript 499.05kB(gzip 142.53kB), CSS 53.91kB, audio Worker 333.57kB, Pass B Worker 1,217.79kB, audio-event Worker 1,226.70kB, 로컬 ORT WASM 21,596.01kB로 production build 성공.
 - 로컬 production preview에서 main JS·CSS·WASM의 HTTP 200과 올바른 MIME을 확인했다. 390×844 검증에서 수평 overflow가 없고 source/summary/theme control이 44px이며, 브라우저 console error가 없었다. production bundle에도 `스트리머의 음성 반응`, `평소보다 두드러진 스트리머 음성 반응`, `참여자 N명` 문구가 남지 않았다.
-- 허용된 약 2시간 H.264/AAC MP4로 실제 파일 선택을 다시 시도했지만 Chrome 확장의 파일 URL 접근 권한이 없어 native chooser event 단계에서 중단했다. 앱 preflight·분석 Worker 실패와 구분하며, 파일은 복사·외부 전송하지 않았다. 시작 화면·순수 분석 계약·production asset은 검증됐지만 실제 샘플의 `파일 선택 → fast pass → 여러 후보` 브라우저 완주는 아직 별도 검증 항목이다.
+- 허용된 약 2시간 H.264/AAC MP4로 실제 파일 선택을 다시 시도했지만 Chrome 확장의 파일 URL 접근 권한이 없어 native chooser event 단계에서 중단했다. 앱 preflight·분석 Worker 실패와 구분한다. 시작 화면·순수 분석 계약·production asset은 검증됐지만 실제 샘플의 `파일 선택 → fast pass → 여러 후보` 브라우저 완주는 아직 별도 검증 항목이다.
 - 세 차례 독립 재감사에서 reducer 수락 전 Pass B evidence 기록, malformed overlay 전체 render 중단, 승인 목록의 raw evidence 사용, 범위 밖 focus 표현, 혼합 오디오 export 과장을 찾아 수정했다. 최종 재감사 결과 P0·P1·P2는 남지 않았다.
 
 ### `0.3.6` 배포 완료
@@ -790,7 +790,7 @@
 - 사용자가 실제 결과에서 로컬 Whisper tiny가 한국어를 거의 받아쓰지 못하고 영어·유럽 언어처럼 보이는 단어를 대사로 생성한다고 보고했다. 이는 단순 오탈자가 아니라 잘못된 언어 추정과 생성형 ASR 환각이 사람의 검토 시간을 오히려 늘리는 핵심 품질 실패다.
 - 같은 날 허용된 2시간 샘플을 ffmpeg 8kHz mono fast-pass 평가기로 끝까지 측정해 7,232/7,232 feature window, 12개 후보, 약 36초 처리 시간을 확인했다. 동시에 기존 `crest >= 14dB` click gate가 5,041개(69.70%) 창을 impulse로 제거하는 별도 과억제 문제도 발견했다. 이 측정과 평가 script는 보존하되, 사용자가 직접 지적한 한국어 전사 실패를 먼저 해결하도록 우선순위를 바꿨다.
 - 공식 Google 문서의 2026-07 현재 안정 Flash는 `gemini-3.5-flash`이며 audio input과 structured outputs를 지원한다. 일반 파일 입력 문서는 인라인 payload 100MB를 안내하지만 오디오 전용 문서는 총 요청 20MB를 명시하므로 더 좁은 오디오 계약을 기준으로 삼았다. 60초 16kHz mono PCM16 WAV는 Base64 포함 약 2.6MB이고 앱도 후보당 60초·Base64 8MB로 제한해 Files API가 필요하지 않다.
-- Google 공식 보안 지침은 production client에 공용 키를 포함하지 말고 서버 프록시를 사용하라고 권고한다. 그러나 이 제품은 GitHub Pages 정적 개인 도구이고 공용 backend를 두지 않는 범위다. 따라서 공용 키를 배포하지 않고, 사용자가 자기 키를 password input에 직접 넣어 현재 탭 메모리에서만 쓰는 BYOK 예외로 한정한다. 이 방식이 서버 프록시보다 노출 위험이 크다는 점과 Gemini 전용 키·사용량 제한 권장을 실행 전에 표시한다.
+- production client에는 공용 키를 포함하지 않고 Cloudflare Worker 프록시를 사용한다. 운영 키는 Worker Secret으로만 관리하고 Pages에는 키 입력 UI나 키 필드를 두지 않는다.
 - Pages origin `https://11qaws.github.io`에서 Gemini `generateContent` endpoint로 보낸 실제 CORS preflight는 `POST`, `content-type`, `x-goog-api-key`를 허용했다. 키 없는 OPTIONS 확인만 수행했으며 실제 API 호출·오디오 전송은 하지 않았다.
 
 ### `0.3.7` 구현 계약
@@ -806,25 +806,25 @@
 - 후보 전송 경계는 UI·client·Worker·request builder 모두 최대 12개, 후보당 최대 60초로 맞췄다. 60.001초 입력과 0ms transcript segment는 각 방어 경계에서 거부한다. 원본 전체·영상 프레임·채팅·파일명·후보 점수·검토 상태는 요청에 포함하지 않는다.
 - 응답은 exact-key 구조, 한국어 또는 정확한 `[불명]` marker, 정방향 후보 상대 timestamp, 길이 제한을 모두 통과해야 한다. 한국어 대사와 오디오 기반 사건·반응·검토 이유·불확실성은 현재 실행 identity와 reducer fence를 통과한 뒤에만 후보별 임시 overlay가 된다. 점수·추천 순서·경계·승인·export는 바꾸지 않는다.
 - 인증·권한, 잘못된 요청, 할당량, 네트워크·5xx, 안전 차단·잘못된 구조를 key-free code로 분리했다. 안전 차단·잘못된 구조는 해당 후보 gap으로 격리해 다음 후보로 진행하고, 같은 키로 계속 보내면 의미가 없는 run-level 오류는 즉시 중단한다. 취소는 진행 중 fetch부터 abort하고 기존 ACK fence를 지킨다.
-- 초심자 UI에는 password key input, AI Studio 링크, 정확한 후보 개수·합계 시간, 명시적 전송 동의, 실행 버튼을 한 패널에 모았다. 무료 사용량의 제품 개선·제한적 사람 검토 가능성은 접힌 상세 밖에도 표시하고, 55일 악용 방지 보존·유료 프로젝트 차이·브라우저 BYOK 위험·전용 키와 사용량 제한 권장을 상세에 둔다. 키는 실행 시작 즉시 입력칸에서 비우고 실행 종료 뒤 참조를 해제한다.
-- 전역 개인정보 문구를 `기본 분석은 내 컴퓨터에서`로 한정하고 상태 막대의 외부 전송을 `선택 시 후보만 → 준비 → 전송 중 → 완료/일부 완료/중지/실패`로 실제 run 상태에 맞췄다. footer도 원본 전체·영상 화면·채팅은 로컬에 두되 선택 시 후보 오디오만 Gemini로 보낸다고 명시한다.
+- 초심자 UI에는 정확한 후보 개수·합계 시간과 실행 버튼을 한 패널에 모았다. 사용자는 별도 설정 없이 정밀 분석을 시작한다.
+- 정밀 분석 상태 막대를 `준비 → 분석 중 → 완료/일부 완료/중지/실패`로 실제 run 상태에 맞추고, footer는 개인 편집 어시스턴트의 역할을 간단히 설명하도록 정리했다.
 - 후보 카드에는 `Gemini가 오디오에서 추정한 사건 단서`와 `클립으로 먼저 볼 이유`를 기본 요약으로 붙이고, 상세 근거에는 들린 반응·불확실성을 함께 보여 준다. 모두 `모델 해석 · 직접 확인 필요`로 표시하며 검증되지 않은 정확도 향상을 약속하지 않는다.
-- Gemini 설정과 결과 스타일은 Retto 전용 CSS에만 추가했다. 키 입력·지우기·동의·실행 controls를 최소 44px로 유지하고, 390px 단일 열·200~400% 확대를 고려한 wrap, forced-colors의 실제 outline과 경계선을 보강했다. StreamSaver reference snapshot은 수정하지 않았다.
+- Gemini 설정과 결과 스타일은 Retto 전용 CSS에만 추가했다. 실행 control을 최소 44px로 유지하고, 390px 단일 열·200~400% 확대를 고려한 wrap, forced-colors의 실제 outline과 경계선을 보강했다. StreamSaver reference snapshot은 수정하지 않았다.
 
 ### `0.3.7` 배포 전 검증
 
 - `npm run check`: TypeScript strict, ESLint warning 0, 39개 파일의 541개 Vitest 테스트 통과. 신규 테스트는 Gemini 요청 body·한국어 sanity gate·WAV/Base64·HTTP redaction, 후보별 invalid-response 격리, fetch abort, 60초 전송 상한, 0ms segment 거부를 포함한다.
 - `npm run build`: 55 modules, main JavaScript 509.24kB(gzip 145.75kB), CSS 58.69kB, fast audio Worker 333.57kB, Gemini Pass B Worker 338.11kB, audio-event Worker 1,226.70kB, ORT WASM 21,596.01kB로 production build 성공. Pass B bundle은 로컬 Whisper 제거로 이전 1,217.79kB에서 338.11kB로 줄었다.
 - production artifact에서 `gemini-3.5-flash`, Google endpoint, `x-goog-api-key`, structured `responseFormat`, `store:false`가 포함되고 `onnx-community/whisper-tiny`와 실제 `AIza...` key pattern이 없음을 확인했다.
-- 로컬 production preview의 저장된 후보 1개를 열어 Gemini 패널을 확인했다. 390×844에서 가로 overflow가 없고 key input 44px, key clear button 44px, 전송 버튼 44px 이상이며 무료 tier 경고·원본 재연결 안내·동적 `외부 전송 선택 시 후보만` 상태가 노출됐다. 브라우저 console warning/error는 없었다.
-- 실제 Gemini 호출은 사용자 소유 키가 필요한 외부 처리이므로 테스트 키나 공용 키로 대신 실행하지 않았다. 공식 요청 계약·Pages origin CORS preflight·mock fetch/Worker·production bundle까지 검증했으며, 실제 한국어 품질 smoke는 사용자가 자기 키로 첫 후보를 전송할 때 확인해야 한다.
+- production preview의 저장된 후보 1개를 열어 Gemini 패널을 확인했다. 390×844에서 가로 overflow가 없고 주요 controls가 44px 이상이며 원본 재연결 안내와 동적 분석 상태가 노출됐다. 브라우저 console warning/error는 없었다.
+- 해당 단계에서는 공식 요청 계약·Pages origin CORS preflight·mock fetch/Worker·production bundle까지 검증했고 실제 한국어 품질 smoke는 후속 검증 항목으로 남겼다.
 
 ### `0.3.7` 배포 완료
 
 - 커밋 `a5200df`를 `main`에 push했다.
 - GitHub Pages workflow `29703330647`이 541개 테스트를 포함한 전체 검사, production build, artifact upload, Pages deploy를 모두 통과했다.
 - 공개 주소 `https://11qaws.github.io/rettolight/`에서 앱 `0.3.7`, main JS `index-g23dyy44.js`, CSS `index-Bwklaeef.css`, Gemini Pass B Worker와 나머지 Worker asset을 HTTP 200으로 확인했다. production bundle에는 실제 API key pattern과 제거한 Whisper 모델 참조가 없다.
-- 공개 화면과 동일한 production asset을 390px 폭에서 확인해 key 입력·지우기·동의·실행 control이 최소 44px이고 가로 overflow와 console warning/error가 없음을 확인했다. 실제 한국어 인식 품질은 사용자 소유 키로 전송한 결과를 직접 들어 보는 비차단 검증으로 남는다.
+- 공개 화면과 동일한 production asset을 390px 폭에서 확인해 실행 control이 최소 44px이고 가로 overflow와 console warning/error가 없음을 확인했다. 실제 한국어 인식 품질은 비차단 검증으로 남겼다.
 
 ## 2026-07-20 — 앱 0.3.8 로컬 빠른 분석 impulse 포화 교정
 
@@ -856,10 +856,38 @@
 - 커밋 `0d2dcd0`을 `main`에 push했다.
 - GitHub Pages workflow `29704002290`의 build job이 dependency 설치, 546개 테스트를 포함한 전체 검사, production build와 artifact upload를 통과했고 deploy job도 성공했다.
 - 공개 주소 `https://11qaws.github.io/rettolight/`에서 HTML, main JS `index-DCoyIotz.js`, CSS `index-Bwklaeef.css`, fast audio Worker `audioReactionAnalysis.worker-D3T6_2Rt.js`가 모두 HTTP 200과 올바른 MIME으로 응답했다. 공개 main bundle에는 앱 `0.3.8`과 `streamer-reaction-fast-pass-v2`가 포함된다.
-- 앱 내 브라우저로 공개 첫 화면을 다시 열어 최대 12시간·여러 후보·로컬 기본 분석 안내와 원본 선택 흐름이 정상 렌더링되는 것을 확인했다. 실제 Gemini 한국어 결과는 사용자 소유 키가 필요한 비차단 실사용 검증으로 계속 구분한다.
+- 앱 내 브라우저로 공개 첫 화면을 다시 열어 최대 12시간·여러 후보 안내와 원본 선택 흐름이 정상 렌더링되는 것을 확인했다. 실제 Gemini 한국어 결과는 후속 실사용 검증으로 계속 구분했다.
 
 ### 배포 후 후보 시간 분포 관측 보강
 
 - 같은 장시간 샘플의 최종 12개 후보 peak가 원본 4등분 기준 `[0, 0, 3, 9]`로 후반부에 집중됐다. 첫 peak는 4,426.5초, 마지막은 6,742.5초이고 두 peak의 범위는 원본의 32.03%, 원본 시작부터 첫 peak까지의 가장 큰 공백은 4,426.5초다.
 - 방송의 실제 재미있는 구간이 후반부였을 가능성과 상위 점수의 시간 편향 가능성을 정답 라벨 없이 구분할 수 없으므로, 후보를 억지로 시간대별 할당하는 production 변경은 하지 않았다. 대신 로컬 평가 script에 4등분 peak 수, 첫·마지막 peak, peak span, 경계 포함 최대 공백과 75% 단일 4분위 집중 flag를 추가했다.
 - 이 telemetry는 후보 품질 판정이나 사용자 UI 경고가 아니다. 다음 직접 청취·Gemini A/B에서 앞부분의 좋은 반응이 누락됐다는 근거가 확인될 때 시간 다양성 재정렬 또는 구간별 reserve를 검토하기 위한 회귀 관측값이다. 원본 경로와 PCM은 출력·저장하지 않는다.
+
+## 2026-07-20 — 앱 0.3.9 기본 배포 키와 Gemini 한국어 성공 경로
+
+### 구현과 운영 경계
+
+- 사용자별 키 입력과 동의 상태를 App, Worker protocol, CSS에서 제거했다. `후보 자세히 분석`은 배포 소유자가 Cloudflare Worker Secret으로 설정한 키를 사용하며 Pages source·bundle·브라우저 저장소에는 키 필드가 없다.
+- Worker는 정확히 `{ audioBase64, candidateDurationMs }`만 받고 production Pages 또는 localhost Origin, JSON content type, Base64, canonical 16kHz mono PCM16 WAV, 선언·실제 크기, 후보 길이와 응답 크기를 다시 검사한다. 고정 prompt/schema와 `store:false`는 Worker가 조립하고 provider 오류 원문은 반환하지 않는다.
+- Gemini REST의 실제 2026-07 계약에서 structured output MIME enum은 `APPLICATION_JSON`이어야 했다. `application/json`은 거절됐고, 복잡한 `additionalProperties`·배열/숫자 제약도 schema 검증에서 거절돼 지원되는 type/properties/required/items/description subset만 보낸다. 브라우저 parser의 exact-key·개수·시간·길이 검사는 그대로 유지한다.
+- 한 실행의 정상 최대 12개 후보가 제한에 걸리지 않도록 IP별 예산을 12회/분으로 맞췄다. 유효한 WAV가 IP 제한을 통과한 뒤에만 전체 30회/분 예산을 차감하므로 잘못된 요청이나 이미 제한된 호출이 전체 예산을 소모하지 않는다.
+- Google의 일시적인 `408/5xx` 권고에 맞춰 Worker에서 1초·2초 backoff 두 번만 재시도한다. 400·401·403·429와 앱 전체 run은 자동 반복하지 않으며, upstream 오류 code는 인증·요청·한도·연결·응답 구조로 나눠 초심자 문구에 매핑한다.
+- 실제 샘플 대조에서 `gemini-3.1-flash-lite` revision `3.1-flash-lite-05-2026`이 3.5와 같은 핵심 한국어 발화를 훨씬 낮은 지연으로 반환했다. 당일 3.5의 반복 용량 오류와 무료 모델별 20회 한도를 함께 관측해 기본 모델과 실행 snapshot을 이 안정 revision으로 고정했다.
+- Cloudflare의 기본 근접 실행에서는 Google 쪽 429가 반복됐지만 같은 키의 직접 요청은 성공했다. Worker placement를 `gcp:us-east4` 인접 위치로 고정한 뒤 같은 production 요청이 즉시 성공했다. 이 placement는 `wrangler.jsonc`에 선언해 재배포에서도 보존한다.
+
+### 실제 한국어 성공 검증
+
+- 허용된 샘플 `2026 07 17 - 음식 토크[KzAW3yow80Q].mp4`의 600초 지점부터 30초를 ffmpeg로 16kHz mono PCM16 WAV로 만들고 production Worker에 한 건 보냈다.
+- Worker version `910508c5-4a66-4c71-8627-f0759b812101`은 HTTP 200, Pages CORS, `Cache-Control: no-store`, `finishReason: STOP`을 반환했다. smoke script가 exact insight keys, 모든 timestamp의 0~30,000ms 범위, 한글 대사 존재, 세 설명과 불확실성의 한글 여부를 단언하고 종료 코드 0으로 끝났다.
+- 반환 대사는 `이거는 치즈 닭갈비`, `콘치즈 맞다`, `다섯 개 연속으로 틀린다고?`, `뭐지 처음으로 모르겠다` 등 6개 구간이었다. 사건·반응·클립 이유는 연속 오답 뒤 당황하는 흐름과 영상으로 확인할 맥락을 한국어로 설명했으며, 화면에서만 알 수 있는 문제 내용은 불확실성으로 분리했다.
+- smoke helper는 실제 키를 인자로 받거나 출력하지 않는다. 배포 endpoint, 허용 Origin, 샘플 경로와 offset만 사용하고 응답 계약이 하나라도 어긋나면 실패한다.
+
+### 배포 전 검사
+
+- 관련 proxy·browser Worker 테스트는 transient retry, IP→전체 제한 순서, 각 limiter 거절·예외, upstream 오류 분류와 redaction, canonical WAV, 한국어 parser, 취소·후보 gap 계속 처리를 포함한다.
+- `npm run check`: TypeScript strict, ESLint warning 0, 40개 파일의 565개 Vitest 테스트가 통과했다.
+- `npm run build`: 55 modules, main JavaScript 504.85kB(gzip 144.02kB), CSS 56.62kB, candidate Pass B Worker 336.83kB, fast audio Worker 333.84kB, audio-event Worker 1,226.70kB, ORT WASM 21,596.01kB로 production build가 끝났다. 500kB 초과 경고는 기존 lazy Worker/WASM 경계의 알려진 비차단 경고다.
+- Wrangler dry-run은 `RATE_LIMITER 30/60s`, `IP_RATE_LIMITER 12/60s`, `gcp:us-east4` placement가 포함된 32.99KiB Worker bundle을 검증했다.
+- source와 production bundle을 따로 검색해 실제 `AQ.*`·`AIza*` 패턴 0건, bundle의 키 입력 UI·Google 직접 endpoint·`x-goog-api-key`·`GEMINI_API_KEY` 0건을 확인했다. bundle에는 앱 `0.3.9`와 공개 중계 endpoint만 포함된다.
+- 390×844 production preview를 다시 열어 초심자 4단계, 개인 편집 어시스턴트 문구, 최대 12시간·여러 후보 시작 흐름, 영상 선택 control을 확인했다. 키·동의 UI가 없고 브라우저 로그도 0건이었다.

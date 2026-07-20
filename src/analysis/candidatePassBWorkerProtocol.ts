@@ -1,11 +1,10 @@
-export const CANDIDATE_PASS_B_MODEL_ID = "gemini-3.5-flash" as const;
-export const CANDIDATE_PASS_B_MODEL_REVISION = "stable-2026-05" as const;
+export const CANDIDATE_PASS_B_MODEL_ID = "gemini-3.1-flash-lite" as const;
+export const CANDIDATE_PASS_B_MODEL_REVISION = "3.1-flash-lite-05-2026" as const;
 export const CANDIDATE_PASS_B_DTYPE = "remote" as const;
 export const CANDIDATE_PASS_B_DEVICE = "remote" as const;
 export const CANDIDATE_PASS_B_LANGUAGE = "korean" as const;
 export const CANDIDATE_PASS_B_TASK = "transcribe-and-explain" as const;
 export const CANDIDATE_PASS_B_SAMPLE_RATE_HZ = 16_000 as const;
-export const MAX_CANDIDATE_PASS_B_API_KEY_LENGTH = 512 as const;
 export const MAX_CANDIDATE_PASS_B_TARGETS = 12 as const;
 export const MAX_CANDIDATE_PASS_B_SOURCE_DURATION_MS = 12 * 60 * 60_000;
 export const MAX_CANDIDATE_PASS_B_TARGET_DURATION_MS = 60_000;
@@ -43,8 +42,6 @@ export type CandidatePassBWorkerRequest =
       readonly file: File;
       readonly sourceDurationMs: number;
       readonly device: typeof CANDIDATE_PASS_B_DEVICE;
-      readonly apiKey: string;
-      readonly externalProcessingConsent: true;
       readonly targets: readonly CandidatePassBTarget[];
     }
   | {
@@ -128,12 +125,12 @@ export interface CandidatePassBCompletionSummary {
 export type CandidatePassBWorkerFailureReason =
   | "INVALID_REQUEST"
   | "WORKER_BUSY"
-  | "GEMINI_API_KEY_REJECTED"
-  | "GEMINI_BAD_REQUEST"
-  | "GEMINI_RATE_LIMITED"
-  | "GEMINI_UNAVAILABLE"
-  | "GEMINI_INVALID_RESPONSE"
-  | "GEMINI_REQUEST_REJECTED"
+  | "PROXY_AUTH_REJECTED"
+  | "PROXY_BAD_REQUEST"
+  | "PROXY_RATE_LIMITED"
+  | "PROXY_UNAVAILABLE"
+  | "PROXY_INVALID_RESPONSE"
+  | "PROXY_REQUEST_REJECTED"
   | "UNEXPECTED_WORKER_FAILURE";
 
 export function candidatePassBWorkerFailureMessage(
@@ -144,18 +141,18 @@ export function candidatePassBWorkerFailureMessage(
       return "후보 정밀 분석 요청이 올바르지 않아요.";
     case "WORKER_BUSY":
       return "후보 정밀 분석 작업 공간이 이미 사용 중이에요.";
-    case "GEMINI_API_KEY_REJECTED":
-      return "Gemini API 키를 확인하지 못했어요. 키를 다시 확인해 주세요.";
-    case "GEMINI_BAD_REQUEST":
-      return "Gemini가 후보 분석 요청을 받아들이지 않았어요. 앱을 새로고침한 뒤 다시 시도해 주세요.";
-    case "GEMINI_RATE_LIMITED":
-      return "Gemini 사용 한도에 도달했어요. 잠시 후 다시 시도해 주세요.";
-    case "GEMINI_UNAVAILABLE":
-      return "Gemini 서비스에 연결하지 못했어요. 인터넷 연결을 확인한 뒤 다시 시도해 주세요.";
-    case "GEMINI_INVALID_RESPONSE":
-      return "Gemini 응답을 안전하게 읽지 못했어요. 다시 시도해 주세요.";
-    case "GEMINI_REQUEST_REJECTED":
-      return "Gemini가 후보 분석 요청을 완료하지 못했어요. 잠시 후 다시 시도해 주세요.";
+    case "PROXY_AUTH_REJECTED":
+      return "Retto AI 서비스 인증을 확인하지 못했어요.";
+    case "PROXY_BAD_REQUEST":
+      return "Retto AI 서비스가 후보 분석 요청을 받아들이지 않았어요.";
+    case "PROXY_RATE_LIMITED":
+      return "Retto AI 사용 한도에 도달했어요. 잠시 후 다시 시도해 주세요.";
+    case "PROXY_UNAVAILABLE":
+      return "Retto AI 서비스에 연결하지 못했어요. 인터넷 연결을 확인한 뒤 다시 시도해 주세요.";
+    case "PROXY_INVALID_RESPONSE":
+      return "Retto AI 응답을 안전하게 읽지 못했어요. 다시 시도해 주세요.";
+    case "PROXY_REQUEST_REJECTED":
+      return "Retto AI 서비스가 후보 분석 요청을 완료하지 못했어요.";
     case "UNEXPECTED_WORKER_FAILURE":
       return "후보 정밀 분석 작업이 예기치 않게 멈췄어요.";
   }

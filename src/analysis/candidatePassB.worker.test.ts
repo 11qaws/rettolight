@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { CANDIDATE_PASS_B_PROXY_ENDPOINT } from "./candidatePassBGemini";
 import {
   CANDIDATE_PASS_B_DEVICE,
   type CandidatePassBWorkerIdentity,
@@ -75,7 +76,7 @@ afterEach(() => {
 });
 
 describe("candidatePassB.worker remote lifecycle", () => {
-  it("aborts the in-flight Gemini fetch before acknowledging cancellation", async () => {
+  it("posts only candidate audio to the fixed proxy and aborts before acknowledging cancellation", async () => {
     let messageHandler: ((event: MessageEvent<unknown>) => void) | null = null;
     const responses: CandidatePassBWorkerResponse[] = [];
     const fakeSelf = {
@@ -116,14 +117,30 @@ describe("candidatePassB.worker remote lifecycle", () => {
       file: new File([new Uint8Array([1])], "source.mp4"),
       sourceDurationMs: 30_000,
       device: CANDIDATE_PASS_B_DEVICE,
-      apiKey: "test-api-key",
-      externalProcessingConsent: true,
       targets: [{ candidateId: "candidate-1", startMs: 0, endMs: 30_000 }],
     };
     (messageHandler as ((event: MessageEvent<unknown>) => void) | null)?.(
       new MessageEvent("message", { data: analyzeRequest }),
     );
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    const firstCall = fetchMock.mock.calls[0];
+    expect(firstCall?.[0]).toBe(CANDIDATE_PASS_B_PROXY_ENDPOINT);
+    expect(firstCall?.[1]).toMatchObject({
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "omit",
+      cache: "no-store",
+      referrerPolicy: "no-referrer",
+    });
+    const rawProxyBody = firstCall?.[1]?.body;
+    expect(typeof rawProxyBody).toBe("string");
+    if (typeof rawProxyBody !== "string") {
+      throw new TypeError("Expected a serialized proxy request body.");
+    }
+    const proxyBody = JSON.parse(rawProxyBody) as Record<string, unknown>;
+    expect(Object.keys(proxyBody)).toEqual(["audioBase64", "candidateDurationMs"]);
+    expect(proxyBody.candidateDurationMs).toBe(30_000);
+    expect(proxyBody.audioBase64).toEqual(expect.stringMatching(/^UklGR/));
     expect((fetchSignal as AbortSignal | null)?.aborted).toBe(false);
 
     const cancelRequest: CandidatePassBWorkerRequest = {
@@ -146,7 +163,7 @@ describe("candidatePassB.worker remote lifecycle", () => {
     ).toBe(false);
   });
 
-  it("isolates an invalid Gemini response as one candidate gap and continues", async () => {
+  it("isolates a proxy-invalid Gemini response as one candidate gap and continues", async () => {
     let messageHandler: ((event: MessageEvent<unknown>) => void) | null = null;
     const responses: CandidatePassBWorkerResponse[] = [];
     const fakeSelf = {
@@ -175,9 +192,15 @@ describe("candidatePassB.worker remote lifecycle", () => {
     const fetchMock = vi
       .fn<(_input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>()
       .mockResolvedValueOnce(
-        new Response(JSON.stringify({ promptFeedback: { blockReason: "SAFETY" } }), {
-          status: 200,
-        }),
+        new Response(
+          JSON.stringify({
+            error: {
+              code: "UPSTREAM_INVALID_RESPONSE",
+              message: "Gemini 응답을 확인하지 못했어요.",
+            },
+          }),
+          { status: 502 },
+        ),
       )
       .mockResolvedValueOnce(
         new Response(
@@ -202,8 +225,6 @@ describe("candidatePassB.worker remote lifecycle", () => {
       file: new File([new Uint8Array([1])], "source.mp4"),
       sourceDurationMs: 30_000,
       device: CANDIDATE_PASS_B_DEVICE,
-      apiKey: "test-api-key",
-      externalProcessingConsent: true,
       targets: [
         { candidateId: "candidate-1", startMs: 0, endMs: 30_000 },
         { candidateId: "candidate-2", startMs: 0, endMs: 30_000 },
@@ -257,7 +278,7 @@ describe("candidatePassB.worker remote lifecycle", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockRejectedValue(
-        new Error("raw network detail containing test-api-key"),
+        new Error("raw network detail containing private infrastructure detail"),
       ),
     );
 
@@ -270,8 +291,6 @@ describe("candidatePassB.worker remote lifecycle", () => {
           file: new File([new Uint8Array([1])], "source.mp4"),
           sourceDurationMs: 30_000,
           device: CANDIDATE_PASS_B_DEVICE,
-          apiKey: "test-api-key",
-          externalProcessingConsent: true,
           targets: [{ candidateId: "candidate-1", startMs: 0, endMs: 30_000 }],
         } satisfies CandidatePassBWorkerRequest,
       }),
@@ -285,8 +304,8 @@ describe("candidatePassB.worker remote lifecycle", () => {
     const failure = responses.find(
       (response) => response.type === "candidate-pass-b-failed",
     );
-    expect(failure).toMatchObject({ reasonCode: "GEMINI_UNAVAILABLE" });
-    expect(JSON.stringify(failure)).not.toContain("test-api-key");
+    expect(failure).toMatchObject({ reasonCode: "PROXY_UNAVAILABLE" });
+    expect(JSON.stringify(failure)).not.toContain("private infrastructure detail");
     expect(JSON.stringify(failure)).not.toContain("raw network detail");
   });
 
@@ -319,8 +338,6 @@ describe("candidatePassB.worker remote lifecycle", () => {
           file: new File([new Uint8Array([1])], "source.mp4"),
           sourceDurationMs: 180_000,
           device: CANDIDATE_PASS_B_DEVICE,
-          apiKey: "test-api-key",
-          externalProcessingConsent: true,
           targets: [
             { candidateId: "candidate-too-long", startMs: 0, endMs: 60_001 },
           ],

@@ -5,7 +5,9 @@ import globals from "globals";
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
-  { ignores: ["dist", "coverage", "graphify-out", "node_modules"] },
+  {
+    ignores: ["dist", "coverage", "graphify-out", "node_modules", ".wrangler"],
+  },
   eslint.configs.recommended,
   ...tseslint.configs.recommendedTypeChecked.map((config) => ({
     ...config,
@@ -37,6 +39,14 @@ export default tseslint.config(
   },
   {
     files: ["src/**/*.test.ts"],
+    languageOptions: {
+      globals: {
+        ...globals.node,
+      },
+    },
+  },
+  {
+    files: ["scripts/**/*.mjs"],
     languageOptions: {
       globals: {
         ...globals.node,

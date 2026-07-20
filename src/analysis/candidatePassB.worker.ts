@@ -13,14 +13,13 @@ import {
 
 import { summarizeCandidatePassBAudioGate } from "./candidatePassBAudioGate";
 import {
-  CANDIDATE_PASS_B_GEMINI_ENDPOINT,
+  CANDIDATE_PASS_B_PROXY_ENDPOINT,
   MAX_CANDIDATE_PASS_B_RESPONSE_BYTES,
-  buildCandidatePassBGeminiRequestBody,
-  classifyCandidatePassBGeminiHttpFailure,
+  buildCandidatePassBProxyRequestBody,
+  classifyCandidatePassBProxyHttpFailure,
   encodeCandidatePassBBase64,
   encodeCandidatePassBPcm16Wav,
   extractCandidatePassBGeminiResponse,
-  normalizeCandidatePassBGeminiApiKey,
 } from "./candidatePassBGemini";
 import {
   CANDIDATE_PASS_B_DEVICE,
@@ -86,12 +85,12 @@ class CandidateFailure extends Error {
   }
 }
 
-class GeminiWorkerFailure extends Error {
+class ProxyWorkerFailure extends Error {
   public readonly reasonCode: CandidatePassBWorkerFailureReason;
 
   public constructor(reasonCode: CandidatePassBWorkerFailureReason) {
-    super("Gemini candidate analysis failed.");
-    this.name = "GeminiWorkerFailure";
+    super("Candidate proxy analysis failed.");
+    this.name = "ProxyWorkerFailure";
     this.reasonCode = reasonCode;
   }
 }
@@ -243,14 +242,11 @@ function isValidAnalyzeRequest(value: unknown): value is AnalyzeRequest {
       "file",
       "sourceDurationMs",
       "device",
-      "apiKey",
-      "externalProcessingConsent",
       "targets",
     ])
   ) {
     return false;
   }
-  const normalizedApiKey = normalizeCandidatePassBGeminiApiKey(value.apiKey);
   if (
     value.type !== "candidate-pass-b-analyze" ||
     !isValidIdentity(value.identity) ||
@@ -261,9 +257,6 @@ function isValidAnalyzeRequest(value: unknown): value is AnalyzeRequest {
     value.sourceDurationMs <= 0 ||
     value.sourceDurationMs > MAX_CANDIDATE_PASS_B_SOURCE_DURATION_MS ||
     value.device !== CANDIDATE_PASS_B_DEVICE ||
-    normalizedApiKey === null ||
-    normalizedApiKey !== value.apiKey ||
-    value.externalProcessingConsent !== true ||
     !Array.isArray(value.targets) ||
     value.targets.length === 0 ||
     value.targets.length > MAX_CANDIDATE_PASS_B_TARGETS
@@ -589,7 +582,6 @@ async function decodeCandidate(
 async function analyzeCandidateWithGemini(
   pcm: Float32Array,
   target: CandidatePassBTarget,
-  apiKey: string,
   task: ActiveTask,
 ): Promise<CandidatePassBTranscriptResult | null> {
   const wav = encodeCandidatePassBPcm16Wav(
@@ -602,7 +594,7 @@ async function analyzeCandidateWithGemini(
   try {
     const base64Wav = encodeCandidatePassBBase64(wav);
     const serializedRequest = JSON.stringify(
-      buildCandidatePassBGeminiRequestBody(
+      buildCandidatePassBProxyRequestBody(
         base64Wav,
         target.endMs - target.startMs,
       ),
@@ -610,11 +602,10 @@ async function analyzeCandidateWithGemini(
 
     let response: Response;
     try {
-      response = await fetch(CANDIDATE_PASS_B_GEMINI_ENDPOINT, {
+      response = await fetch(CANDIDATE_PASS_B_PROXY_ENDPOINT, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "x-goog-api-key": apiKey,
         },
         body: serializedRequest,
         signal: fetchAbortController.signal,
@@ -626,15 +617,32 @@ async function analyzeCandidateWithGemini(
       if (task.cancelled || fetchAbortController.signal.aborted) {
         return null;
       }
-      throw new GeminiWorkerFailure("GEMINI_UNAVAILABLE");
+      throw new ProxyWorkerFailure("PROXY_UNAVAILABLE");
     }
 
     if (task.cancelled) {
       return null;
     }
     if (!response.ok) {
-      throw new GeminiWorkerFailure(
-        classifyCandidatePassBGeminiHttpFailure(response.status).reasonCode,
+      let errorPayload: unknown;
+      try {
+        const rawError = await response.text();
+        if (
+          new TextEncoder().encode(rawError).byteLength >
+          MAX_CANDIDATE_PASS_B_RESPONSE_BYTES
+        ) {
+          throw new ProxyWorkerFailure("PROXY_INVALID_RESPONSE");
+        }
+        errorPayload = JSON.parse(rawError);
+      } catch (error) {
+        if (error instanceof ProxyWorkerFailure) {
+          throw error;
+        }
+        errorPayload = undefined;
+      }
+      throw new ProxyWorkerFailure(
+        classifyCandidatePassBProxyHttpFailure(response.status, errorPayload)
+          .reasonCode,
       );
     }
 
@@ -645,7 +653,7 @@ async function analyzeCandidateWithGemini(
       if (task.cancelled || fetchAbortController.signal.aborted) {
         return null;
       }
-      throw new GeminiWorkerFailure("GEMINI_UNAVAILABLE");
+      throw new ProxyWorkerFailure("PROXY_UNAVAILABLE");
     }
     if (task.cancelled) {
       return null;
@@ -654,21 +662,21 @@ async function analyzeCandidateWithGemini(
       new TextEncoder().encode(rawResponse).byteLength >
       MAX_CANDIDATE_PASS_B_RESPONSE_BYTES
     ) {
-      throw new GeminiWorkerFailure("GEMINI_INVALID_RESPONSE");
+      throw new ProxyWorkerFailure("PROXY_INVALID_RESPONSE");
     }
 
     let responsePayload: unknown;
     try {
       responsePayload = JSON.parse(rawResponse);
     } catch {
-      throw new GeminiWorkerFailure("GEMINI_INVALID_RESPONSE");
+      throw new ProxyWorkerFailure("PROXY_INVALID_RESPONSE");
     }
     const parsed = extractCandidatePassBGeminiResponse(
       responsePayload,
       target.endMs - target.startMs,
     );
     if (!parsed.ok) {
-      throw new GeminiWorkerFailure("GEMINI_INVALID_RESPONSE");
+      throw new ProxyWorkerFailure("PROXY_INVALID_RESPONSE");
     }
 
     const segments = parsed.analysis.segments.map((segment) => ({
@@ -829,7 +837,6 @@ async function runTask(request: AnalyzeRequest, task: ActiveTask): Promise<void>
         const result = await analyzeCandidateWithGemini(
           candidatePcm,
           target,
-          request.apiKey,
           task,
         );
         if (task.cancelled || result === null) {
@@ -852,13 +859,13 @@ async function runTask(request: AnalyzeRequest, task: ActiveTask): Promise<void>
           return;
         }
         if (
-          cause instanceof GeminiWorkerFailure &&
-          cause.reasonCode !== "GEMINI_INVALID_RESPONSE"
+          cause instanceof ProxyWorkerFailure &&
+          cause.reasonCode !== "PROXY_INVALID_RESPONSE"
         ) {
           throw cause;
         }
         const failure =
-          cause instanceof GeminiWorkerFailure
+          cause instanceof ProxyWorkerFailure
             ? new CandidateFailure(
                 "TRANSCRIPTION_FAILED",
                 "Gemini 응답에서 안전하게 사용할 대사 단서를 얻지 못했어요.",
@@ -901,7 +908,7 @@ async function runTask(request: AnalyzeRequest, task: ActiveTask): Promise<void>
       return;
     }
     const reasonCode =
-      cause instanceof GeminiWorkerFailure
+      cause instanceof ProxyWorkerFailure
         ? cause.reasonCode
         : "UNEXPECTED_WORKER_FAILURE";
     postResponse(task.identity, {

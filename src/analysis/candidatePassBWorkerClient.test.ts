@@ -136,8 +136,6 @@ function startWith(
       identity,
       sourceDurationMs: 180_000,
       device: CANDIDATE_PASS_B_DEVICE,
-      apiKey: "test-api-key",
-      externalProcessingConsent: true,
       targets: overrides.targets ?? targets,
       workerFactory: () => worker,
       ...(overrides.signal === undefined ? {} : { signal: overrides.signal }),
@@ -203,8 +201,6 @@ describe("runCandidatePassBWorker", () => {
       identity,
       sourceDurationMs: 180_000,
       device: CANDIDATE_PASS_B_DEVICE,
-      apiKey: "test-api-key",
-      externalProcessingConsent: true,
       targets,
     });
 
@@ -447,7 +443,7 @@ describe("runCandidatePassBWorker", () => {
       type: "candidate-pass-b-partial-result",
       result: {
         ...result,
-        insight: { ...result.insight, apiKey: "must-not-cross-boundary" },
+        insight: { ...result.insight, unexpected: "must-not-cross-boundary" },
       },
     });
 
@@ -457,31 +453,31 @@ describe("runCandidatePassBWorker", () => {
     expect(onPartialResult).not.toHaveBeenCalled();
   });
 
-  it("maps a canonical Gemini failure without accepting a raw worker error", async () => {
+  it("maps a canonical proxy failure without accepting a raw worker error", async () => {
     const worker = new FakeWorker();
     const promise = startWith(worker);
     emit(worker, "event-1", {
       type: "candidate-pass-b-failed",
-      reasonCode: "GEMINI_RATE_LIMITED",
-      message: candidatePassBWorkerFailureMessage("GEMINI_RATE_LIMITED"),
+      reasonCode: "PROXY_RATE_LIMITED",
+      message: candidatePassBWorkerFailureMessage("PROXY_RATE_LIMITED"),
     });
 
     await expect(promise).rejects.toMatchObject({
       code: "WORKER_FAILED",
-      workerReasonCode: "GEMINI_RATE_LIMITED",
-      message: candidatePassBWorkerFailureMessage("GEMINI_RATE_LIMITED"),
+      workerReasonCode: "PROXY_RATE_LIMITED",
+      message: candidatePassBWorkerFailureMessage("PROXY_RATE_LIMITED"),
     });
 
     const malformedWorker = new FakeWorker();
     const malformedPromise = startWith(malformedWorker);
     emit(malformedWorker, "event-2", {
       type: "candidate-pass-b-failed",
-      reasonCode: "GEMINI_UNAVAILABLE",
-      message: "raw upstream body with test-api-key",
+      reasonCode: "PROXY_UNAVAILABLE",
+      message: "raw upstream body with private infrastructure details",
     });
     const error = await malformedPromise.catch((cause: unknown) => cause);
     expect(error).toMatchObject({ code: "WORKER_MESSAGE_ERROR" });
-    expect(String(error)).not.toContain("test-api-key");
+    expect(String(error)).not.toContain("private infrastructure details");
     expect(String(error)).not.toContain("raw upstream body");
   });
 
@@ -594,7 +590,7 @@ describe("runCandidatePassBWorker", () => {
     expect(worker.terminateCount).toBe(1);
   });
 
-  it("trims the API key before the Worker boundary and requires explicit consent", async () => {
+  it("starts without a per-user credential or consent field in the Worker protocol", async () => {
     const worker = new FakeWorker();
     const promise = runCandidatePassBWorker(
       new File([new Uint8Array([1])], "source.mp4"),
@@ -602,13 +598,25 @@ describe("runCandidatePassBWorker", () => {
         identity,
         sourceDurationMs: 180_000,
         device: CANDIDATE_PASS_B_DEVICE,
-        apiKey: "  test-api-key  ",
-        externalProcessingConsent: true,
         targets: [targets[0] as CandidatePassBTarget],
         workerFactory: () => worker,
       },
     );
-    expect(worker.requests[0]).toMatchObject({ apiKey: "test-api-key" });
+    expect(worker.requests[0]).toMatchObject({
+      type: "candidate-pass-b-analyze",
+      identity,
+      sourceDurationMs: 180_000,
+      device: CANDIDATE_PASS_B_DEVICE,
+      targets: [targets[0]],
+    });
+    expect(Object.keys(worker.requests[0] ?? {})).toEqual([
+      "type",
+      "identity",
+      "file",
+      "sourceDurationMs",
+      "device",
+      "targets",
+    ]);
     emit(worker, "event-1", {
       type: "candidate-pass-b-candidate-progress",
       progress: {
@@ -637,24 +645,6 @@ describe("runCandidatePassBWorker", () => {
       summary: { requestedCount: 1, completedCount: 0, gapCount: 1 },
     });
 
-    let factoryCalls = 0;
-    const invalidPromise = runCandidatePassBWorker(
-      new File([new Uint8Array([1])], "source.mp4"),
-      {
-        identity,
-        sourceDurationMs: 180_000,
-        device: CANDIDATE_PASS_B_DEVICE,
-        apiKey: "   ",
-        externalProcessingConsent: false as unknown as true,
-        targets: [targets[0] as CandidatePassBTarget],
-        workerFactory: () => {
-          factoryCalls += 1;
-          return new FakeWorker();
-        },
-      },
-    );
-    await expect(invalidPromise).rejects.toMatchObject({ code: "INVALID_INPUT" });
-    expect(factoryCalls).toBe(0);
   });
 
   it("rejects before creating a Worker when more than twelve targets are supplied", async () => {
@@ -671,8 +661,6 @@ describe("runCandidatePassBWorker", () => {
         identity,
         sourceDurationMs: 180_000,
         device: CANDIDATE_PASS_B_DEVICE,
-        apiKey: "test-api-key",
-        externalProcessingConsent: true,
         targets: tooManyTargets,
         workerFactory: () => {
           factoryCalls += 1;
@@ -694,8 +682,6 @@ describe("runCandidatePassBWorker", () => {
         identity,
         sourceDurationMs: 180_000,
         device: CANDIDATE_PASS_B_DEVICE,
-        apiKey: "test-api-key",
-        externalProcessingConsent: true,
         targets: [{ candidateId: "candidate-too-long", startMs: 0, endMs: 60_001 }],
         workerFactory: () => {
           factoryCalls += 1;
