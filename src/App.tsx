@@ -234,14 +234,18 @@ interface AudioAnalysisOutcome {
   readonly coverageComplete: boolean;
 }
 
-const APP_VERSION = "0.3.15";
+const APP_VERSION = "0.3.16";
 const PERSISTENCE_SCHEMA_VERSION = "0.3.0";
-const SIGNAL_ENGINE_VERSION = "streamer-reaction-fast-pass-v2";
+const SIGNAL_ENGINE_VERSION = "streamer-reaction-fast-pass-v2-reaction-only";
 const MAX_CHAT_FILE_BYTES = 32 * 1024 * 1024;
 const SIGNAL_GAP_POLICY_ID = DURABLE_SIGNAL_GAP_POLICY_ID;
 
 type CandidateGeminiInsight = CandidatePassBTranscriptResult["insight"];
 type CandidateGeminiInsightById = Readonly<Record<string, CandidateGeminiInsight>>;
+type CandidateTimelineFrame = Awaited<ReturnType<typeof sampleCandidateVideoFrames>>[number];
+type CandidateTimelineFramesById = Readonly<
+  Record<string, readonly CandidateTimelineFrame[]>
+>;
 
 type RecoveryCatalogState =
   | { readonly status: "loading" }
@@ -752,6 +756,8 @@ function App() {
     useState<CandidatePassBEvidenceById>({});
   const [candidateGeminiInsightById, setCandidateGeminiInsightById] =
     useState<CandidateGeminiInsightById>({});
+  const [candidateTimelineFramesById, setCandidateTimelineFramesById] =
+    useState<CandidateTimelineFramesById>({});
   const candidatePassBEvidenceRef = useRef<CandidatePassBEvidenceById>({});
   const candidateGeminiInsightRef = useRef<CandidateGeminiInsightById>({});
   const candidatePassBInsightWriteChainRef = useRef<Promise<void>>(Promise.resolve());
@@ -943,6 +949,7 @@ function App() {
     clipRenderAbortController.current = null;
     setInlinePreviewCandidateId(null);
     setInlinePreviewStartMs(null);
+    setCandidateTimelineFramesById({});
     setClipDownloadStatusById({});
     setClipDownloadErrorById({});
     setClipDownloadProgressById({});
@@ -2616,6 +2623,13 @@ function App() {
           { signal: controller.signal },
         );
         videoFramesByCandidateId.set(target.candidateId, frames);
+        if (!controller.signal.aborted && isMounted.current) {
+          const timelineFrame = frames[Math.min(1, Math.max(0, frames.length - 1))];
+          setCandidateTimelineFramesById((current) => ({
+            ...current,
+            [target.candidateId]: timelineFrame === undefined ? [] : [timelineFrame],
+          }));
+        }
       }),
     );
     if (controller.signal.aborted) {
@@ -4939,6 +4953,86 @@ function App() {
                 </div>
               ) : (
                 <>
+                  <section
+                    className="rh-candidate-timeline"
+                    aria-labelledby="candidate-timeline-heading"
+                  >
+                    <div className="rh-candidate-timeline-heading">
+                      <div>
+                        <p className="rh-eyebrow">방송 전체 위치</p>
+                        <h3 id="candidate-timeline-heading">클립 후보 타임라인</h3>
+                        <p>
+                          원본 방송에서 후보가 어디에 몰려 있는지 먼저 확인하세요. 원을 누르면 해당 후보를 바로 재생합니다.
+                        </p>
+                      </div>
+                      <span className="rh-timeline-count">{orderedCandidates.length}개 후보</span>
+                    </div>
+                    <div className="rh-timeline-track" aria-label="방송 안 후보 위치">
+                      <span className="rh-timeline-line" aria-hidden="true" />
+                      {orderedCandidates.map((candidate, index) => {
+                        const position =
+                          boundarySourceDurationMs > 0
+                            ? Math.min(100, Math.max(0, (candidate.peakMs / boundarySourceDurationMs) * 100))
+                            : 0;
+                        return (
+                          <button
+                            className="rh-timeline-marker"
+                            key={candidate.id}
+                            type="button"
+                            style={{ left: `${position}%` }}
+                            aria-label={`후보 ${index + 1}, ${formatDuration(candidate.peakMs)} 위치 재생`}
+                            disabled={sourcePreviewUrl === null}
+                            onClick={() => playCandidate(candidate)}
+                          >
+                            <span aria-hidden="true">O</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <div className="rh-timeline-axis" aria-hidden="true">
+                      <span>00:00</span>
+                      <span>{formatDuration(boundarySourceDurationMs)}</span>
+                    </div>
+                    <ol className="rh-timeline-cards" aria-label="시간순 클립 후보 요약">
+                      {orderedCandidates.map((candidate, index) => {
+                        const frames = candidateTimelineFramesById[candidate.id] ?? [];
+                        const frame = frames[Math.min(1, Math.max(0, frames.length - 1))];
+                        const insight = candidateGeminiInsightById[candidate.id];
+                        const narrative = buildHighlightNarrative(candidate);
+                        const oneLineSummary =
+                          insight?.eventSummaryKo?.trim() || narrative.title;
+                        return (
+                          <li className="rh-timeline-card" key={candidate.id}>
+                            <button
+                              type="button"
+                              className="rh-timeline-card-button"
+                              disabled={sourcePreviewUrl === null}
+                              onClick={() => playCandidate(candidate)}
+                              aria-label={`후보 ${index + 1} ${formatDuration(candidate.peakMs)} 재생`}
+                            >
+                              <span className="rh-timeline-card-media">
+                                {frame === undefined ? (
+                                  <span className="rh-timeline-card-placeholder">캡처 준비 중</span>
+                                ) : (
+                                  <img
+                                    src={`data:${frame.mimeType};base64,${frame.dataBase64}`}
+                                    alt={`후보 ${index + 1} 대표 화면`}
+                                  />
+                                )}
+                                <span className="rh-timeline-card-time">
+                                  {formatDuration(candidate.peakMs)}
+                                </span>
+                              </span>
+                              <span className="rh-timeline-card-copy">
+                                <strong>후보 {index + 1}</strong>
+                                <span>{oneLineSummary}</span>
+                              </span>
+                            </button>
+                          </li>
+                        );
+                      })}
+                    </ol>
+                  </section>
                   {sourcePreviewUrl !== null && (
                     <div className="rh-preview-panel">
                       <div>

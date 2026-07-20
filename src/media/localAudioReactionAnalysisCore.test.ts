@@ -52,7 +52,7 @@ describe("local audio reaction scoring core", () => {
     expect(result.coverageComplete).toBe(true);
   });
 
-  it("surfaces a quiet but novel dialogue change for semantic review", () => {
+  it("does not promote a quiet dialogue-band change without a reaction burst", () => {
     const windows = baseline(100);
     for (const [offset, speechBandEnergyRatio] of [0.68, 0.74].entries()) {
       const index = 46 + offset;
@@ -66,8 +66,7 @@ describe("local audio reaction scoring core", () => {
 
     const result = selectAudioReactionHighlights(windows, 100_000);
 
-    expect(result.candidates[0]?.evidence.eventKind).toBe("dialogue-issue-signal");
-    expect(result.candidates[0]?.evidence.activeWindowCount).toBeGreaterThanOrEqual(2);
+    expect(result.candidates).toEqual([]);
   });
 
   it("does not turn a quiet harmonic music change into a dialogue signal", () => {
@@ -91,6 +90,23 @@ describe("local audio reaction scoring core", () => {
     const result = selectAudioReactionHighlights(windows, 100_000);
 
     expect(result.candidates).toEqual([]);
+  });
+
+  it("suppresses a steady song or MV-style music plateau even when it has vocals", () => {
+    const windows = baseline(160);
+    for (let index = 40; index < 80; index += 1) {
+      windows[index] = speechWindow(index, {
+        rms: 0.2,
+        peak: 0.56,
+        zeroCrossingRate: 0.2,
+        speechBandEnergyRatio: 0.62,
+      });
+    }
+
+    const result = selectAudioReactionHighlights(windows, 160_000);
+
+    expect(result.candidates).toEqual([]);
+    expect(result.diagnostics.suppressedSustainedBackgroundCount).toBeGreaterThan(0);
   });
 
   it("ignores a fixed non-vocal opening or ending burst", () => {

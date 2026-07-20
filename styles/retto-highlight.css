@@ -583,6 +583,201 @@
   );
 }
 
+.rh-candidate-timeline {
+  width: min(100%, 1280px);
+  margin: 0 auto 18px;
+  padding: 20px 22px 18px;
+  border: 1px solid var(--accentBd);
+  border-radius: var(--rh-radius-lg);
+  background:
+    linear-gradient(145deg, var(--accentBg) 0%, transparent 48%),
+    var(--bg2);
+}
+
+.rh-candidate-timeline-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.rh-candidate-timeline-heading h3 {
+  margin: 2px 0 4px;
+  color: var(--accentT);
+}
+
+.rh-candidate-timeline-heading p:last-child {
+  margin: 0;
+  color: var(--text3);
+  font-size: .8125rem;
+  line-height: 1.5;
+}
+
+.rh-timeline-count {
+  flex: 0 0 auto;
+  padding: 5px 9px;
+  border: 1px solid var(--accentBd);
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--accentT);
+  font-size: .75rem;
+  font-weight: 750;
+  white-space: nowrap;
+}
+
+.rh-timeline-track {
+  position: relative;
+  height: 48px;
+  margin: 18px 8px 0;
+}
+
+.rh-timeline-line {
+  position: absolute;
+  top: 22px;
+  right: 0;
+  left: 0;
+  height: 4px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent) 0%, var(--accentT) 100%);
+  opacity: .72;
+}
+
+.rh-timeline-marker {
+  position: absolute;
+  top: 7px;
+  display: grid;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  place-items: center;
+  border: 2px solid var(--bg2);
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  font-size: .75rem;
+  font-weight: 850;
+  transform: translateX(-50%);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+  cursor: pointer;
+  z-index: 1;
+}
+
+.rh-timeline-marker:hover:not(:disabled),
+.rh-timeline-marker:focus-visible {
+  background: var(--accentT);
+  transform: translateX(-50%) scale(1.12);
+}
+
+.rh-timeline-marker:disabled {
+  cursor: not-allowed;
+  opacity: .55;
+}
+
+.rh-timeline-axis {
+  display: flex;
+  justify-content: space-between;
+  margin: -2px 8px 12px;
+  color: var(--text4);
+  font-size: .6875rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.rh-timeline-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.rh-timeline-card-button {
+  display: grid;
+  width: 100%;
+  grid-template-columns: 92px minmax(0, 1fr);
+  gap: 10px;
+  min-height: 78px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--rh-radius-md);
+  background: var(--bg);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.rh-timeline-card-button:hover:not(:disabled),
+.rh-timeline-card-button:focus-visible {
+  border-color: var(--accent);
+  box-shadow: var(--rh-focus);
+}
+
+.rh-timeline-card-button:disabled {
+  cursor: not-allowed;
+  opacity: .72;
+}
+
+.rh-timeline-card-media {
+  position: relative;
+  display: block;
+  min-height: 60px;
+  overflow: hidden;
+  border-radius: 5px;
+  background: var(--bg3);
+}
+
+.rh-timeline-card-media img {
+  width: 100%;
+  height: 100%;
+  min-height: 60px;
+  object-fit: cover;
+}
+
+.rh-timeline-card-placeholder {
+  display: grid;
+  height: 100%;
+  min-height: 60px;
+  place-items: center;
+  padding: 6px;
+  color: var(--text4);
+  font-size: .6875rem;
+  text-align: center;
+}
+
+.rh-timeline-card-time {
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, .76);
+  color: #fff;
+  font-size: .625rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.rh-timeline-card-copy {
+  display: grid;
+  align-content: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.rh-timeline-card-copy strong {
+  color: var(--accentT);
+  font-size: .75rem;
+}
+
+.rh-timeline-card-copy span {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--text3);
+  font-size: .75rem;
+  line-height: 1.45;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
 .rh-candidate-list {
   display: flex;
   flex-direction: column;
@@ -2211,6 +2406,11 @@
     grid-template-columns: 40px minmax(0, 1fr);
   }
 
+  .rh-candidate-timeline-heading {
+    flex-direction: column;
+    gap: 8px;
+  }
+
   .rh-confidence {
     grid-column: 2;
     text-align: left;
@@ -2324,6 +2524,18 @@
 
   .rh-candidate-card--signal {
     grid-template-columns: 40px minmax(0, 1fr);
+  }
+
+  .rh-candidate-timeline {
+    padding: 16px 12px 14px;
+  }
+
+  .rh-timeline-track {
+    margin-inline: 4px;
+  }
+
+  .rh-timeline-cards {
+    grid-template-columns: 1fr;
   }
 
   .rh-candidate-thumb {

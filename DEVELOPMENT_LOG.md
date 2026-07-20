@@ -1,5 +1,19 @@
 # Development Log
 
+## 2026-07-21 `0.3.16` candidate timeline overview
+
+- Added a full-source candidate timeline before the detailed cards. Each candidate is marked by an `O` at its peak position on the source-duration line, with start/end labels and a clickable marker.
+- Added compact timeline cards with a representative JPEG capture when Pass B frame sampling is available, the candidate time, and a one-line Gemini or signal-based summary. Marker/card clicks reuse the existing inline preview flow.
+- Kept the timeline usable without a source preview by showing a capture placeholder and disabling playback controls until the source is connected.
+- Verification after the UI change: typecheck, ESLint, 581 Vitest tests, and production build all pass.
+
+## 2026-07-21 `0.3.16` reaction-only fast pass and music plateau suppression
+
+- Rolled the fast candidate detector back to the pre-dialogue-signal behavior. Quiet speech-band novelty no longer creates a candidate by itself; candidates again require the loudness/reaction anchor path.
+- Added a conservative steady-music/MV gate for long, loud plateaus with nearly unchanged RMS, speech-band ratio, and zero-crossing rate. These windows are classified as sustained background and are not emitted as clip candidates.
+- Bumped the signal-engine manifest so persisted results from the previous dialogue/music behavior are not silently reused after reload.
+- Verification: the audio scoring suite passes (17 tests), ESLint passes with zero warnings, and the production build succeeds.
+
 ## 2026-07-21 — `0.3.15` header title and music false-positive guard
 
 - The header now centers `클립 분석 AI` between the ExClipper brand and the personal-editor label at the same desktop scale as the brand. The duplicate page heading was removed so the title has one clear location.
