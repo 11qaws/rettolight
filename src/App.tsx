@@ -226,7 +226,7 @@ interface AudioAnalysisOutcome {
   readonly coverageComplete: boolean;
 }
 
-const APP_VERSION = "0.3.12";
+const APP_VERSION = "0.3.13";
 const PERSISTENCE_SCHEMA_VERSION = "0.3.0";
 const SIGNAL_ENGINE_VERSION = "streamer-reaction-fast-pass-v2";
 const MAX_CHAT_FILE_BYTES = 32 * 1024 * 1024;

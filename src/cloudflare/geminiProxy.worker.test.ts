@@ -236,7 +236,7 @@ describe("geminiProxy.worker", () => {
     const upstreamFetch = vi.fn(
       (input: RequestInfo | URL, init?: RequestInit) => {
         expect(input).toBe(
-          "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent",
+          "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-pro-preview:generateContent",
         );
         expect(new Headers(init?.headers).get("x-goog-api-key")).toBe(API_KEY);
         expect(init?.credentials).toBe("omit");

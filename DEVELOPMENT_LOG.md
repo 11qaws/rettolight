@@ -938,3 +938,8 @@
 - Gemini 고정 prompt는 화면에서 실제로 보이는 장면과 스트리머 반응을 우선 설명하되 보이지 않는 사건·주체·인과를 추측하지 않도록 갱신했다. 기존 provisional transcript와 점수·ranking·경계·승인 분리는 유지한다.
 - `npm run check` 결과: 42개 test file, 571개 test 통과. 대표 프레임 timestamp 및 멀티모달 요청 builder 회귀 테스트를 추가했다.
 - 배포: GitHub Pages Actions `29739942282` 성공, 공개 번들에서 `videoFrames`·대표 화면 코드와 키 비노출을 확인했다. Cloudflare Worker `rettohighlight-gemini`도 새 프록시 계약으로 배포했고 `/healthz`가 정상 응답했다.
+## 2026-07-21 — `0.3.13` Gemini 3.1 Pro 해석 모델 전환
+
+- 후보 정밀 해석 모델을 `gemini-3.1-pro-preview`로 교체했다. Google AI 공식 Gemini 3.1 문서에서 사용하는 API 식별자를 기준으로 endpoint와 실행 manifest를 함께 갱신했다.
+- 기존 오디오+대표 화면 멀티모달 입력, 한국어 구조화 JSON, 화면 샘플링 실패 시 오디오 fallback, 점수·순위·구간·승인 분리는 유지한다.
+- Pro 모델은 기존 Flash-Lite보다 비용과 지연이 커질 수 있으므로 후보당 60초·최대 12개·대표 화면 최대 4장의 경계를 그대로 적용한다.
