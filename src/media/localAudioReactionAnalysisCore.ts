@@ -625,7 +625,21 @@ function evaluateCluster(
     return "sustained-background";
   }
 
-  const hasVocalAnchor = activeWindows.some(
+  // A speech-band share is not a voice detector: processed VTuber voices,
+  // screams, and mixed game audio can all fall below a fixed ratio. Preserve a
+  // clearly dynamic, multi-window reaction even when that absolute share is
+  // low. The active-window gates have already removed silence and isolated
+  // high-crest impulses, while the plateau gates above reject steady beds.
+  const hasSustainedDynamicAnchor =
+    activeWindows.length >= 2 &&
+    rmsRangeDb >= 2 &&
+    activeWindows.some(
+      (window) =>
+        window.robustLoudnessScore >= MIN_ROBUST_LOUDNESS_SCORE &&
+        window.loudnessLiftDb >= MIN_LOUDNESS_LIFT_DB &&
+        window.peakLiftDb >= MIN_PEAK_LIFT_DB,
+    );
+  const hasVocalAnchor = hasSustainedDynamicAnchor || activeWindows.some(
     (window) =>
       window.speechBandEnergyRatio === undefined
         ? window.vocalProxyStrength >= 1

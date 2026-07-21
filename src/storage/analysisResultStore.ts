@@ -18,6 +18,10 @@ import {
   cloneCandidatePassBInsightsRecord,
   type CandidatePassBInsightsRecord,
 } from "./candidatePassBInsightStore";
+import {
+  cloneBroadcastContextSessionRecord,
+  type BroadcastContextSessionRecord,
+} from "./broadcastContextSessionStore";
 
 export type JsonPrimitive = string | number | boolean | null;
 
@@ -106,6 +110,8 @@ export interface AnalysisResultStore {
   getSourceSnapshot(sourceCheckId: string): Promise<SourceCapabilitySnapshotRecord | null>;
   putCandidatePassBInsights(record: CandidatePassBInsightsRecord): Promise<void>;
   getCandidatePassBInsights(runId: string): Promise<CandidatePassBInsightsRecord | null>;
+  putBroadcastContextSession(record: BroadcastContextSessionRecord): Promise<void>;
+  getBroadcastContextSession(runId: string): Promise<BroadcastContextSessionRecord | null>;
   close(): void;
 }
 
@@ -140,7 +146,7 @@ export class AnalysisResultStoreError extends Error {
 }
 
 export const DEFAULT_ANALYSIS_RESULT_DB_NAME = "retto-highlight-analysis-results";
-export const ANALYSIS_RESULT_DB_VERSION = 3;
+export const ANALYSIS_RESULT_DB_VERSION = 4;
 
 export const ANALYSIS_RESULT_OBJECT_STORES = {
   manifests: "analysisManifests",
@@ -150,6 +156,7 @@ export const ANALYSIS_RESULT_OBJECT_STORES = {
   terminals: "analysisTerminalDispositions",
   sourceSnapshots: "sourceCapabilitySnapshots",
   candidatePassBInsights: "candidatePassBInsights",
+  broadcastContextSessions: "broadcastContextSessions",
 } as const;
 
 type AnalysisStoreName =
@@ -589,6 +596,7 @@ export class InMemoryAnalysisResultStore implements AnalysisResultStore {
   private readonly terminals = new Map<string, AnalysisTerminalRecord>();
   private readonly sourceSnapshots = new Map<string, SourceCapabilitySnapshotRecord>();
   private readonly candidatePassBInsights = new Map<string, CandidatePassBInsightsRecord>();
+  private readonly broadcastContextSessions = new Map<string, BroadcastContextSessionRecord>();
   private closed = false;
 
   public putManifest(record: AnalysisManifestRecord): Promise<void> {
@@ -696,6 +704,29 @@ export class InMemoryAnalysisResultStore implements AnalysisResultStore {
       assertIdentifier(runId, "runId");
       const record = this.candidatePassBInsights.get(runId);
       return record === undefined ? null : cloneCandidatePassBInsightsRecord(record);
+    });
+  }
+
+  public putBroadcastContextSession(
+    record: BroadcastContextSessionRecord,
+  ): Promise<void> {
+    return rejectedOperation(() => {
+      this.assertOpen();
+      const snapshot = cloneBroadcastContextSessionRecord(record);
+      this.broadcastContextSessions.set(snapshot.runId, snapshot);
+    });
+  }
+
+  public getBroadcastContextSession(
+    runId: string,
+  ): Promise<BroadcastContextSessionRecord | null> {
+    return rejectedOperation(() => {
+      this.assertOpen();
+      assertIdentifier(runId, "runId");
+      const record = this.broadcastContextSessions.get(runId);
+      return record === undefined
+        ? null
+        : cloneBroadcastContextSessionRecord(record);
     });
   }
 
@@ -911,6 +942,33 @@ export class IndexedDbAnalysisResultStore implements AnalysisResultStore {
           assertCandidatePassBInsightsRecord(value);
           return cloneCandidatePassBInsightsRecord(value);
         },
+      );
+    }).then((operation) => operation);
+  }
+
+  public putBroadcastContextSession(
+    record: BroadcastContextSessionRecord,
+  ): Promise<void> {
+    return rejectedOperation(() => {
+      const snapshot = cloneBroadcastContextSessionRecord(record);
+      return this.writeRecord(
+        ANALYSIS_RESULT_OBJECT_STORES.broadcastContextSessions,
+        snapshot,
+      );
+    }).then((operation) => operation);
+  }
+
+  public getBroadcastContextSession(
+    runId: string,
+  ): Promise<BroadcastContextSessionRecord | null> {
+    return rejectedOperation(() => {
+      assertIdentifier(runId, "runId");
+      return this.readRecord(
+        ANALYSIS_RESULT_OBJECT_STORES.broadcastContextSessions,
+        runId,
+        (value) => cloneBroadcastContextSessionRecord(
+          value as BroadcastContextSessionRecord,
+        ),
       );
     }).then((operation) => operation);
   }

@@ -1,10 +1,11 @@
-export const BROADCAST_CONTEXT_SCHEMA_VERSION = "1.1.0" as const;
+export const BROADCAST_CONTEXT_SCHEMA_VERSION = "1.4.0" as const;
 export const MAX_BROADCAST_CONTEXT_SOURCE_DURATION_MS = 12 * 60 * 60_000;
 export const MAX_BROADCAST_CONTEXT_CHAPTERS = 144;
 export const MAX_BROADCAST_CONTEXT_CANDIDATES = 12;
 export const MAX_BROADCAST_CONTEXT_SUMMARY_LENGTH = 1_200;
 export const MAX_BROADCAST_CONTEXT_TRANSCRIPT_LENGTH = 12_000;
 export const MAX_SEMANTIC_CHAPTERS = 48;
+export const MAX_BROADCAST_CONTEXT_DISCOVERED_LEADS = 12;
 
 const MAX_IDENTIFIER_LENGTH = 256;
 
@@ -12,6 +13,11 @@ export interface BroadcastContextChapterInput {
   readonly chapterId: string;
   readonly startMs: number;
   readonly endMs: number;
+  readonly evidenceMode:
+    | "complete-transcript"
+    | "sampled-audio-video"
+    | "candidate-context-only";
+  readonly evidenceCoverageRatio: number;
   readonly summaryKo: string;
 }
 
@@ -44,11 +50,28 @@ export type BroadcastContextCandidateCategory =
   | "setup-and-payoff"
   | "running-gag"
   | "context-dependent"
+  | "apology-accountability"
+  | "music-or-intermission"
+  | "not-clip-worthy"
   | "uncertain";
+
+export type BroadcastContextClipDecision = "select" | "review" | "reject";
+
+export type BroadcastContextRejectionReason =
+  | "music-or-song"
+  | "opening-ending-or-break"
+  | "no-distinct-event"
+  | "reaction-without-context"
+  | "insufficient-context"
+  | "duplicate-episode"
+  | "uncertain-evidence";
 
 export interface BroadcastContextCandidateAnnotation {
   readonly candidateId: string;
   readonly category: BroadcastContextCandidateCategory;
+  readonly clipDecision: BroadcastContextClipDecision;
+  readonly confidence: number;
+  readonly rejectionReasons: readonly BroadcastContextRejectionReason[];
   readonly contextSummaryKo: string;
   readonly whyThisMomentKo: string;
   readonly relatedCandidateIds: readonly string[];
@@ -86,6 +109,29 @@ export interface BroadcastContextSemanticChapter extends BroadcastContextSemanti
   readonly endMs: number;
 }
 
+export type BroadcastContextDiscoveredLeadCategory = Exclude<
+  BroadcastContextCandidateCategory,
+  "music-or-intermission" | "not-clip-worthy" | "uncertain"
+>;
+
+export interface BroadcastContextDiscoveredLeadReference {
+  readonly leadId: string;
+  readonly startChapterId: string;
+  readonly endChapterId: string;
+  readonly category: BroadcastContextDiscoveredLeadCategory;
+  readonly confidence: number;
+  readonly eventSummaryKo: string;
+  readonly whyThisMomentKo: string;
+  readonly evidenceCueKo: string;
+  readonly uncertaintiesKo: readonly string[];
+}
+
+export interface BroadcastContextDiscoveredLead
+  extends BroadcastContextDiscoveredLeadReference {
+  readonly startMs: number;
+  readonly endMs: number;
+}
+
 export interface BroadcastContextCoverageGap {
   readonly startMs: number;
   readonly endMs: number;
@@ -96,16 +142,42 @@ export interface BroadcastContextCoverage {
   readonly coveredMs: number;
   readonly coverageRatio: number;
   readonly gaps: readonly BroadcastContextCoverageGap[];
+  readonly partialChapterIds: readonly string[];
 }
 
 export interface BroadcastContextResult {
-  readonly schemaVersion: typeof BROADCAST_CONTEXT_SCHEMA_VERSION | "1.0.0";
+  readonly schemaVersion:
+    | typeof BROADCAST_CONTEXT_SCHEMA_VERSION
+    | "1.2.0"
+    | "1.1.0"
+    | "1.0.0";
   readonly broadcastSummaryKo: string;
   readonly recurringThemesKo: readonly string[];
   readonly annotations: readonly BroadcastContextCandidateAnnotation[];
   readonly semanticChaptersSupported: boolean;
   readonly semanticChapters: readonly BroadcastContextSemanticChapter[];
+  readonly discoveredLeadsSupported: boolean;
+  readonly discoveredLeads: readonly BroadcastContextDiscoveredLead[];
   readonly coverage: BroadcastContextCoverage;
+}
+
+/**
+ * Converts the whole-broadcast judgment into the semantic gate consumed by the
+ * final selector. Rejected moments never become budget-filling fallbacks.
+ */
+export function buildBroadcastContextEligibilityById(
+  annotations: readonly BroadcastContextCandidateAnnotation[],
+): Readonly<Record<string, "eligible" | "exploration" | "ineligible">> {
+  return Object.fromEntries(
+    annotations.map((annotation) => [
+      annotation.candidateId,
+      annotation.clipDecision === "select"
+        ? "eligible"
+        : annotation.clipDecision === "review"
+          ? "exploration"
+          : "ineligible",
+    ]),
+  );
 }
 
 export type BroadcastContextInputErrorCode =
@@ -236,13 +308,10 @@ export function createBroadcastContextRequest(
       "Broadcast context requires between 1 and 144 bounded chapter summaries.",
     );
   }
-  if (
-    input.candidates.length < 1 ||
-    input.candidates.length > MAX_BROADCAST_CONTEXT_CANDIDATES
-  ) {
+  if (input.candidates.length > MAX_BROADCAST_CONTEXT_CANDIDATES) {
     throw new BroadcastContextInputError(
       "INVALID_CANDIDATE_COUNT",
-      "Broadcast context requires between 1 and 12 existing candidates.",
+      "Broadcast context accepts between 0 and 12 existing candidates.",
     );
   }
 
@@ -270,10 +339,28 @@ export function createBroadcastContextRequest(
       MAX_BROADCAST_CONTEXT_SUMMARY_LENGTH,
       chapter.chapterId,
     );
+    if (
+      ![
+        "complete-transcript",
+        "sampled-audio-video",
+        "candidate-context-only",
+      ].includes(chapter.evidenceMode) ||
+      !Number.isFinite(chapter.evidenceCoverageRatio) ||
+      chapter.evidenceCoverageRatio <= 0 ||
+      chapter.evidenceCoverageRatio > 1
+    ) {
+      throw new BroadcastContextInputError(
+        "INVALID_RANGE",
+        "Broadcast context chapter evidence coverage must be within (0, 1].",
+        chapter.chapterId,
+      );
+    }
     return {
       chapterId: chapter.chapterId,
       startMs: chapter.startMs,
       endMs: chapter.endMs,
+      evidenceMode: chapter.evidenceMode,
+      evidenceCoverageRatio: chapter.evidenceCoverageRatio,
       summaryKo: chapter.summaryKo,
     };
   });
@@ -328,11 +415,85 @@ export function createBroadcastContextRequest(
   };
 }
 
+/**
+ * Grounds quiet, transcript-led discoveries to observed chapter ranges. These
+ * are leads for a second audio/video pass, not final clips, so the model cannot
+ * invent precise timestamps inside a coarse ASR chunk.
+ */
+export function normalizeDiscoveredLeads(
+  rawLeads: readonly BroadcastContextDiscoveredLeadReference[],
+  chapters: readonly BroadcastContextChapterInput[],
+): readonly BroadcastContextDiscoveredLead[] {
+  if (rawLeads.length > MAX_BROADCAST_CONTEXT_DISCOVERED_LEADS) {
+    throw new BroadcastContextInputError(
+      "INVALID_SEMANTIC_CHAPTER",
+      `Too many discovered leads. Max allowed is ${MAX_BROADCAST_CONTEXT_DISCOVERED_LEADS}.`,
+    );
+  }
+  const chapterMap = new Map(chapters.map((chapter) => [chapter.chapterId, chapter]));
+  const seenLeadIds = new Set<string>();
+  return rawLeads.map((lead) => {
+    assertIdentifier(lead.leadId);
+    if (seenLeadIds.has(lead.leadId)) {
+      throw new BroadcastContextInputError(
+        "DUPLICATE_IDENTIFIER",
+        "Discovered lead IDs must be unique.",
+        lead.leadId,
+      );
+    }
+    seenLeadIds.add(lead.leadId);
+    const startChapter = chapterMap.get(lead.startChapterId);
+    const endChapter = chapterMap.get(lead.endChapterId);
+    if (
+      startChapter === undefined ||
+      endChapter === undefined ||
+      startChapter.startMs >= endChapter.endMs
+    ) {
+      throw new BroadcastContextInputError(
+        "INVALID_SEMANTIC_CHAPTER",
+        "Discovered leads must reference an ordered observed chapter range.",
+        lead.leadId,
+      );
+    }
+    if (
+      ![
+        "reaction",
+        "quiet-achievement",
+        "setup-and-payoff",
+        "running-gag",
+        "context-dependent",
+        "apology-accountability",
+      ].includes(lead.category) ||
+      !Number.isFinite(lead.confidence) ||
+      lead.confidence < 0 ||
+      lead.confidence > 1
+    ) {
+      throw new BroadcastContextInputError(
+        "INVALID_SEMANTIC_CHAPTER",
+        "Discovered lead category or confidence is invalid.",
+        lead.leadId,
+      );
+    }
+    assertText(lead.eventSummaryKo, MAX_BROADCAST_CONTEXT_SUMMARY_LENGTH, lead.leadId);
+    assertText(lead.whyThisMomentKo, MAX_BROADCAST_CONTEXT_SUMMARY_LENGTH, lead.leadId);
+    assertText(lead.evidenceCueKo, 500, lead.leadId);
+    for (const uncertainty of lead.uncertaintiesKo) {
+      assertText(uncertainty, 500, lead.leadId);
+    }
+    return {
+      ...lead,
+      startMs: startChapter.startMs,
+      endMs: endChapter.endMs,
+    };
+  });
+}
+
 export function calculateCoverage(
   chapters: readonly BroadcastContextChapterInput[],
   sourceDurationMs: number,
 ): BroadcastContextCoverage {
   const gaps: BroadcastContextCoverageGap[] = [];
+  const partialChapterIds: string[] = [];
   let coveredMs = 0;
   let lastEnd = 0;
 
@@ -340,7 +501,14 @@ export function calculateCoverage(
     if (chapter.startMs > lastEnd) {
       gaps.push({ startMs: lastEnd, endMs: chapter.startMs });
     }
-    coveredMs += chapter.endMs - chapter.startMs;
+    coveredMs +=
+      (chapter.endMs - chapter.startMs) * chapter.evidenceCoverageRatio;
+    if (
+      chapter.evidenceMode !== "complete-transcript" ||
+      chapter.evidenceCoverageRatio < 1
+    ) {
+      partialChapterIds.push(chapter.chapterId);
+    }
     lastEnd = Math.max(lastEnd, chapter.endMs);
   }
 
@@ -349,10 +517,12 @@ export function calculateCoverage(
   }
 
   return {
-    status: gaps.length > 0 ? "partial" : "complete",
-    coveredMs,
+    status:
+      gaps.length > 0 || partialChapterIds.length > 0 ? "partial" : "complete",
+    coveredMs: Math.round(coveredMs),
     coverageRatio: sourceDurationMs > 0 ? coveredMs / sourceDurationMs : 0,
     gaps,
+    partialChapterIds,
   };
 }
 

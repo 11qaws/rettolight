@@ -2,23 +2,30 @@ import {
   CANDIDATE_PASS_B_MODEL_ID,
   CANDIDATE_PASS_B_MODEL_REVISION,
 } from "../analysis/candidatePassBWorkerProtocol";
+import { BROADCAST_TRANSCRIPT_QWEN_MODEL_ID } from "../analysis/broadcastTranscriptQwen";
 
 export const AI_PROVIDER_CONFIGURATION_VERSION = "1.0.0" as const;
 
-export const QWEN_CANDIDATE_MODEL_ID = "qwen3.5-omni-plus" as const;
+export const QWEN_CANDIDATE_MODEL_ID = "qwen3.5-omni-flash" as const;
 export const QWEN_CANDIDATE_MODEL_REVISION =
-  "qwen3.5-omni-plus-api-reviewed-2026-07-21" as const;
+  "qwen3.5-omni-flash-api-reviewed-2026-07-22" as const;
 export const DEEPSEEK_CONTEXT_MODEL_ID = "deepseek-v4-pro" as const;
 export const DEEPSEEK_CONTEXT_MODEL_REVISION =
-  "deepseek-v4-pro-api-reviewed-2026-07-21" as const;
+  "deepseek-v4-pro-api-reviewed-2026-07-22" as const;
+export const QWEN_CONTEXT_MODEL_ID = "qwen3.7-plus" as const;
+export const QWEN_CONTEXT_MODEL_REVISION =
+  "qwen3.7-plus-api-reviewed-2026-07-22" as const;
+export const QWEN_TRANSCRIPT_MODEL_REVISION =
+  "qwen3-asr-flash-api-reviewed-2026-07-22" as const;
 
 export type CandidateInsightProviderId = "gemini" | "qwen";
-export type BroadcastContextProviderId = "disabled" | "deepseek";
+export type BroadcastContextProviderId = "disabled" | "deepseek" | "qwen";
+export type BroadcastTranscriptProviderId = "disabled" | "qwen";
 export type AiProviderImplementationStatus = "active" | "prepared";
 export type QwenRegion = "singapore" | "beijing";
 
 export interface AiProviderDescriptor {
-  readonly role: "candidate-insight" | "broadcast-context";
+  readonly role: "candidate-insight" | "broadcast-context" | "broadcast-transcript";
   readonly provider: Exclude<
     CandidateInsightProviderId | BroadcastContextProviderId,
     "disabled"
@@ -56,7 +63,23 @@ export const AI_PROVIDER_CATALOG = {
       provider: "deepseek",
       modelId: DEEPSEEK_CONTEXT_MODEL_ID,
       modelRevision: DEEPSEEK_CONTEXT_MODEL_REVISION,
-      implementationStatus: "prepared",
+      implementationStatus: "active",
+    },
+    qwen: {
+      role: "broadcast-context",
+      provider: "qwen",
+      modelId: QWEN_CONTEXT_MODEL_ID,
+      modelRevision: QWEN_CONTEXT_MODEL_REVISION,
+      implementationStatus: "active",
+    },
+  },
+  broadcastTranscript: {
+    qwen: {
+      role: "broadcast-transcript",
+      provider: "qwen",
+      modelId: BROADCAST_TRANSCRIPT_QWEN_MODEL_ID,
+      modelRevision: QWEN_TRANSCRIPT_MODEL_REVISION,
+      implementationStatus: "active",
     },
   },
 } as const satisfies {
@@ -64,13 +87,17 @@ export const AI_PROVIDER_CATALOG = {
     Record<CandidateInsightProviderId, AiProviderDescriptor>
   >;
   readonly broadcastContext: Readonly<
-    Record<"deepseek", AiProviderDescriptor>
+    Record<"deepseek" | "qwen", AiProviderDescriptor>
+  >;
+  readonly broadcastTranscript: Readonly<
+    Record<"qwen", AiProviderDescriptor>
   >;
 };
 
 export interface AiProviderEnvironment {
   readonly CANDIDATE_INSIGHT_PROVIDER?: string;
   readonly BROADCAST_CONTEXT_PROVIDER?: string;
+  readonly BROADCAST_TRANSCRIPT_PROVIDER?: string;
   readonly GEMINI_API_KEY?: string;
   readonly QWEN_API_KEY?: string;
   readonly QWEN_WORKSPACE_ID?: string;
@@ -121,6 +148,13 @@ export type BroadcastContextConnection =
       readonly descriptor: typeof AI_PROVIDER_CATALOG.broadcastContext.deepseek;
       readonly endpoint: string;
       readonly apiKey: string;
+    }
+  | {
+      readonly provider: "qwen";
+      readonly descriptor: typeof AI_PROVIDER_CATALOG.broadcastContext.qwen;
+      readonly endpoint: string;
+      readonly apiKey: string;
+      readonly region: QwenRegion;
     };
 
 export type BroadcastContextConnectionResolution =
@@ -128,6 +162,20 @@ export type BroadcastContextConnectionResolution =
       readonly ok: true;
       readonly connection: BroadcastContextConnection;
     }
+  | AiProviderConfigurationFailure;
+
+export type BroadcastTranscriptConnection =
+  | { readonly provider: "disabled" }
+  | {
+      readonly provider: "qwen";
+      readonly descriptor: typeof AI_PROVIDER_CATALOG.broadcastTranscript.qwen;
+      readonly endpoint: string;
+      readonly apiKey: string;
+      readonly region: QwenRegion;
+    };
+
+export type BroadcastTranscriptConnectionResolution =
+  | { readonly ok: true; readonly connection: BroadcastTranscriptConnection }
   | AiProviderConfigurationFailure;
 
 export interface AiProviderReadinessManifest {
@@ -148,6 +196,14 @@ export interface AiProviderReadinessManifest {
     readonly configured: boolean;
     readonly active: boolean;
   };
+  readonly broadcastTranscript: {
+    readonly selectedProvider: BroadcastTranscriptProviderId | null;
+    readonly modelId: string | null;
+    readonly modelRevision: string | null;
+    readonly implementationStatus: AiProviderImplementationStatus | "disabled" | null;
+    readonly configured: boolean;
+    readonly active: boolean;
+  };
 }
 
 const GEMINI_ENDPOINT =
@@ -159,6 +215,10 @@ const MAX_WORKSPACE_ID_LENGTH = 63;
 const QWEN_REGION_HOSTS: Readonly<Record<QwenRegion, string>> = {
   singapore: "ap-southeast-1.maas.aliyuncs.com",
   beijing: "cn-beijing.maas.aliyuncs.com",
+};
+const QWEN_SHARED_COMPATIBLE_ENDPOINTS: Readonly<Record<QwenRegion, string>> = {
+  singapore: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions",
+  beijing: "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
 };
 
 function normalizeSecret(value: unknown): string | null {
@@ -186,7 +246,16 @@ function readBroadcastContextProvider(
   if (value === undefined) {
     return "disabled";
   }
-  return value === "disabled" || value === "deepseek" ? value : null;
+  return value === "disabled" || value === "deepseek" || value === "qwen"
+    ? value
+    : null;
+}
+
+function readBroadcastTranscriptProvider(
+  value: unknown,
+): BroadcastTranscriptProviderId | null {
+  if (value === undefined) return "disabled";
+  return value === "disabled" || value === "qwen" ? value : null;
 }
 
 function normalizeWorkspaceId(value: unknown): string | null {
@@ -277,6 +346,32 @@ export function resolveBroadcastContextConnection(
   if (provider === "disabled") {
     return { ok: true, connection: { provider } };
   }
+  if (provider === "qwen") {
+    const apiKey = normalizeSecret(environment.QWEN_API_KEY);
+    if (apiKey === null) return { ok: false, code: "MISSING_CREDENTIALS" };
+    const region = readQwenRegion(environment.QWEN_REGION);
+    if (region === null) return { ok: false, code: "INVALID_REGION" };
+    const rawWorkspaceId = environment.QWEN_WORKSPACE_ID;
+    const workspaceId = rawWorkspaceId === undefined
+      ? null
+      : normalizeWorkspaceId(rawWorkspaceId);
+    if (rawWorkspaceId !== undefined && workspaceId === null) {
+      return { ok: false, code: "INVALID_WORKSPACE_ID" };
+    }
+    return {
+      ok: true,
+      connection: {
+        provider,
+        descriptor: AI_PROVIDER_CATALOG.broadcastContext.qwen,
+        endpoint:
+          workspaceId === null
+            ? QWEN_SHARED_COMPATIBLE_ENDPOINTS[region]
+            : qwenEndpoint(workspaceId, region),
+        apiKey,
+        region,
+      },
+    };
+  }
   const apiKey = normalizeSecret(environment.DEEPSEEK_API_KEY);
   if (apiKey === null) {
     return { ok: false, code: "MISSING_CREDENTIALS" };
@@ -288,6 +383,42 @@ export function resolveBroadcastContextConnection(
       descriptor: AI_PROVIDER_CATALOG.broadcastContext.deepseek,
       endpoint: DEEPSEEK_ENDPOINT,
       apiKey,
+    },
+  };
+}
+
+export function resolveBroadcastTranscriptConnection(
+  environment: AiProviderEnvironment,
+): BroadcastTranscriptConnectionResolution {
+  const provider = readBroadcastTranscriptProvider(
+    environment.BROADCAST_TRANSCRIPT_PROVIDER,
+  );
+  if (provider === null) return { ok: false, code: "INVALID_PROVIDER" };
+  if (provider === "disabled") {
+    return { ok: true, connection: { provider } };
+  }
+  const apiKey = normalizeSecret(environment.QWEN_API_KEY);
+  if (apiKey === null) return { ok: false, code: "MISSING_CREDENTIALS" };
+  const region = readQwenRegion(environment.QWEN_REGION);
+  if (region === null) return { ok: false, code: "INVALID_REGION" };
+  const rawWorkspaceId = environment.QWEN_WORKSPACE_ID;
+  const workspaceId = rawWorkspaceId === undefined
+    ? null
+    : normalizeWorkspaceId(rawWorkspaceId);
+  if (rawWorkspaceId !== undefined && workspaceId === null) {
+    return { ok: false, code: "INVALID_WORKSPACE_ID" };
+  }
+  return {
+    ok: true,
+    connection: {
+      provider,
+      descriptor: AI_PROVIDER_CATALOG.broadcastTranscript.qwen,
+      endpoint:
+        workspaceId === null
+          ? QWEN_SHARED_COMPATIBLE_ENDPOINTS[region]
+          : qwenEndpoint(workspaceId, region),
+      apiKey,
+      region,
     },
   };
 }
@@ -314,6 +445,15 @@ export function createAiProviderReadinessManifest(
   const contextResolution = resolveBroadcastContextConnection(environment);
   const contextDescriptor = contextProvider === "deepseek"
     ? AI_PROVIDER_CATALOG.broadcastContext.deepseek
+    : contextProvider === "qwen"
+      ? AI_PROVIDER_CATALOG.broadcastContext.qwen
+      : null;
+  const transcriptProvider = readBroadcastTranscriptProvider(
+    environment.BROADCAST_TRANSCRIPT_PROVIDER,
+  );
+  const transcriptResolution = resolveBroadcastTranscriptConnection(environment);
+  const transcriptDescriptor = transcriptProvider === "qwen"
+    ? AI_PROVIDER_CATALOG.broadcastTranscript.qwen
     : null;
 
   return {
@@ -336,6 +476,18 @@ export function createAiProviderReadinessManifest(
           : contextDescriptor?.implementationStatus ?? null,
       configured: contextResolution.ok,
       active: contextResolution.ok && isImplementationActive(contextDescriptor),
+    },
+    broadcastTranscript: {
+      selectedProvider: transcriptProvider,
+      modelId: transcriptDescriptor?.modelId ?? null,
+      modelRevision: transcriptDescriptor?.modelRevision ?? null,
+      implementationStatus:
+        transcriptProvider === "disabled"
+          ? "disabled"
+          : transcriptDescriptor?.implementationStatus ?? null,
+      configured: transcriptResolution.ok,
+      active:
+        transcriptResolution.ok && isImplementationActive(transcriptDescriptor),
     },
   };
 }

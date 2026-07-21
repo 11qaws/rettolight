@@ -13,6 +13,7 @@ import {
 import {
   MAX_BROADCAST_CONTEXT_DEEPSEEK_RESPONSE_BYTES,
   buildBroadcastContextDeepseekRequestBody,
+  buildBroadcastContextQwenRequestBody,
   extractBroadcastContextDeepseekResponse,
 } from "../analysis/broadcastContextDeepseek";
 import {
@@ -20,15 +21,25 @@ import {
   BroadcastContextInputError,
   type BroadcastContextRequestInput,
 } from "../analysis/broadcastContextProtocol";
+import {
+  MAX_BROADCAST_TRANSCRIPT_QWEN_BASE64_LENGTH,
+  MAX_BROADCAST_TRANSCRIPT_QWEN_DURATION_MS,
+  MAX_BROADCAST_TRANSCRIPT_QWEN_RESPONSE_BYTES,
+  buildBroadcastTranscriptQwenRequestBody,
+  extractBroadcastTranscriptQwenResponse,
+  parseBroadcastTranscriptQwenProxyRequest,
+} from "../analysis/broadcastTranscriptQwen";
 
 import {
   resolveCandidateInsightConnection,
   resolveBroadcastContextConnection,
+  resolveBroadcastTranscriptConnection,
   type AiProviderEnvironment,
 } from "./aiProviderConfiguration";
 
 const ENDPOINT_PATH = "/v1/candidate-insights";
 const BROADCAST_CONTEXT_ENDPOINT_PATH = "/v1/broadcast-context";
+const BROADCAST_TRANSCRIPT_ENDPOINT_PATH = "/v1/broadcast-transcript";
 const HEALTH_PATH = "/healthz";
 const PRODUCTION_ORIGIN = "https://11qaws.github.io";
 const WAV_HEADER_BYTES = 44;
@@ -43,10 +54,19 @@ const MAX_REQUEST_BODY_BYTES =
   MAX_AUDIO_BASE64_LENGTH +
   MAX_CANDIDATE_PASS_B_VIDEO_FRAMES * MAX_CANDIDATE_PASS_B_VIDEO_FRAME_BASE64_LENGTH +
   8_192;
+const MAX_BROADCAST_TRANSCRIPT_WAV_BYTES =
+  WAV_HEADER_BYTES +
+  CANDIDATE_PASS_B_SAMPLE_RATE_HZ *
+    PCM_BYTES_PER_SAMPLE *
+    (MAX_BROADCAST_TRANSCRIPT_QWEN_DURATION_MS / 1_000);
+const MAX_BROADCAST_TRANSCRIPT_REQUEST_BODY_BYTES =
+  MAX_BROADCAST_TRANSCRIPT_QWEN_BASE64_LENGTH + 8_192;
 const MAX_UPSTREAM_ERROR_BYTES = 16 * 1024;
 const UPSTREAM_TIMEOUT_MS = 90_000;
 const DEFAULT_UPSTREAM_RETRY_DELAYS_MS = Object.freeze([1_000, 2_000]);
 const RATE_LIMIT_KEY = "candidate-insights";
+const BROADCAST_CONTEXT_RATE_LIMIT_KEY = "broadcast-context";
+const BROADCAST_TRANSCRIPT_RATE_LIMIT_KEY = "broadcast-transcript";
 const JSON_CONTENT_TYPE = "application/json; charset=utf-8";
 
 interface RateLimitBinding {
@@ -317,12 +337,49 @@ function isCanonicalCandidateWav(
   );
 }
 
+function isCanonicalBroadcastTranscriptWav(
+  bytes: Uint8Array,
+  durationMs: number,
+): boolean {
+  if (
+    bytes.byteLength < WAV_HEADER_BYTES ||
+    bytes.byteLength > MAX_BROADCAST_TRANSCRIPT_WAV_BYTES
+  ) {
+    return false;
+  }
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const dataLength = view.getUint32(40, true);
+  const sampleCount = dataLength / PCM_BYTES_PER_SAMPLE;
+  const expectedSampleCount = Math.ceil(
+    (durationMs / 1_000) * CANDIDATE_PASS_B_SAMPLE_RATE_HZ,
+  );
+  return (
+    matchesAscii(bytes, 0, "RIFF") &&
+    view.getUint32(4, true) + 8 === bytes.byteLength &&
+    matchesAscii(bytes, 8, "WAVE") &&
+    matchesAscii(bytes, 12, "fmt ") &&
+    view.getUint32(16, true) === 16 &&
+    view.getUint16(20, true) === 1 &&
+    view.getUint16(22, true) === 1 &&
+    view.getUint32(24, true) === CANDIDATE_PASS_B_SAMPLE_RATE_HZ &&
+    view.getUint32(28, true) ===
+      CANDIDATE_PASS_B_SAMPLE_RATE_HZ * PCM_BYTES_PER_SAMPLE &&
+    view.getUint16(32, true) === PCM_BYTES_PER_SAMPLE &&
+    view.getUint16(34, true) === 16 &&
+    matchesAscii(bytes, 36, "data") &&
+    dataLength > 0 &&
+    dataLength % PCM_BYTES_PER_SAMPLE === 0 &&
+    WAV_HEADER_BYTES + dataLength === bytes.byteLength &&
+    sampleCount === expectedSampleCount
+  );
+}
+
 function mediaType(request: Request): string | null {
   const header = request.headers.get("Content-Type");
   return header?.split(";", 1)[0]?.trim().toLowerCase() ?? null;
 }
 
-function clientRateLimitKey(request: Request): string {
+function scopedClientRateLimitKey(request: Request, scope: string): string {
   const clientIp = request.headers.get("CF-Connecting-IP")?.trim();
   if (
     clientIp === undefined ||
@@ -330,9 +387,13 @@ function clientRateLimitKey(request: Request): string {
     clientIp.length > 64 ||
     /[\p{Cc}\p{Cf}\s]/u.test(clientIp)
   ) {
-    return `${RATE_LIMIT_KEY}:unknown`;
+    return `${scope}:unknown`;
   }
-  return `${RATE_LIMIT_KEY}:${clientIp}`;
+  return `${scope}:${clientIp}`;
+}
+
+function clientRateLimitKey(request: Request): string {
+  return scopedClientRateLimitKey(request, RATE_LIMIT_KEY);
 }
 
 async function fetchWithTimeout(
@@ -841,6 +902,248 @@ export async function handleCandidateInsightRequest(
 }
 
 
+export async function handleBroadcastTranscriptRequest(
+  request: Request,
+  environment: AiProxyEnvironment,
+  dependencies: AiProxyDependencies = {},
+): Promise<Response> {
+  const origin = request.headers.get("Origin");
+  if (!isAllowedOrigin(origin)) {
+    return jsonResponse(
+      403,
+      "ORIGIN_NOT_ALLOWED",
+      "이 페이지에서는 방송 대사 분석을 시작할 수 없어요.",
+      origin,
+    );
+  }
+  if (request.method === "OPTIONS") return preflightResponse(origin);
+  if (request.method !== "POST") {
+    return jsonResponse(
+      405,
+      "METHOD_NOT_ALLOWED",
+      "지원하지 않는 요청 방식이에요.",
+      origin,
+      { Allow: "POST, OPTIONS" },
+    );
+  }
+  if (mediaType(request) !== "application/json") {
+    return jsonResponse(
+      415,
+      "UNSUPPORTED_MEDIA_TYPE",
+      "JSON 형식으로 방송 오디오를 보내 주세요.",
+      origin,
+    );
+  }
+
+  const providerResolution = resolveBroadcastTranscriptConnection(environment);
+  if (
+    !providerResolution.ok ||
+    providerResolution.connection.provider !== "qwen" ||
+    environment.RATE_LIMITER === undefined ||
+    environment.IP_RATE_LIMITER === undefined
+  ) {
+    return jsonResponse(
+      503,
+      "PROXY_NOT_CONFIGURED",
+      "방송 대사 분석 연결을 준비하지 못했어요.",
+      origin,
+    );
+  }
+  const providerConnection = providerResolution.connection;
+
+  const declaredLength = request.headers.get("Content-Length");
+  if (
+    declaredLength !== null &&
+    (!/^\d+$/u.test(declaredLength) ||
+      Number(declaredLength) > MAX_BROADCAST_TRANSCRIPT_REQUEST_BODY_BYTES)
+  ) {
+    return jsonResponse(
+      413,
+      "PAYLOAD_TOO_LARGE",
+      "방송 오디오 조각의 크기가 허용 범위를 넘었어요.",
+      origin,
+    );
+  }
+
+  let requestBytes: Uint8Array;
+  try {
+    requestBytes = await readBodyWithLimit(
+      request.body,
+      MAX_BROADCAST_TRANSCRIPT_REQUEST_BODY_BYTES,
+    );
+  } catch {
+    return jsonResponse(
+      413,
+      "PAYLOAD_TOO_LARGE",
+      "방송 오디오 조각의 크기가 허용 범위를 넘었어요.",
+      origin,
+    );
+  }
+
+  let inputValue: unknown;
+  try {
+    inputValue = JSON.parse(
+      new TextDecoder("utf-8", { fatal: true }).decode(requestBytes),
+    );
+  } catch {
+    requestBytes.fill(0);
+    return jsonResponse(
+      400,
+      "INVALID_REQUEST",
+      "방송 오디오 요청 형식을 확인해 주세요.",
+      origin,
+    );
+  }
+  requestBytes.fill(0);
+
+  const transcriptRequest = parseBroadcastTranscriptQwenProxyRequest(inputValue);
+  if (transcriptRequest === null) {
+    return jsonResponse(
+      400,
+      "INVALID_REQUEST",
+      "방송 오디오 요청 형식을 확인해 주세요.",
+      origin,
+    );
+  }
+  const wavBytes = decodeStrictBase64(transcriptRequest.audioBase64);
+  if (
+    wavBytes === null ||
+    !isCanonicalBroadcastTranscriptWav(wavBytes, transcriptRequest.durationMs)
+  ) {
+    wavBytes?.fill(0);
+    return jsonResponse(
+      400,
+      "INVALID_AUDIO",
+      "16kHz 모노 WAV 방송 오디오를 확인해 주세요.",
+      origin,
+    );
+  }
+  wavBytes.fill(0);
+
+  try {
+    const clientLimit = await environment.IP_RATE_LIMITER.limit({
+      key: scopedClientRateLimitKey(request, BROADCAST_TRANSCRIPT_RATE_LIMIT_KEY),
+    });
+    if (!clientLimit.success) {
+      return jsonResponse(
+        429,
+        "RATE_LIMITED",
+        "요청이 잠시 많아요. 1분 뒤 다시 시도해 주세요.",
+        origin,
+        { "Retry-After": "60" },
+      );
+    }
+    const globalLimit = await environment.RATE_LIMITER.limit({
+      key: BROADCAST_TRANSCRIPT_RATE_LIMIT_KEY,
+    });
+    if (!globalLimit.success) {
+      return jsonResponse(
+        429,
+        "RATE_LIMITED",
+        "요청이 잠시 많아요. 1분 뒤 다시 시도해 주세요.",
+        origin,
+        { "Retry-After": "60" },
+      );
+    }
+  } catch {
+    return jsonResponse(
+      503,
+      "RATE_LIMIT_UNAVAILABLE",
+      "요청 보호 장치를 확인하지 못했어요. 잠시 뒤 다시 시도해 주세요.",
+      origin,
+    );
+  }
+
+  let upstreamBody: string;
+  try {
+    upstreamBody = JSON.stringify(
+      buildBroadcastTranscriptQwenRequestBody(transcriptRequest.audioBase64),
+    );
+  } catch {
+    return jsonResponse(
+      400,
+      "INVALID_AUDIO",
+      "방송 오디오 조각의 인코딩을 확인해 주세요.",
+      origin,
+    );
+  }
+
+  // ASR is duration-billed. Do not automatically replay an ambiguous timeout,
+  // because the first request may already have completed and been charged.
+  let upstreamResponse: Response;
+  try {
+    upstreamResponse = await fetchWithTimeout(
+      dependencies.fetchImplementation ?? fetch,
+      providerConnection.endpoint,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${providerConnection.apiKey}`,
+        },
+        body: upstreamBody,
+        cache: "no-store",
+        credentials: "omit",
+        referrerPolicy: "no-referrer",
+      },
+      dependencies.upstreamTimeoutMs ?? UPSTREAM_TIMEOUT_MS,
+    );
+  } catch (error) {
+    return jsonResponse(
+      error instanceof UpstreamTimeoutError ? 504 : 502,
+      error instanceof UpstreamTimeoutError
+        ? "UPSTREAM_TIMEOUT"
+        : "UPSTREAM_UNAVAILABLE",
+      "방송 대사 분석 응답을 받지 못했어요.",
+      origin,
+    );
+  }
+  if (!upstreamResponse.ok) {
+    await upstreamResponse.body?.cancel().catch(() => undefined);
+    return jsonResponse(
+      upstreamResponse.status === 429 ? 429 : 502,
+      upstreamResponse.status === 429
+        ? "UPSTREAM_RATE_LIMITED"
+        : "UPSTREAM_REJECTED",
+      "방송 대사 분석 요청을 처리하지 못했어요.",
+      origin,
+      upstreamResponse.status === 429 ? { "Retry-After": "60" } : undefined,
+    );
+  }
+
+  let upstreamPayload: unknown;
+  try {
+    const bytes = await readBodyWithLimit(
+      upstreamResponse.body,
+      MAX_BROADCAST_TRANSCRIPT_QWEN_RESPONSE_BYTES,
+    );
+    upstreamPayload = JSON.parse(
+      new TextDecoder("utf-8", { fatal: true }).decode(bytes),
+    );
+    bytes.fill(0);
+  } catch {
+    return jsonResponse(
+      502,
+      "UPSTREAM_INVALID_RESPONSE",
+      "방송 대사 분석 응답을 안전하게 확인하지 못했어요.",
+      origin,
+    );
+  }
+  const result = extractBroadcastTranscriptQwenResponse(
+    upstreamPayload,
+    transcriptRequest,
+  );
+  if (result === null) {
+    return jsonResponse(
+      502,
+      "UPSTREAM_INVALID_RESPONSE",
+      "방송 대사 분석 응답 형식을 확인하지 못했어요.",
+      origin,
+    );
+  }
+  return successResponse(result, origin);
+}
+
 export async function handleBroadcastContextRequest(
   request: Request,
   environment: AiProxyEnvironment,
@@ -864,7 +1167,10 @@ export async function handleBroadcastContextRequest(
   if (!providerResolution.ok || environment.RATE_LIMITER === undefined || environment.IP_RATE_LIMITER === undefined) {
     return jsonResponse(503, "PROXY_NOT_CONFIGURED", "전체 맥락 분석 연결 준비가 아직 끝나지 않았어요.", origin);
   }
-  if (providerResolution.connection.provider !== "deepseek") {
+  if (
+    providerResolution.connection.provider !== "deepseek" &&
+    providerResolution.connection.provider !== "qwen"
+  ) {
     return jsonResponse(503, "PROVIDER_NOT_ACTIVE", "선택한 전체 맥락 분석 공급자는 아직 운영 경로가 활성화되지 않았어요.", origin);
   }
   const providerConnection = providerResolution.connection;
@@ -891,18 +1197,30 @@ export async function handleBroadcastContextRequest(
     return jsonResponse(400, "INVALID_REQUEST", error instanceof BroadcastContextInputError ? error.message : "요청 형식을 확인해 주세요.", origin);
   }
 
-  const clientRateLimit = await environment.IP_RATE_LIMITER.limit({ key: clientRateLimitKey(request) });
+  const clientRateLimit = await environment.IP_RATE_LIMITER.limit({
+    key: scopedClientRateLimitKey(request, BROADCAST_CONTEXT_RATE_LIMIT_KEY),
+  });
   if (!clientRateLimit.success) {
     return jsonResponse(429, "RATE_LIMITED", "잠시 요청이 많아요. 1분 뒤 다시 시도해 주세요.", origin, { "Retry-After": "60" });
   }
 
-  const globalRateLimit = await environment.RATE_LIMITER.limit({ key: RATE_LIMIT_KEY });
+  const globalRateLimit = await environment.RATE_LIMITER.limit({
+    key: BROADCAST_CONTEXT_RATE_LIMIT_KEY,
+  });
   if (!globalRateLimit.success) {
     return jsonResponse(429, "RATE_LIMITED", "잠시 요청이 많아요. 1분 뒤 다시 시도해 주세요.", origin, { "Retry-After": "60" });
   }
 
   const upstreamRequestBody = JSON.stringify(
-    buildBroadcastContextDeepseekRequestBody(broadcastContextRequest, providerConnection.descriptor.modelId)
+    providerConnection.provider === "qwen"
+      ? buildBroadcastContextQwenRequestBody(
+          broadcastContextRequest,
+          providerConnection.descriptor.modelId,
+        )
+      : buildBroadcastContextDeepseekRequestBody(
+          broadcastContextRequest,
+          providerConnection.descriptor.modelId,
+        ),
   );
 
   const fetchImplementation = dependencies.fetchImplementation ?? fetch;
@@ -962,6 +1280,9 @@ export async function handleBroadcastContextRequest(
 export default {
   fetch(request: Request, environment: AiProxyEnvironment): Promise<Response> {
     const url = new URL(request.url);
+    if (url.pathname === BROADCAST_TRANSCRIPT_ENDPOINT_PATH) {
+      return handleBroadcastTranscriptRequest(request, environment);
+    }
     if (url.pathname === BROADCAST_CONTEXT_ENDPOINT_PATH) {
       return handleBroadcastContextRequest(request, environment);
     }

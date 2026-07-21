@@ -1,0 +1,310 @@
+import type { BroadcastContextTranscriptionChunk } from "./broadcastContextSamplingPlan";
+import {
+  BROADCAST_TRANSCRIPT_QWEN_MODEL_ID,
+  BROADCAST_TRANSCRIPT_QWEN_SCHEMA_VERSION,
+  type BroadcastTranscriptQwenResult,
+} from "./broadcastTranscriptQwen";
+import {
+  MAX_BROADCAST_TRANSCRIPT_WORKER_CHUNKS,
+  type BroadcastTranscriptWorkerProgress,
+  type BroadcastTranscriptWorkerRequest,
+  type BroadcastTranscriptWorkerResponse,
+} from "./broadcastTranscriptWorkerProtocol";
+
+interface WorkerLike {
+  postMessage(message: BroadcastTranscriptWorkerRequest): void;
+  addEventListener(type: "message", listener: (event: MessageEvent<unknown>) => void): void;
+  addEventListener(type: "error" | "messageerror", listener: () => void): void;
+  removeEventListener(type: "message", listener: (event: MessageEvent<unknown>) => void): void;
+  removeEventListener(type: "error" | "messageerror", listener: () => void): void;
+  terminate(): void;
+}
+
+export interface RunBroadcastTranscriptWorkerOptions {
+  readonly sourceDurationMs: number;
+  readonly chunks: readonly BroadcastContextTranscriptionChunk[];
+  readonly signal?: AbortSignal;
+  readonly workerFactory?: () => WorkerLike;
+  readonly onProgress?: (progress: BroadcastTranscriptWorkerProgress) => void;
+  readonly onPartialResult?: (
+    chunkId: string,
+    result: BroadcastTranscriptQwenResult,
+  ) => void;
+}
+
+export interface BroadcastTranscriptWorkerRunResult {
+  readonly results: readonly BroadcastTranscriptQwenResult[];
+  readonly gapChunkIds: readonly string[];
+  readonly requestedCount: number;
+}
+
+export class BroadcastTranscriptWorkerClientError extends Error {
+  public constructor(
+    public readonly code:
+      | "INVALID_INPUT"
+      | "ABORTED"
+      | "WORKER_FAILED"
+      | "WORKER_MESSAGE_ERROR",
+    message: string,
+  ) {
+    super(message);
+    this.name = "BroadcastTranscriptWorkerClientError";
+  }
+}
+
+function createWorker(): WorkerLike {
+  return new Worker(new URL("./broadcastTranscript.worker.ts", import.meta.url), {
+    type: "module",
+  });
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function validResult(
+  value: unknown,
+  chunk: BroadcastContextTranscriptionChunk,
+): value is BroadcastTranscriptQwenResult {
+  return (
+    isRecord(value) &&
+    value.schemaVersion === BROADCAST_TRANSCRIPT_QWEN_SCHEMA_VERSION &&
+    value.modelId === BROADCAST_TRANSCRIPT_QWEN_MODEL_ID &&
+    value.sourceStartMs === chunk.sourceStartMs &&
+    value.sourceEndMs === chunk.sourceEndMs &&
+    typeof value.textKo === "string" &&
+    value.textKo.trim().length > 0 &&
+    (value.detectedLanguage === null || typeof value.detectedLanguage === "string") &&
+    (value.emotion === null || typeof value.emotion === "string") &&
+    (value.billedSeconds === null ||
+      (typeof value.billedSeconds === "number" &&
+        Number.isFinite(value.billedSeconds) &&
+        value.billedSeconds >= 0))
+  );
+}
+
+function validInput(
+  file: File,
+  sourceDurationMs: number,
+  chunks: readonly BroadcastContextTranscriptionChunk[],
+): boolean {
+  if (
+    !(file instanceof File) ||
+    !Number.isSafeInteger(sourceDurationMs) ||
+    sourceDurationMs <= 0 ||
+    sourceDurationMs > 12 * 60 * 60_000 ||
+    chunks.length === 0 ||
+    chunks.length > MAX_BROADCAST_TRANSCRIPT_WORKER_CHUNKS
+  ) {
+    return false;
+  }
+  let previousEndMs = -1;
+  const ids = new Set<string>();
+  for (const chunk of chunks) {
+    if (
+      chunk.chunkId.length === 0 ||
+      ids.has(chunk.chunkId) ||
+      !Number.isSafeInteger(chunk.sourceStartMs) ||
+      !Number.isSafeInteger(chunk.sourceEndMs) ||
+      chunk.sourceStartMs < 0 ||
+      chunk.sourceStartMs < previousEndMs ||
+      chunk.sourceEndMs <= chunk.sourceStartMs ||
+      chunk.sourceEndMs > sourceDurationMs ||
+      chunk.sourceEndMs - chunk.sourceStartMs > 210_000
+    ) {
+      return false;
+    }
+    ids.add(chunk.chunkId);
+    previousEndMs = chunk.sourceEndMs;
+  }
+  return true;
+}
+
+function isResponse(value: unknown): value is BroadcastTranscriptWorkerResponse {
+  return (
+    isRecord(value) &&
+    typeof value.type === "string" &&
+    isRecord(value.identity) &&
+    typeof value.identity.taskId === "string" &&
+    [
+      "broadcast-transcript-progress",
+      "broadcast-transcript-partial",
+      "broadcast-transcript-gap",
+      "broadcast-transcript-complete",
+      "broadcast-transcript-cancelled",
+      "broadcast-transcript-failed",
+    ].includes(value.type)
+  );
+}
+
+export function runBroadcastTranscriptWorker(
+  file: File,
+  options: RunBroadcastTranscriptWorkerOptions,
+): Promise<BroadcastTranscriptWorkerRunResult> {
+  if (!validInput(file, options.sourceDurationMs, options.chunks)) {
+    return Promise.reject(
+      new BroadcastTranscriptWorkerClientError(
+        "INVALID_INPUT",
+        "방송 전체 대사 분석 범위를 준비하지 못했어요.",
+      ),
+    );
+  }
+  if (options.signal?.aborted === true) {
+    return Promise.reject(
+      new BroadcastTranscriptWorkerClientError(
+        "ABORTED",
+        "방송 전체 대사 분석이 취소됐어요.",
+      ),
+    );
+  }
+  const identity = { taskId: crypto.randomUUID() };
+  const worker = (options.workerFactory ?? createWorker)();
+  const chunkById = new Map(options.chunks.map((chunk) => [chunk.chunkId, chunk]));
+
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const resultsByChunkId = new Map<string, BroadcastTranscriptQwenResult>();
+    const gapChunkIds = new Set<string>();
+
+    const cleanup = (): void => {
+      worker.removeEventListener("message", onMessage);
+      worker.removeEventListener("error", onWorkerError);
+      worker.removeEventListener("messageerror", onWorkerError);
+      options.signal?.removeEventListener("abort", onAbort);
+      worker.terminate();
+    };
+    const fail = (error: BroadcastTranscriptWorkerClientError): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(error);
+    };
+    const onAbort = (): void => {
+      try {
+        worker.postMessage({
+          type: "broadcast-transcript-cancel",
+          identity,
+        });
+      } finally {
+        fail(
+          new BroadcastTranscriptWorkerClientError(
+            "ABORTED",
+            "방송 전체 대사 분석이 취소됐어요.",
+          ),
+        );
+      }
+    };
+    const onWorkerError = (): void => {
+      fail(
+        new BroadcastTranscriptWorkerClientError(
+          "WORKER_FAILED",
+          "방송 전체 대사 분석 작업이 멈췄어요.",
+        ),
+      );
+    };
+    const malformed = (): void => {
+      fail(
+        new BroadcastTranscriptWorkerClientError(
+          "WORKER_MESSAGE_ERROR",
+          "방송 전체 대사 분석 결과를 확인하지 못했어요.",
+        ),
+      );
+    };
+    const onMessage = (event: MessageEvent<unknown>): void => {
+      if (!isResponse(event.data) || event.data.identity.taskId !== identity.taskId) {
+        malformed();
+        return;
+      }
+      switch (event.data.type) {
+        case "broadcast-transcript-progress": {
+          const chunk = chunkById.get(event.data.progress.chunkId);
+          if (
+            chunk === undefined ||
+            event.data.progress.totalCount !== options.chunks.length ||
+            event.data.progress.completedCount < 0 ||
+            event.data.progress.completedCount > options.chunks.length
+          ) {
+            malformed();
+            return;
+          }
+          try {
+            options.onProgress?.(event.data.progress);
+          } catch {
+            malformed();
+          }
+          return;
+        }
+        case "broadcast-transcript-partial": {
+          const chunk = chunkById.get(event.data.chunkId);
+          if (
+            chunk === undefined ||
+            resultsByChunkId.has(event.data.chunkId) ||
+            gapChunkIds.has(event.data.chunkId) ||
+            !validResult(event.data.result, chunk)
+          ) {
+            malformed();
+            return;
+          }
+          resultsByChunkId.set(event.data.chunkId, event.data.result);
+          try {
+            options.onPartialResult?.(event.data.chunkId, event.data.result);
+          } catch {
+            malformed();
+          }
+          return;
+        }
+        case "broadcast-transcript-gap":
+          if (
+            !chunkById.has(event.data.chunkId) ||
+            resultsByChunkId.has(event.data.chunkId) ||
+            gapChunkIds.has(event.data.chunkId)
+          ) {
+            malformed();
+            return;
+          }
+          gapChunkIds.add(event.data.chunkId);
+          return;
+        case "broadcast-transcript-complete":
+          if (
+            event.data.requestedCount !== options.chunks.length ||
+            event.data.completedCount !== resultsByChunkId.size ||
+            event.data.gapCount !== gapChunkIds.size ||
+            resultsByChunkId.size + gapChunkIds.size !== options.chunks.length
+          ) {
+            malformed();
+            return;
+          }
+          settled = true;
+          cleanup();
+          resolve({
+            results: options.chunks.flatMap((chunk) => {
+              const result = resultsByChunkId.get(chunk.chunkId);
+              return result === undefined ? [] : [result];
+            }),
+            gapChunkIds: options.chunks
+              .filter((chunk) => gapChunkIds.has(chunk.chunkId))
+              .map((chunk) => chunk.chunkId),
+            requestedCount: options.chunks.length,
+          });
+          return;
+        case "broadcast-transcript-cancelled":
+          onAbort();
+          return;
+        case "broadcast-transcript-failed":
+          onWorkerError();
+      }
+    };
+
+    worker.addEventListener("message", onMessage);
+    worker.addEventListener("error", onWorkerError);
+    worker.addEventListener("messageerror", onWorkerError);
+    options.signal?.addEventListener("abort", onAbort, { once: true });
+    worker.postMessage({
+      type: "broadcast-transcript-analyze",
+      identity,
+      file,
+      sourceDurationMs: options.sourceDurationMs,
+      chunks: options.chunks,
+    });
+  });
+}

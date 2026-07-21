@@ -1,5 +1,18 @@
 # Development Log
 
+## 2026-07-22 `0.3.27` context-qualified selection and negative ground truth
+
+- Reframed the three long-form samples as distinct evaluation contracts: food talk preserves the known 칼국수·껍데기·두바이초콜릿 positives while rejecting opening music; the Minecraft relay is a valid all-negative/abstention sample; the accidental-subscription stream requires the exact apology/accountability moment and does not invent a timestamp before human annotation.
+- Added Event Episode grouping before temporal density estimation so multiple detector fragments from one real-world moment do not inflate burst density or occupy several detail-analysis slots. Coverage quotas now use square-root density weights and remain soft, duplicate similarity reads the nested audio event kind, and selection is deterministic under shuffled input.
+- Added an explicit semantic eligibility gate and aggregate rejection diagnostics. `ineligible` candidates and below-floor events never fill unused detail budget; a whole-broadcast judgment may return zero final candidates.
+- Expanded the broadcast-context schema with `select | review | reject`, confidence, bounded rejection reasons, `apology-accountability`, `music-or-intermission`, and `not-clip-worthy`. The DeepSeek prompt now forbids forced clip counts and requires exact apology/context evidence rather than loudness alone.
+- Registered a bounded role-based model plan: Gemini 3.5 Flash for operating candidate perception, Qwen3.5 Omni Flash as the short audio-video fallback, Qwen3.6 Flash for sampled visual chapters, DeepSeek V4 Pro for compressed whole-broadcast reasoning, and Gemini 3.1 Pro/Qwen3.7 Plus for at most three difficult adjudications.
+- Added a cost-bounded whole-broadcast sampling plan. A complete supplied caption track gives full text coverage without paid ASR; otherwise every ten-minute cell receives distributed samples and up to twelve event neighborhoods are guaranteed coverage under a `$0.42` Qwen ASR allocation. Sources that fit the allocation receive complete audio coverage, while a twelve-hour source retains broad uniform coverage instead of following loud events only.
+- Updated the active Gemini 3.5 Flash planning estimate to the official flat `$1.50/M` input and `$9/M` output rates: twelve 45-second audio+four-frame candidates are approximately `$0.20` before retries and thinking-token variation.
+- Restored the Worker deployment default from the not-yet-active Qwen adapter to Gemini. This removes the configuration path that returned `PROVIDER_NOT_ACTIVE` for every candidate request; Qwen remains fail-closed until a live transport smoke test passes.
+- Preserved the earlier audio recall/music fix: a sustained dynamic vocal reaction can survive a low speech-band ratio, while generic visual change alone no longer rescues a music-like dialogue lead.
+- Verification: 53 test files / 634 tests pass, ESLint passes with zero warnings, TypeScript and the production Vite build pass. The remaining build output is the existing large-chunk advisory, not a failure.
+
 ## 2026-07-21 `0.3.23` parallel Gemini state transition fix
 
 - Pass B's run state now accepts a valid terminal result or gap for any still-pending candidate. The previous single `activeCandidateId` guard could reject a normal Gemini response that arrived early from the bounded parallel pool.
@@ -1088,3 +1101,11 @@
 - Google Drive에서 다시 내려받은 `2026 07 17 - 음식 토크[KzAW3yow80Q] (1).mp4`는 499,164,414 bytes, SHA-256 `F8A094E8169EA7635D720EE9D47BAB87E6915E9980EC62E7F71D76B06287AA4E`로 기존 로컬 원본과 byte-for-byte 일치했다. 이후 브라우저 검증 입력은 이 Drive 다운로드 파일을 명시적으로 사용했다.
 - 로컬 `0.3.26` 빠른 분석은 후보 5개(정점 00:21:02, 00:22:45, 00:02:34, 00:03:56, 00:01:45)를 만들었다. localhost preview에서는 production 전용 Gemini 중계에 연결되지 않아 `PROXY_UNAVAILABLE`로 끝났고 빠른 후보는 보존됐다. 새로고침 뒤 저장 기록 1개가 남았고 `이 결과 이어보기`로 후보 5개·시간표·검토 상태가 복원되며, 영상 blob만 의도대로 재연결을 요구했다.
 - 공개 배포판은 아직 `0.3.23`이었다. 같은 Drive 파일에서 동일한 후보 5개를 만들었고 production Gemini는 정상 완료해 칼국수·껍데기 사건 2개와 음악/대기 구간 3개를 명확히 구분했다. 따라서 파일·Gemini 키·production Worker 성공 경로는 확인됐지만, 음악 3개가 O 후보에서 먼저 제거되지 않는 회귀와 `0.3.26` 미배포는 별도 해결이 필요하다.
+
+## 2026-07-22 — `0.3.28` 전체 맥락 자동 분석과 모델 라우팅
+
+- 빠른 소리 후보만으로 조용한 성공·사과·설정 회수를 찾을 수 없다는 평가를 기준으로, 후보 검증과 별개인 방송 transcript → 전체 문맥 → 의미 lead 재확인 파이프라인을 구현했다.
+- Gemini 3.5 Flash는 짧은 후보의 오디오+대표 화면, Qwen3 ASR Flash는 장시간 한국어 음성 표본, Qwen3.7 Plus는 압축된 방송 전체 문맥에 배치했다. Qwen3.5 Omni Flash·Qwen3.6 Flash·Gemini 3.1 Pro·DeepSeek V4 Pro는 역할별 폴백·상위 판정 정책에 두되 검증되지 않은 transport를 가장해 활성화하지 않았다.
+- 12시간 입력을 모든 10분 셀에서 고르게 표본화하고 사건 주변을 보강하면서 ASR `$0.42`, 의미 lead 재확인 `$0.03`, 전체 정책 약 `$0.997`의 상한을 적용했다.
+- 전체 문맥 계약은 0개 후보를 정상으로 허용하고 음악·노래·MV·오프닝·엔딩·쉬는 화면을 선택하지 않으며, 기존 후보 밖의 사과·조용한 성취·설정 회수 lead를 chapter ID에 근거해 제안하도록 제한했다.
+- transcript/context/refinement 유료 결과를 입력 서명·model revision과 함께 IndexedDB에 저장하고 readback 검증 뒤 재사용한다. 의미 후보의 저장된 Gemini 결과도 복구 초기에 보존해 새로고침 뒤 같은 후보를 재과금하지 않는다.

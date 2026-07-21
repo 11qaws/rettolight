@@ -167,6 +167,30 @@ function recommendationExplanation(candidate: UnifiedHighlightCandidate): string
 export function buildHighlightNarrative(
   candidate: UnifiedHighlightCandidate,
 ): HighlightNarrative {
+  const semantic = candidate.evidence.semantic;
+  if (semantic !== undefined) {
+    const title =
+      semantic.category === "quiet-achievement"
+        ? "조용한 성취를 다시 찾은 장면"
+        : semantic.category === "apology-accountability"
+          ? "정확한 사과·해명 장면"
+          : semantic.category === "setup-and-payoff"
+            ? "앞선 설정이 회수되는 장면"
+            : semantic.category === "running-gag"
+              ? "방송 전체에서 이어진 반복 개그"
+              : "방송 전체 맥락에서 다시 찾은 장면";
+    return {
+      title,
+      event: semantic.eventSummaryKo,
+      streamerReaction: `대사 근거: ${semantic.transcriptKo}`,
+      audienceReaction: "채팅을 함께 넣지 않았다면 시청자 반응은 아직 확인 전이에요.",
+      whyRecommended: semantic.whyThisMomentKo,
+      basis: "signal-inference",
+      basisLabel: "신호 기반 추정",
+      reviewHint:
+        "소리 크기가 아니라 방송 전체 대사 맥락으로 찾은 후보예요. 화면과 정확한 경계를 재생해 확인해 주세요.",
+    };
+  }
   const hasAudio = candidate.evidence.audio !== undefined;
   const hasChat = candidate.evidence.chat !== undefined;
   const isExploration = !hasAudio && !hasChat;

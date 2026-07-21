@@ -45,4 +45,12 @@ describe("Temporal Point Process (Poisson Density)", () => {
     expect(result.diagnostics.dispersionIndex).toBeNull();
     expect(result.bins[0]!.densityClass).toBe("quiet");
   });
+
+  it("keeps burst probabilities finite for a very dense episode bin", () => {
+    const events = Array.from({ length: 1_000 }, (_, index) => index);
+    const result = calculateTemporalEventDensity(events, 10 * 60_000);
+
+    expect(result.bins[0]?.poissonTailProbability).not.toBeNaN();
+    expect(result.bins[0]?.densityClass).toBe("burst");
+  });
 });

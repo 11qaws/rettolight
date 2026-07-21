@@ -120,6 +120,9 @@ function signalLabel(candidate: UnifiedHighlightCandidate): string {
   if (candidate.signalKinds.includes("visual")) {
     labels.push("화면 맥락");
   }
+  if (candidate.signalKinds.includes("semantic")) {
+    labels.push("방송 전체 맥락");
+  }
   return labels.join(" + ");
 }
 
@@ -147,6 +150,12 @@ function evidenceLabel(candidate: UnifiedHighlightCandidate): string {
       `채팅 ${candidate.evidence.chat.messageCount}개`,
       `서로 다른 작성자 표기 ${candidate.evidence.chat.uniqueAuthorCount}개`,
       `평소의 ${candidate.evidence.chat.burstRatio.toFixed(1)}배`,
+    );
+  }
+  if (candidate.evidence.semantic !== undefined) {
+    evidence.push(
+      `전체 맥락 확신도 ${Math.round(candidate.evidence.semantic.confidence * 100)}%`,
+      candidate.evidence.semantic.evidenceCueKo,
     );
   }
   return evidence.join(" · ");

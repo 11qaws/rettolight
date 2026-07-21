@@ -159,6 +159,27 @@ describe("local audio reaction scoring core", () => {
     expect(JSON.stringify(result)).not.toMatch(/pcm|filename|transcript|speaker/iu);
   });
 
+  it("keeps a dynamic mixed-audio reaction when its absolute speech-band share is low", () => {
+    const windows = baseline(240);
+    for (const [offset, rms] of [0.16, 0.26, 0.18, 0.24, 0.17].entries()) {
+      const index = 115 + offset;
+      windows[index] = speechWindow(index, {
+        rms,
+        peak: Math.min(0.92, rms * 3.1),
+        zeroCrossingRate: 0.13 + (offset % 3) * 0.025,
+        speechBandEnergyRatio: 0.28 + (offset % 2) * 0.04,
+      });
+    }
+
+    const result = selectAudioReactionHighlights(windows, 240_000);
+
+    expect(result.candidates[0]?.evidence).toMatchObject({
+      eventKind: "sustained-vocal-reaction",
+      activeWindowCount: 5,
+    });
+    expect(result.candidates[0]?.evidence.speechBandEnergyRatio).toBeLessThan(0.4);
+  });
+
   it("distinguishes a short loudness burst from a sustained reaction", () => {
     const windows = baseline(90);
     setReaction(windows, 40, [0.22, 0.2]);

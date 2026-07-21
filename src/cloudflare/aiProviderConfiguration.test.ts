@@ -3,6 +3,7 @@ import {
   AI_PROVIDER_CATALOG,
   createAiProviderReadinessManifest,
   resolveBroadcastContextConnection,
+  resolveBroadcastTranscriptConnection,
   resolveCandidateInsightConnection,
 } from "./aiProviderConfiguration";
 
@@ -48,8 +49,8 @@ describe("aiProviderConfiguration", () => {
     });
     expect(manifest.candidateInsight).toEqual({
       selectedProvider: "qwen",
-      modelId: "qwen3.5-omni-plus",
-      modelRevision: "qwen3.5-omni-plus-api-reviewed-2026-07-21",
+      modelId: "qwen3.5-omni-flash",
+      modelRevision: "qwen3.5-omni-flash-api-reviewed-2026-07-22",
       implementationStatus: "prepared",
       configured: true,
       active: false,
@@ -84,7 +85,7 @@ describe("aiProviderConfiguration", () => {
     ).toEqual({ ok: false, code: "INVALID_REGION" });
   });
 
-  it("reserves DeepSeek for the disabled-by-default context role", () => {
+  it("keeps DeepSeek available for the disabled-by-default context role", () => {
     expect(resolveBroadcastContextConnection({})).toEqual({
       ok: true,
       connection: { provider: "disabled" },
@@ -106,10 +107,63 @@ describe("aiProviderConfiguration", () => {
     expect(createAiProviderReadinessManifest(environment).broadcastContext).toEqual({
       selectedProvider: "deepseek",
       modelId: "deepseek-v4-pro",
-      modelRevision: "deepseek-v4-pro-api-reviewed-2026-07-21",
-      implementationStatus: "prepared",
+      modelRevision: "deepseek-v4-pro-api-reviewed-2026-07-22",
+      implementationStatus: "active",
       configured: true,
-      active: false,
+      active: true,
+    });
+  });
+
+  it("activates Qwen 3.7 Plus context reasoning with the installed Singapore key", () => {
+    const environment = {
+      BROADCAST_CONTEXT_PROVIDER: "qwen",
+      QWEN_API_KEY: "qwen-secret",
+      QWEN_REGION: "singapore",
+    } as const;
+    expect(resolveBroadcastContextConnection(environment)).toEqual({
+      ok: true,
+      connection: {
+        provider: "qwen",
+        descriptor: AI_PROVIDER_CATALOG.broadcastContext.qwen,
+        endpoint:
+          "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions",
+        apiKey: "qwen-secret",
+        region: "singapore",
+      },
+    });
+    expect(createAiProviderReadinessManifest(environment).broadcastContext).toEqual({
+      selectedProvider: "qwen",
+      modelId: "qwen3.7-plus",
+      modelRevision: "qwen3.7-plus-api-reviewed-2026-07-22",
+      implementationStatus: "active",
+      configured: true,
+      active: true,
+    });
+  });
+
+  it("activates the bounded Qwen transcript transport with a Singapore shared endpoint", () => {
+    const environment = {
+      BROADCAST_TRANSCRIPT_PROVIDER: "qwen",
+      QWEN_API_KEY: "qwen-secret",
+    } as const;
+    expect(resolveBroadcastTranscriptConnection(environment)).toEqual({
+      ok: true,
+      connection: {
+        provider: "qwen",
+        descriptor: AI_PROVIDER_CATALOG.broadcastTranscript.qwen,
+        endpoint:
+          "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions",
+        apiKey: "qwen-secret",
+        region: "singapore",
+      },
+    });
+    expect(createAiProviderReadinessManifest(environment).broadcastTranscript).toEqual({
+      selectedProvider: "qwen",
+      modelId: "qwen3-asr-flash",
+      modelRevision: "qwen3-asr-flash-api-reviewed-2026-07-22",
+      implementationStatus: "active",
+      configured: true,
+      active: true,
     });
   });
 

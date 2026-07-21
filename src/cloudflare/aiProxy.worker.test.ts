@@ -5,6 +5,8 @@ import {
 } from "../analysis/candidatePassBGemini";
 import { CANDIDATE_PASS_B_SAMPLE_RATE_HZ } from "../analysis/candidatePassBWorkerProtocol";
 import {
+  handleBroadcastTranscriptRequest,
+  handleBroadcastContextRequest,
   handleCandidateInsightRequest,
   type AiProxyEnvironment,
 } from "./aiProxy.worker";
@@ -104,6 +106,181 @@ async function responseErrorCode(response: Response): Promise<string> {
 }
 
 describe("aiProxy.worker", () => {
+  it("reasons over whole-broadcast context through Qwen 3.7 Plus", async () => {
+    const contextInput = {
+      sourceDurationMs: 60_000,
+      chapters: [
+        {
+          chapterId: "chapter-1",
+          startMs: 0,
+          endMs: 60_000,
+          evidenceMode: "complete-transcript",
+          evidenceCoverageRatio: 1,
+          summaryKo: "스트리머가 실수를 인정하고 정확히 사과했다.",
+        },
+      ],
+      candidates: [
+        {
+          candidateId: "candidate-1",
+          startMs: 10_000,
+          endMs: 55_000,
+          transcriptKo: "제가 실수했습니다. 죄송합니다.",
+          eventSummaryKo: "실수를 인정했다.",
+          reactionSummaryKo: "차분하게 사과했다.",
+          chatReactionSummaryKo: null,
+        },
+      ],
+    };
+    const providerResult = {
+      broadcastSummaryKo: "실수의 경위를 설명하고 사과한 방송이다.",
+      recurringThemesKo: ["사과"],
+      semanticChapters: [],
+      discoveredLeads: [],
+      annotations: [
+        {
+          candidateId: "candidate-1",
+          category: "apology-accountability",
+          clipDecision: "select",
+          confidence: 0.95,
+          rejectionReasons: [],
+          contextSummaryKo: "방송의 핵심 사과 장면",
+          whyThisMomentKo: "잘못을 직접 인정했다.",
+          relatedCandidateIds: [],
+          uncertaintiesKo: [],
+        },
+      ],
+    };
+    const upstreamFetch = vi.fn(
+      (_input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+        if (typeof init?.body !== "string") {
+          throw new TypeError("Expected a serialized Qwen context request.");
+        }
+        const body = JSON.parse(init.body) as Record<string, unknown>;
+        expect(body.model).toBe("qwen3.7-plus");
+        expect(body.enable_thinking).toBe(true);
+        expect(body.thinking_budget).toBe(4_096);
+        expect(body.response_format).toEqual({ type: "json_object" });
+        expect(body).not.toHaveProperty("thinking");
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              choices: [{ message: { content: JSON.stringify(providerResult) } }],
+            }),
+            { status: 200 },
+          ),
+        );
+      },
+    );
+    const environment: AiProxyEnvironment = {
+      ...createEnvironment(),
+      BROADCAST_CONTEXT_PROVIDER: "qwen",
+      QWEN_API_KEY: "qwen-secret",
+      QWEN_REGION: "singapore",
+    };
+    const response = await handleBroadcastContextRequest(
+      createRequest(contextInput, {
+        url: "https://rettohighlight-gemini.example/v1/broadcast-context",
+        headers: { "CF-Connecting-IP": "203.0.113.42" },
+      }),
+      environment,
+      { fetchImplementation: upstreamFetch },
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      broadcastSummaryKo: providerResult.broadcastSummaryKo,
+      annotations: [expect.objectContaining({ clipDecision: "select" })],
+    });
+    expect(environment.IP_RATE_LIMITER.limit).toHaveBeenCalledWith({
+      key: "broadcast-context:203.0.113.42",
+    });
+    expect(environment.RATE_LIMITER.limit).toHaveBeenCalledWith({
+      key: "broadcast-context",
+    });
+  });
+
+  it("transcribes a bounded broadcast chunk through the fixed Qwen ASR adapter", async () => {
+    const durationMs = 1_000;
+    const candidate = createCandidateBody(durationMs);
+    const body = {
+      audioBase64: candidate.audioBase64,
+      sourceStartMs: 600_000,
+      durationMs,
+    };
+    const upstreamFetch = vi.fn(
+      (input: RequestInfo | URL, init?: RequestInit) => {
+        expect(input).toBe(
+          "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions",
+        );
+        expect(new Headers(init?.headers).get("Authorization")).toBe(
+          "Bearer qwen-secret",
+        );
+        if (typeof init?.body !== "string") {
+          throw new TypeError("Expected a serialized Qwen request body.");
+        }
+        const requestBody = JSON.parse(init.body) as {
+          model: string;
+          messages: readonly [{ content: readonly [{ input_audio: { data: string } }] }];
+          asr_options: { language: string };
+        };
+        expect(requestBody.model).toBe("qwen3-asr-flash");
+        expect(requestBody.messages[0].content[0].input_audio.data).toBe(
+          `data:audio/wav;base64,${candidate.audioBase64}`,
+        );
+        expect(requestBody.asr_options.language).toBe("ko");
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              choices: [
+                {
+                  finish_reason: "stop",
+                  message: {
+                    content: "칼국수 이야기를 하며 웃는다.",
+                    annotations: [
+                      { type: "audio_info", language: "ko", emotion: "happy" },
+                    ],
+                  },
+                },
+              ],
+              usage: { seconds: 1 },
+            }),
+            { status: 200 },
+          ),
+        );
+      },
+    );
+    const environment: AiProxyEnvironment = {
+      ...createEnvironment(),
+      BROADCAST_TRANSCRIPT_PROVIDER: "qwen",
+      QWEN_API_KEY: "qwen-secret",
+    };
+    const response = await handleBroadcastTranscriptRequest(
+      createRequest(body, {
+        url: "https://rettohighlight-gemini.example/v1/broadcast-transcript",
+        headers: { "CF-Connecting-IP": "203.0.113.42" },
+      }),
+      environment,
+      { fetchImplementation: upstreamFetch },
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      modelId: "qwen3-asr-flash",
+      sourceStartMs: 600_000,
+      sourceEndMs: 601_000,
+      textKo: "칼국수 이야기를 하며 웃는다.",
+      detectedLanguage: "ko",
+      emotion: "happy",
+      billedSeconds: 1,
+    });
+    expect(environment.IP_RATE_LIMITER.limit).toHaveBeenCalledWith({
+      key: "broadcast-transcript:203.0.113.42",
+    });
+    expect(environment.RATE_LIMITER.limit).toHaveBeenCalledWith({
+      key: "broadcast-transcript",
+    });
+  });
+
   it("reports health without disclosing configuration or calling Gemini", async () => {
     const upstreamFetch = vi.fn();
     const response = await handleCandidateInsightRequest(

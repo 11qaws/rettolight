@@ -413,7 +413,7 @@ describe("fuseReactionHighlightCandidates", () => {
     expect(candidates[1]?.peakMs).toBe(200_000);
   });
 
-  it("drops an unconfirmed music-like dialogue lead but keeps corroborated dialogue", () => {
+  it("does not let a generic scene change confirm a music-like dialogue lead", () => {
     const musicLikeDialogue = audioCandidate(
       "opening-bed",
       75_000,
@@ -442,6 +442,16 @@ describe("fuseReactionHighlightCandidates", () => {
     expect(
       fuseReactionHighlightCandidates(
         { audioCandidates: [musicLikeDialogue], visualCandidates: [visualConfirmation] },
+        { sourceDurationMs: 180_000 },
+      ),
+    ).toEqual([]);
+    expect(
+      fuseReactionHighlightCandidates(
+        {
+          audioCandidates: [musicLikeDialogue],
+          chatCandidates: [chatCandidate("audience-reaction", 75_000, 6)],
+          visualCandidates: [visualConfirmation],
+        },
         { sourceDurationMs: 180_000 },
       ),
     ).toHaveLength(1);

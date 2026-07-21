@@ -1,6 +1,8 @@
 import type { ChatHighlightCandidate, ChatHighlightEvidence } from "./highlightSelector";
 
-export type HighlightSignalKind = "audio" | "chat" | "visual";
+import type { BroadcastContextDiscoveredLeadCategory } from "./broadcastContextProtocol";
+
+export type HighlightSignalKind = "audio" | "chat" | "visual" | "semantic";
 
 export type AudioReactionEventKind =
   | "short-loudness-burst"
@@ -77,7 +79,7 @@ export interface HighlightFusionOptions {
   readonly sourceDurationMs: number;
   /** Requested clip length. Values outside 30-60 seconds are clamped. */
   readonly candidateWindowMs?: number;
-  /** The fusion layer always returns at most 12 candidates. */
+  /** Maximum fast-pass reservoir size. A later selector applies the detail-analysis budget. */
   readonly maxCandidates?: number;
   /** Non-overlapping signals with closer peaks than this value can be paired. */
   readonly proximityMs?: number;
@@ -115,11 +117,21 @@ export interface UnifiedVisualEvidence extends NormalizedSignalEvidence {
 
 export interface UnifiedChatEvidence extends NormalizedSignalEvidence, ChatHighlightEvidence {}
 
+export interface UnifiedSemanticEvidence extends NormalizedSignalEvidence {
+  readonly category: BroadcastContextDiscoveredLeadCategory;
+  readonly confidence: number;
+  readonly eventSummaryKo: string;
+  readonly whyThisMomentKo: string;
+  readonly evidenceCueKo: string;
+  readonly transcriptKo: string;
+}
+
 export interface UnifiedHighlightEvidence {
   readonly normalization: "within-signal-rank-and-mad";
   readonly audio?: UnifiedAudioEvidence;
   readonly visual?: UnifiedVisualEvidence;
   readonly chat?: UnifiedChatEvidence;
+  readonly semantic?: UnifiedSemanticEvidence;
 }
 
 export interface UnifiedHighlightCandidate {
@@ -764,13 +776,15 @@ function createReactionAnchorDrafts(
 
 /**
  * The local dialogue lead is intentionally permissive so quiet speech can be
- * reviewed. A long, low-loudness, high-band-only lead with no chat or visual
+ * reviewed. A long, low-loudness, high-band-only lead with no chat
  * corroboration is much more likely to be an opening/bed song transition than
- * a streamer reaction. Keep it out of the O-marked candidate list while the
- * raw audio point remains available to the score rail for manual inspection.
+ * a streamer reaction. A generic scene change only adds visual context; it is
+ * not evidence that somebody spoke. Keep the lead out of the O-marked
+ * candidate list while the raw audio point remains available to the score rail
+ * for manual inspection.
  */
 function isUnconfirmedMusicLikeDialogue(draft: ReactionDraftCandidate): boolean {
-  if (draft.audio === undefined || draft.chat !== undefined || draft.visual !== undefined) {
+  if (draft.audio === undefined || draft.chat !== undefined) {
     return false;
   }
   const evidence = draft.audio.source.evidence;
@@ -1092,6 +1106,9 @@ function normalizedEvidence(
 export function highlightReasonForSignalKinds(
   signalKinds: readonly HighlightSignalKind[],
 ): string {
+  if (signalKinds.includes("semantic")) {
+    return "방송 전체 대사 맥락에서 조용한 성취·정확한 사과·설정 회수처럼 의미 있는 사건을 다시 찾아낸 후보예요.";
+  }
   if (signalKinds.includes("audio")) {
     return reactionReasonForSignalKinds(signalKinds);
   }
@@ -1251,7 +1268,7 @@ function canonicalSignalKinds(
   signalKinds: readonly HighlightSignalKind[],
 ): readonly HighlightSignalKind[] {
   const present = new Set(signalKinds);
-  return (["audio", "chat", "visual"] as const).filter((signalKind) =>
+  return (["audio", "chat", "visual", "semantic"] as const).filter((signalKind) =>
     present.has(signalKind),
   );
 }

@@ -10,10 +10,8 @@ export const GEMINI_PASS_B_AUDIO_TOKENS_PER_SECOND = 32;
 export const GEMINI_PASS_B_IMAGE_TOKENS_PER_FRAME = 1_120;
 export const GEMINI_PASS_B_PROMPT_TOKENS_PER_CANDIDATE = 900;
 export const GEMINI_PASS_B_OUTPUT_TOKENS_PER_CANDIDATE = 700;
-export const GEMINI_PASS_B_INPUT_PRICE_PER_MILLION_UNDER_200K_USD = 2;
-export const GEMINI_PASS_B_OUTPUT_PRICE_PER_MILLION_UNDER_200K_USD = 12;
-export const GEMINI_PASS_B_INPUT_PRICE_PER_MILLION_OVER_200K_USD = 4;
-export const GEMINI_PASS_B_OUTPUT_PRICE_PER_MILLION_OVER_200K_USD = 18;
+export const GEMINI_PASS_B_INPUT_PRICE_PER_MILLION_USD = 1.5;
+export const GEMINI_PASS_B_OUTPUT_PRICE_PER_MILLION_USD = 9;
 
 export interface CandidatePassBCostEstimate {
   readonly candidateCount: number;
@@ -26,7 +24,6 @@ export interface CandidatePassBCostEstimate {
   readonly inputCostUsd: number;
   readonly outputCostUsd: number;
   readonly totalCostUsd: number;
-  readonly usesOver200kTier: boolean;
 }
 
 export function estimateCandidatePassBCost(
@@ -35,7 +32,10 @@ export function estimateCandidatePassBCost(
   frameCount = 4,
 ): CandidatePassBCostEstimate {
   const normalizedCandidateCount = clampInteger(candidateCount, 0, 12);
-  const normalizedDurationMs = Math.max(0, Math.round(candidateDurationMs));
+  const normalizedDurationMs = Math.min(
+    60_000,
+    Math.max(0, Math.round(candidateDurationMs)),
+  );
   const normalizedFrameCount = clampInteger(frameCount, 0, 4);
   const audioTokens =
     (normalizedDurationMs / 1_000) * GEMINI_PASS_B_AUDIO_TOKENS_PER_SECOND;
@@ -47,13 +47,8 @@ export function estimateCandidatePassBCost(
   );
   const outputTokens =
     normalizedCandidateCount * GEMINI_PASS_B_OUTPUT_TOKENS_PER_CANDIDATE;
-  const usesOver200kTier = inputTokens > 200_000;
-  const inputPricePerMillionUsd = usesOver200kTier
-    ? GEMINI_PASS_B_INPUT_PRICE_PER_MILLION_OVER_200K_USD
-    : GEMINI_PASS_B_INPUT_PRICE_PER_MILLION_UNDER_200K_USD;
-  const outputPricePerMillionUsd = usesOver200kTier
-    ? GEMINI_PASS_B_OUTPUT_PRICE_PER_MILLION_OVER_200K_USD
-    : GEMINI_PASS_B_OUTPUT_PRICE_PER_MILLION_UNDER_200K_USD;
+  const inputPricePerMillionUsd = GEMINI_PASS_B_INPUT_PRICE_PER_MILLION_USD;
+  const outputPricePerMillionUsd = GEMINI_PASS_B_OUTPUT_PRICE_PER_MILLION_USD;
   const inputCostUsd = (inputTokens / 1_000_000) * inputPricePerMillionUsd;
   const outputCostUsd = (outputTokens / 1_000_000) * outputPricePerMillionUsd;
   return {
@@ -67,7 +62,6 @@ export function estimateCandidatePassBCost(
     inputCostUsd,
     outputCostUsd,
     totalCostUsd: inputCostUsd + outputCostUsd,
-    usesOver200kTier,
   };
 }
 

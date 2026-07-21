@@ -1,0 +1,73 @@
+import { describe, expect, it } from "vitest";
+import {
+  BROADCAST_CONTEXT_ASR_BUDGET_USD,
+  createBroadcastContextSamplingPlan,
+  createBroadcastContextTranscriptionChunks,
+} from "./broadcastContextSamplingPlan";
+
+const HOUR_MS = 60 * 60_000;
+
+describe("broadcastContextSamplingPlan", () => {
+  it("covers every ten-minute chapter cell under the twelve-hour ASR budget", () => {
+    const plan = createBroadcastContextSamplingPlan(
+      12 * HOUR_MS,
+      [1 * HOUR_MS, 5 * HOUR_MS, 11 * HOUR_MS],
+    );
+
+    expect(plan.chapterCells).toHaveLength(72);
+    expect(plan.estimatedAsrCostUsd).toBeLessThanOrEqual(
+      BROADCAST_CONTEXT_ASR_BUDGET_USD + 1e-9,
+    );
+    expect(plan.estimatedAudioCoverageRatio).toBeGreaterThan(0.2);
+    for (const cell of plan.chapterCells) {
+      expect(
+        plan.samplingWindows.some(
+          (window) => window.startMs < cell.endMs && window.endMs > cell.startMs,
+        ),
+      ).toBe(true);
+    }
+  });
+
+  it("always includes bounded context around a quiet semantic event lead", () => {
+    const eventPeakMs = 97 * 60_000;
+    const plan = createBroadcastContextSamplingPlan(6 * HOUR_MS, [eventPeakMs]);
+    const eventWindow = plan.samplingWindows.find(
+      (window) =>
+        window.kind !== "uniform" &&
+        window.startMs <= eventPeakMs &&
+        window.endMs >= eventPeakMs,
+    );
+
+    expect(eventWindow).toBeDefined();
+  });
+
+  it("fully covers a short source when it fits inside the ASR allocation", () => {
+    const durationMs = 2 * HOUR_MS + 15 * 60_000;
+    const plan = createBroadcastContextSamplingPlan(durationMs, [21 * 60_000]);
+    expect(plan.estimatedAudioCoverageRatio).toBe(1);
+    expect(plan.sampledAudioMs).toBe(durationMs);
+    expect(plan.estimatedAsrCostUsd).toBeLessThanOrEqual(
+      BROADCAST_CONTEXT_ASR_BUDGET_USD,
+    );
+  });
+
+  it("uses a complete external transcript without scheduling paid ASR", () => {
+    const plan = createBroadcastContextSamplingPlan(12 * HOUR_MS, [], true);
+    expect(plan.transcriptMode).toBe("external-complete");
+    expect(plan.samplingWindows).toEqual([]);
+    expect(plan.estimatedAudioCoverageRatio).toBe(1);
+    expect(plan.estimatedAsrCostUsd).toBe(0);
+  });
+
+  it("splits every selected window into timestamp-preserving safe ASR requests", () => {
+    const plan = createBroadcastContextSamplingPlan(2 * HOUR_MS, []);
+    const chunks = createBroadcastContextTranscriptionChunks(plan.samplingWindows);
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks[0]).toMatchObject({ chunkId: "asr-001", sourceStartMs: 0 });
+    expect(chunks.at(-1)?.sourceEndMs).toBe(2 * HOUR_MS);
+    expect(chunks.every((chunk) => chunk.sourceEndMs - chunk.sourceStartMs <= 210_000)).toBe(true);
+    expect(
+      chunks.reduce((sum, chunk) => sum + chunk.sourceEndMs - chunk.sourceStartMs, 0),
+    ).toBe(plan.sampledAudioMs);
+  });
+});

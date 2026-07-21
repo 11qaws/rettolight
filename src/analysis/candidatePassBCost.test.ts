@@ -11,16 +11,15 @@ describe("candidate Pass B cost estimate", () => {
 
     expect(estimate.inputTokens).toBe(81_840);
     expect(estimate.outputTokens).toBe(8_400);
-    expect(estimate.usesOver200kTier).toBe(false);
-    expect(estimate.totalCostUsd).toBeCloseTo(0.26448, 6);
+    expect(estimate.totalCostUsd).toBeCloseTo(0.19836, 6);
   });
 
-  it("switches to the over-200k price tier for a large payload", () => {
+  it("clamps planning input to the product's sixty-second candidate boundary", () => {
     const estimate = estimateCandidatePassBCost(12, 400_000);
 
-    expect(estimate.usesOver200kTier).toBe(true);
-    expect(estimate.inputPricePerMillionUsd).toBe(4);
-    expect(estimate.outputPricePerMillionUsd).toBe(18);
+    expect(estimate.audioDurationMs).toBe(60_000);
+    expect(estimate.inputPricePerMillionUsd).toBe(1.5);
+    expect(estimate.outputPricePerMillionUsd).toBe(9);
   });
 
   it("formats tiny estimates without pretending to know a precise cent value", () => {

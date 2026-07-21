@@ -55,6 +55,27 @@ import {
   estimateCandidatePassBCost,
   formatEstimatedUsd,
 } from "./analysis/candidatePassBCost";
+import { createAnalysisBudgetEnvelope } from "./analysis/analysisBudgetPolicy";
+import {
+  createDiscoveredLeadRefinementPlan,
+  refineDiscoveredLeadRange,
+} from "./analysis/discoveredLeadRefinement";
+import {
+  createBroadcastContextSamplingPlan,
+  createBroadcastContextTranscriptionChunks,
+} from "./analysis/broadcastContextSamplingPlan";
+import { createBroadcastTranscriptChapters } from "./analysis/broadcastTranscriptChapters";
+import {
+  parseBroadcastContextProxyResult,
+  requestBroadcastContextDeepseek,
+} from "./analysis/broadcastContextDeepseekClient";
+import {
+  runBroadcastTranscriptWorker,
+} from "./analysis/broadcastTranscriptWorkerClient";
+import type { BroadcastTranscriptWorkerProgress } from "./analysis/broadcastTranscriptWorkerProtocol";
+import {
+  BROADCAST_TRANSCRIPT_QWEN_MODEL_REVISION,
+} from "./analysis/broadcastTranscriptQwen";
 import { sampleCandidateVideoFrames } from "./analysis/candidateVideoFrames";
 import {
   mergeCandidatePassBEvidence,
@@ -77,9 +98,23 @@ import {
   type UnifiedHighlightCandidate,
 } from "./analysis/highlightFusion";
 import { calculateTemporalEventDensity } from "./analysis/temporalPointProcess";
-import { selectContextAwareCandidates } from "./analysis/contextAwareCandidateSelection";
-import type { BroadcastContextSemanticChapter } from "./analysis/broadcastContextProtocol";
+import {
+  buildEventEpisodes,
+  selectContextAwareCandidates,
+} from "./analysis/contextAwareCandidateSelection";
+import { finalizeContextQualifiedCandidates } from "./analysis/contextQualifiedFinalSelection";
+import type {
+  BroadcastContextCandidateInput,
+  BroadcastContextChapterInput,
+  BroadcastContextResult,
+  BroadcastContextSemanticChapter,
+} from "./analysis/broadcastContextProtocol";
 import { buildHighlightNarrative } from "./analysis/highlightNarrative";
+import {
+  createSemanticLeadCandidate,
+  parseSemanticLeadCandidates,
+  serializeSemanticLeadCandidates,
+} from "./analysis/semanticLeadCandidate";
 import {
   buildCandidateRankingProposal,
   createCandidateRankingFingerprints,
@@ -174,6 +209,7 @@ import {
   type AnalysisResultStore,
   type SourceCapabilitySnapshotRecord,
 } from "./storage/analysisResultStore";
+import { BROADCAST_CONTEXT_SESSION_SCHEMA_VERSION } from "./storage/broadcastContextSessionStore";
 import {
   classifyDurableMediaContainer,
   durableCoverageDisposition,
@@ -238,7 +274,7 @@ interface AudioAnalysisOutcome {
   readonly coverageComplete: boolean;
 }
 
-const APP_VERSION = "0.3.26";
+const APP_VERSION = "0.3.28";
 const PERSISTENCE_SCHEMA_VERSION = "0.3.0";
 const SIGNAL_ENGINE_VERSION =
   "streamer-reaction-fast-pass-v5-chat-fallback-music-confirmation";
@@ -834,6 +870,26 @@ function App() {
     useState<readonly CandidateTimelineScorePoint[]>([]);
   const [timelineSemanticChapters, setTimelineSemanticChapters] =
     useState<readonly BroadcastContextSemanticChapter[]>([]);
+  const [broadcastTranscriptStatus, setBroadcastTranscriptStatus] = useState<
+    "idle" | "running" | "completed" | "completedWithGaps" | "failed"
+  >("idle");
+  const [broadcastTranscriptProgress, setBroadcastTranscriptProgress] =
+    useState<BroadcastTranscriptWorkerProgress | null>(null);
+  const [broadcastTranscriptChapters, setBroadcastTranscriptChapters] =
+    useState<readonly BroadcastContextChapterInput[]>([]);
+  const [broadcastTranscriptError, setBroadcastTranscriptError] =
+    useState<string | null>(null);
+  const [broadcastContextStatus, setBroadcastContextStatus] = useState<
+    "idle" | "running" | "completed" | "failed"
+  >("idle");
+  const [broadcastContextResult, setBroadcastContextResult] =
+    useState<BroadcastContextResult | null>(null);
+  const [broadcastContextError, setBroadcastContextError] = useState<string | null>(null);
+  const [semanticLeadRefinementStatus, setSemanticLeadRefinementStatus] = useState<
+    "idle" | "running" | "completed" | "failed"
+  >("idle");
+  const [semanticLeadRefinementError, setSemanticLeadRefinementError] =
+    useState<string | null>(null);
   const candidatePassBEvidenceRef = useRef<CandidatePassBEvidenceById>({});
   const candidateGeminiInsightRef = useRef<CandidateGeminiInsightById>({});
   const candidateTimelineFramesRef = useRef<CandidateTimelineFramesById>({});
@@ -891,13 +947,21 @@ function App() {
   const sourceAbortController = useRef<AbortController | null>(null);
   const analysisAbortController = useRef<AbortController | null>(null);
   const candidatePassBAbortController = useRef<AbortController | null>(null);
+  const broadcastTranscriptAbortController = useRef<AbortController | null>(null);
+  const broadcastContextAbortController = useRef<AbortController | null>(null);
+  const semanticLeadRefinementAbortController = useRef<AbortController | null>(null);
   const candidateAudioEventAbortController = useRef<AbortController | null>(null);
   const analysisStartOperation = useRef<number | null>(null);
   const analysisOperationEpoch = useRef(0);
   const candidatePassBOperationEpoch = useRef(0);
   const candidatePassBStartPendingRef = useRef(false);
   const autoCandidatePassBSourceRef = useRef<string | null>(null);
-  const runCandidatePassBRef = useRef<() => Promise<void>>(() => Promise.resolve());
+  const autoBroadcastTranscriptSourceRef = useRef<string | null>(null);
+  const autoBroadcastContextSourceRef = useRef<string | null>(null);
+  const autoSemanticLeadRefinementSourceRef = useRef<string | null>(null);
+  const runCandidatePassBRef = useRef<
+    (targetCandidateIds?: readonly string[]) => Promise<void>
+  >(() => Promise.resolve());
   const candidatePassBMachine = useRef<CandidatePassBRunState | null>(null);
   const candidatePassBIdentity = useRef<CandidatePassBWorkerIdentity | null>(null);
   const candidateAudioEventOperationEpoch = useRef(0);
@@ -914,6 +978,7 @@ function App() {
   const lastWorkspacePreviewCue = useRef<string | null>(null);
   const clipRenderAbortController = useRef<AbortController | null>(null);
   const sourceHeading = useRef<HTMLHeadingElement | null>(null);
+  const reconnectSourceInput = useRef<HTMLInputElement | null>(null);
   const candidateHeading = useRef<HTMLHeadingElement | null>(null);
   const isMounted = useRef(true);
 
@@ -942,6 +1007,12 @@ function App() {
         candidatePassBOperationEpoch.current += 1;
         candidatePassBAbortController.current?.abort();
         candidatePassBAbortController.current = null;
+        broadcastTranscriptAbortController.current?.abort();
+        broadcastTranscriptAbortController.current = null;
+        broadcastContextAbortController.current?.abort();
+        broadcastContextAbortController.current = null;
+        semanticLeadRefinementAbortController.current?.abort();
+        semanticLeadRefinementAbortController.current = null;
         candidatePassBMachine.current = null;
         candidatePassBIdentity.current = null;
         candidateAudioEventOperationEpoch.current += 1;
@@ -1282,6 +1353,105 @@ function App() {
       openedRecoveredResult?.finalResult.result.input.source.durationMs ??
       0,
   );
+  const broadcastContextSamplingPlan = useMemo(() => {
+    if (boundarySourceDurationMs <= 0) {
+      return null;
+    }
+    try {
+      return createBroadcastContextSamplingPlan(
+        boundarySourceDurationMs,
+        candidates.map((candidate) => Math.round(candidate.peakMs)),
+      );
+    } catch {
+      return null;
+    }
+  }, [boundarySourceDurationMs, candidates]);
+  const broadcastContextCandidateInputs = useMemo<
+    readonly BroadcastContextCandidateInput[]
+  >(
+    () =>
+      candidates.slice(0, 12).map((candidate) => {
+        const narrative = buildHighlightNarrative(candidate);
+        const evidence = candidatePassBEvidenceById[candidate.id];
+        const insight = candidateGeminiInsightById[candidate.id];
+        const transcriptKo =
+          evidence?.cues.map((cue) => cue.text).join(" ").trim() ||
+          "후보 구간의 대사는 아직 확정하지 못함.";
+        const chat = candidate.evidence.chat;
+        return {
+          candidateId: candidate.id,
+          startMs: Math.round(candidate.startMs),
+          endMs: Math.round(candidate.endMs),
+          transcriptKo,
+          eventSummaryKo: insight?.eventSummaryKo.trim() || narrative.event,
+          reactionSummaryKo:
+            insight?.reactionSummaryKo.trim() || narrative.streamerReaction,
+          chatReactionSummaryKo:
+            chat === undefined
+              ? null
+              : `채팅 ${chat.messageCount}개, 반응 표현 ${chat.reactionMessageCount}개, 평소 대비 ${chat.burstRatio.toFixed(1)}배`,
+        };
+      }),
+    [candidateGeminiInsightById, candidatePassBEvidenceById, candidates],
+  );
+  const analysisBudgetEnvelope = useMemo(() => {
+    if (boundarySourceDurationMs <= 0) {
+      return null;
+    }
+    try {
+      return createAnalysisBudgetEnvelope(
+        boundarySourceDurationMs,
+        candidates.length,
+        0,
+      );
+    } catch {
+      return null;
+    }
+  }, [boundarySourceDurationMs, candidates.length]);
+  const broadcastTranscriptProgressRatio =
+    broadcastTranscriptStatus === "completed" ||
+    broadcastTranscriptStatus === "completedWithGaps"
+      ? 1
+      : broadcastTranscriptProgress === null || broadcastTranscriptProgress.totalCount === 0
+        ? 0
+        : Math.min(
+            1,
+            Math.max(
+              0,
+              (broadcastTranscriptProgress.completedCount +
+                (broadcastTranscriptProgress.stage === "transcribing" ? 0.5 : 0.1)) /
+                broadcastTranscriptProgress.totalCount,
+            ),
+          );
+  const broadcastTranscriptStatusText =
+    broadcastContextStatus === "running"
+      ? "Qwen 3.7 Plus 전체 맥락 판단 중"
+      : broadcastContextStatus === "completed"
+        ? `전체 맥락 완료 · 의미 구간 ${broadcastContextResult?.semanticChapters.length ?? 0}개`
+        : broadcastContextStatus === "failed"
+          ? "전체 맥락 판단 실패"
+          : broadcastTranscriptStatus === "running"
+      ? broadcastTranscriptProgress === null
+        ? "대사 지도 준비 중"
+        : `대사 표본 ${Math.min(
+            broadcastTranscriptProgress.totalCount,
+            broadcastTranscriptProgress.completedCount + 1,
+          )}/${broadcastTranscriptProgress.totalCount} ${
+            broadcastTranscriptProgress.stage === "decoding" ? "변환 중" : "인식 중"
+          }`
+      : broadcastTranscriptStatus === "completed"
+        ? `대사 지도 ${broadcastTranscriptChapters.length}구간 저장 · 맥락 판단 대기`
+        : broadcastTranscriptStatus === "completedWithGaps"
+          ? `대사 지도 ${broadcastTranscriptChapters.length}구간 저장 · 일부 공백 · 맥락 판단 대기`
+          : broadcastTranscriptStatus === "failed"
+            ? "대사 지도 분석 실패"
+            : broadcastContextSamplingPlan === null
+              ? "계획 준비"
+              : `대사 표본 ${Math.round(
+                  broadcastContextSamplingPlan.estimatedAudioCoverageRatio * 100,
+                )}% · 예상 상한 ${formatEstimatedUsd(
+                  analysisBudgetEnvelope?.projectedMaximumUsd ?? 1,
+                )}`;
   const approvedCandidates = candidates.filter(
     ({ reviewState }) => reviewState === "approved",
   );
@@ -1327,9 +1497,15 @@ function App() {
     candidates.length > 0 && candidates.every(({ reviewState }) => reviewState !== "unreviewed");
   const analysisFinishedWithoutCandidates =
     analysisComplete && selectionResult !== null && candidates.length === 0;
+  const reviewingRecoveredResult =
+    openedRecoveredResult !== null && candidates.length > 0;
   const currentStep = analysisFinishedWithoutCandidates
     ? 4
-    : !sourceReady
+    : reviewingRecoveredResult
+      ? reviewCompleted
+        ? 4
+        : 3
+      : !sourceReady
       ? 1
       : !analysisComplete
         ? 2
@@ -1337,7 +1513,8 @@ function App() {
           ? 4
           : 3;
   const showSourceWorkspace =
-    !sourceReady || (!analysisBusy && selectionResult === null);
+    (!sourceReady && !reviewingRecoveredResult) ||
+    (!analysisBusy && selectionResult === null);
   const sourceInputLocked =
     analysisBusy || sourceCheckBusy || candidateRefinementBusy;
   const chatInputLocked =
@@ -1507,6 +1684,24 @@ function App() {
     setCandidates([]);
     setCandidateTimelineScorePoints([]);
     setTimelineSemanticChapters([]);
+    broadcastTranscriptAbortController.current?.abort();
+    broadcastTranscriptAbortController.current = null;
+    broadcastContextAbortController.current?.abort();
+    broadcastContextAbortController.current = null;
+    semanticLeadRefinementAbortController.current?.abort();
+    semanticLeadRefinementAbortController.current = null;
+    autoBroadcastTranscriptSourceRef.current = null;
+    autoBroadcastContextSourceRef.current = null;
+    autoSemanticLeadRefinementSourceRef.current = null;
+    setBroadcastTranscriptStatus("idle");
+    setBroadcastTranscriptProgress(null);
+    setBroadcastTranscriptChapters([]);
+    setBroadcastTranscriptError(null);
+    setBroadcastContextStatus("idle");
+    setBroadcastContextResult(null);
+    setBroadcastContextError(null);
+    setSemanticLeadRefinementStatus("idle");
+    setSemanticLeadRefinementError(null);
     resetCandidateRanking();
     resetBoundarySession();
     resetCandidatePassB();
@@ -2145,8 +2340,9 @@ function App() {
         },
       );
 
+      const fastPassEventEpisodes = buildEventEpisodes(rawFusedCandidates);
       const densityResult = calculateTemporalEventDensity(
-        rawFusedCandidates.map((c) => c.peakMs),
+        fastPassEventEpisodes.map((episode) => episode.peakMs),
         preflight.metadata.durationMs,
         300_000,
       );
@@ -2702,7 +2898,15 @@ function App() {
     await candidatePassBInsightWriteChainRef.current.catch(() => undefined);
   };
 
-  const runCandidatePassB = async (): Promise<void> => {
+  const runCandidatePassB = async (
+    targetCandidateIds?: readonly string[],
+  ): Promise<void> => {
+    const requestedCandidateIds =
+      targetCandidateIds === undefined ? null : new Set(targetCandidateIds);
+    const candidatePool =
+      requestedCandidateIds === null
+        ? candidates
+        : candidates.filter((candidate) => requestedCandidateIds.has(candidate.id));
     const sourceBindingId =
       sourceContentFingerprint ??
       openedRecoveredResult?.finalResult.result.input.source.contentFingerprint ??
@@ -2712,7 +2916,7 @@ function App() {
       preflight === null ||
       currentAnalysisRunId === null ||
       sourceBindingId === null ||
-      candidates.length === 0 ||
+      candidatePool.length === 0 ||
       analysisBusy ||
       candidatePassBBusy ||
       candidateAudioEventBusy ||
@@ -2736,9 +2940,9 @@ function App() {
     const sourceDurationMs = Math.round(preflight.metadata.durationMs);
     let targets: readonly CandidatePassBCoreTarget[];
     try {
-      targets = selectCandidatePassBTargets(candidates, {
+      targets = selectCandidatePassBTargets(candidatePool, {
         sourceDurationMs,
-        maxCandidates: 12,
+        maxCandidates: Math.min(12, candidatePool.length),
       });
     } catch {
       candidatePassBStartPendingRef.current = false;
@@ -3838,6 +4042,10 @@ function App() {
   };
 
   const focusSourceSection = (): void => {
+    if (sourceHeading.current === null && reconnectSourceInput.current !== null) {
+      reconnectSourceInput.current.click();
+      return;
+    }
     sourceHeading.current?.focus();
     sourceHeading.current?.scrollIntoView({
       behavior: globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches
@@ -3854,6 +4062,24 @@ function App() {
     resetCandidatePassB();
     resetCandidateAudioEvent();
     resetBoundarySession();
+    broadcastTranscriptAbortController.current?.abort();
+    broadcastTranscriptAbortController.current = null;
+    broadcastContextAbortController.current?.abort();
+    broadcastContextAbortController.current = null;
+    semanticLeadRefinementAbortController.current?.abort();
+    semanticLeadRefinementAbortController.current = null;
+    autoBroadcastTranscriptSourceRef.current = null;
+    autoBroadcastContextSourceRef.current = null;
+    autoSemanticLeadRefinementSourceRef.current = null;
+    setBroadcastTranscriptStatus("idle");
+    setBroadcastTranscriptProgress(null);
+    setBroadcastTranscriptChapters([]);
+    setBroadcastTranscriptError(null);
+    setBroadcastContextStatus("idle");
+    setBroadcastContextResult(null);
+    setBroadcastContextError(null);
+    setSemanticLeadRefinementStatus("idle");
+    setSemanticLeadRefinementError(null);
     sourceSelectionEpoch.current += 1;
     sourceAbortController.current?.abort();
     sourceAbortController.current = null;
@@ -3890,20 +4116,25 @@ function App() {
       ]),
     );
     const recoveredCandidateIds = new Set(recoveredCandidates.map((candidate) => candidate.id));
+    // Context-discovered candidates are restored a little later from the paid
+    // broadcast-context session. Keep their already-paid Pass B artifacts now so
+    // reconnecting does not schedule the same Gemini verification again.
+    const isRecoverablePassBCandidate = (candidateId: string) =>
+      recoveredCandidateIds.has(candidateId) || candidateId.startsWith("semantic-");
     const recoveredPassBInsights = recovered.candidatePassBInsights;
     const recoveredEvidence = Object.fromEntries(
       Object.entries(recoveredPassBInsights?.evidenceById ?? {}).filter(([candidateId]) =>
-        recoveredCandidateIds.has(candidateId),
+        isRecoverablePassBCandidate(candidateId),
       ),
     ) as CandidatePassBEvidenceById;
     const recoveredGeminiInsights = Object.fromEntries(
       Object.entries(recoveredPassBInsights?.insightById ?? {}).filter(([candidateId]) =>
-        recoveredCandidateIds.has(candidateId),
+        isRecoverablePassBCandidate(candidateId),
       ),
     ) as CandidateGeminiInsightById;
     const recoveredTimelineFrames = Object.fromEntries(
       Object.entries(recoveredPassBInsights?.thumbnailById ?? {})
-        .filter(([candidateId]) => recoveredCandidateIds.has(candidateId))
+        .filter(([candidateId]) => isRecoverablePassBCandidate(candidateId))
         .map(([candidateId, frame]) => [candidateId, [frame]]),
     ) as CandidateTimelineFramesById;
     candidatePassBEvidenceRef.current = recoveredEvidence;
@@ -4201,6 +4432,496 @@ function App() {
     sourceFile,
   ]);
 
+  useEffect(() => {
+    const runId = currentAnalysisRunId;
+    const inputSignature =
+      openedRecoveredResult?.terminal.inputSignature ??
+      analysisRun?.inputSignature ??
+      sourceContentFingerprint;
+    const candidateInterpretationReady =
+      candidates.length === 0 ||
+      openedRecoveredResult !== null ||
+      !candidatePassBRuntimeAvailable ||
+      (candidatePassBRun !== null &&
+        ["completed", "completedWithGaps", "cancelled", "failed"].includes(
+          candidatePassBRun.status,
+        ));
+    if (
+      runId === null ||
+      inputSignature === null ||
+      boundarySourceDurationMs <= 0 ||
+      broadcastTranscriptChapters.length === 0 ||
+      !["completed", "completedWithGaps"].includes(broadcastTranscriptStatus) ||
+      !candidateInterpretationReady
+    ) {
+      return;
+    }
+
+    const operationKey = `${runId}:${inputSignature}`;
+    if (autoBroadcastContextSourceRef.current === operationKey) {
+      return;
+    }
+    autoBroadcastContextSourceRef.current = operationKey;
+    broadcastContextAbortController.current?.abort();
+    const controller = new AbortController();
+    broadcastContextAbortController.current = controller;
+    setBroadcastContextStatus("running");
+    setBroadcastContextError(null);
+
+    const contextInput = {
+      sourceDurationMs: boundarySourceDurationMs,
+      chapters: broadcastTranscriptChapters,
+      candidates: broadcastContextCandidateInputs,
+    };
+    const applyContextResult = (result: BroadcastContextResult): void => {
+      setBroadcastContextResult(result);
+      setTimelineSemanticChapters(result.semanticChapters);
+      const qualified = finalizeContextQualifiedCandidates(candidates, result.annotations);
+      const survivingIds = new Set([
+        ...qualified.selectedCandidates.map((candidate) => candidate.id),
+        ...qualified.reviewCandidates.map((candidate) => candidate.id),
+      ]);
+      const survivingCandidates = candidates.filter((candidate) =>
+        survivingIds.has(candidate.id),
+      );
+      setCandidates(survivingCandidates);
+      setSelectionResult((current) =>
+        current === null
+          ? current
+          : { ...current, candidateCount: survivingCandidates.length },
+      );
+      resetCandidateRanking(survivingCandidates);
+      setBroadcastContextStatus("completed");
+    };
+
+    void (async () => {
+      const contextInputSignature = await createContentFingerprint([
+        inputSignature,
+        JSON.stringify(contextInput),
+        "qwen3.7-plus-api-reviewed-2026-07-22",
+      ]);
+      if (controller.signal.aborted || !isMounted.current) return;
+      const store = getResultStore();
+      const saved = await store.getBroadcastContextSession(runId);
+      if (
+        saved !== null &&
+        saved.inputSignature === inputSignature &&
+        saved.contextInputSignature === contextInputSignature &&
+        saved.contextResultJson !== null
+      ) {
+        let savedPayload: unknown;
+        try {
+          savedPayload = JSON.parse(saved.contextResultJson);
+        } catch {
+          savedPayload = null;
+        }
+        const savedResult = parseBroadcastContextProxyResult(savedPayload, contextInput);
+        if (savedResult !== null) {
+          if (!controller.signal.aborted && isMounted.current) {
+            applyContextResult(savedResult);
+          }
+          return;
+        }
+      }
+
+      const result = await requestBroadcastContextDeepseek(contextInput, {
+        signal: controller.signal,
+      });
+      if (controller.signal.aborted || !isMounted.current) return;
+      const transcriptSession = await store.getBroadcastContextSession(runId);
+      if (
+        transcriptSession === null ||
+        transcriptSession.inputSignature !== inputSignature
+      ) {
+        throw new Error("저장된 방송 대사 지도와 전체 맥락 결과를 연결하지 못했어요.");
+      }
+      await store.putBroadcastContextSession({
+        ...transcriptSession,
+        contextInputSignature,
+        contextResultJson: JSON.stringify(result),
+        recordedAt: new Date().toISOString(),
+      });
+      const reopened = await store.getBroadcastContextSession(runId);
+      if (
+        reopened?.contextInputSignature !== contextInputSignature ||
+        reopened.contextResultJson === null
+      ) {
+        throw new Error("저장한 방송 전체 맥락 결과를 다시 확인하지 못했어요.");
+      }
+      const reopenedPayload: unknown = JSON.parse(reopened.contextResultJson);
+      const reopenedResult = parseBroadcastContextProxyResult(
+        reopenedPayload,
+        contextInput,
+      );
+      if (reopenedResult === null) {
+        throw new Error("저장한 방송 전체 맥락 결과 형식을 다시 확인하지 못했어요.");
+      }
+      if (!controller.signal.aborted && isMounted.current) {
+        applyContextResult(reopenedResult);
+      }
+    })()
+      .catch((error: unknown) => {
+        if (controller.signal.aborted || !isMounted.current) return;
+        setBroadcastContextStatus("failed");
+        setBroadcastContextError(
+          error instanceof Error && error.message.trim().length > 0
+            ? error.message
+            : "방송 전체 맥락을 판단하지 못했어요.",
+        );
+      })
+      .finally(() => {
+        if (broadcastContextAbortController.current === controller) {
+          broadcastContextAbortController.current = null;
+        }
+      });
+  }, [
+    analysisRun?.inputSignature,
+    boundarySourceDurationMs,
+    broadcastContextCandidateInputs,
+    broadcastTranscriptChapters,
+    broadcastTranscriptStatus,
+    candidatePassBRuntimeAvailable,
+    candidatePassBRun,
+    candidates,
+    currentAnalysisRunId,
+    getResultStore,
+    openedRecoveredResult,
+    resetCandidateRanking,
+    sourceContentFingerprint,
+  ]);
+
+  useEffect(() => {
+    if (
+      broadcastContextStatus !== "completed" ||
+      broadcastContextResult === null ||
+      sourceFile === null ||
+      currentAnalysisRunId === null ||
+      boundarySourceDurationMs <= 0
+    ) {
+      return;
+    }
+    const plan = createDiscoveredLeadRefinementPlan(
+      broadcastContextResult.discoveredLeads,
+    );
+    if (plan.segments.length === 0) {
+      setSemanticLeadRefinementStatus("completed");
+      return;
+    }
+    const operationKey = `${currentAnalysisRunId}:${plan.selectedLeadIds.join("|")}`;
+    if (autoSemanticLeadRefinementSourceRef.current === operationKey) {
+      return;
+    }
+    autoSemanticLeadRefinementSourceRef.current = operationKey;
+    semanticLeadRefinementAbortController.current?.abort();
+    const controller = new AbortController();
+    semanticLeadRefinementAbortController.current = controller;
+    setSemanticLeadRefinementStatus("running");
+    setSemanticLeadRefinementError(null);
+
+    const chunks = plan.segments.map((segment) => ({
+      chunkId: segment.segmentId,
+      sourceStartMs: segment.sourceStartMs,
+      sourceEndMs: segment.sourceEndMs,
+      kind: "event" as const,
+    }));
+    const applySemanticCandidates = (
+      proposals: readonly UnifiedHighlightCandidate[],
+    ): void => {
+      const semanticCandidates: ReviewedCandidate[] = [];
+      for (const proposal of proposals) {
+        const duplicatesExisting = candidates.some((candidate) => {
+          const overlapMs = Math.max(
+            0,
+            Math.min(candidate.endMs, proposal.endMs) -
+              Math.max(candidate.startMs, proposal.startMs),
+          );
+          const shorterMs = Math.min(
+            candidate.endMs - candidate.startMs,
+            proposal.endMs - proposal.startMs,
+          );
+          return shorterMs > 0 && overlapMs / shorterMs >= 0.6;
+        });
+        if (!duplicatesExisting) {
+          semanticCandidates.push({
+            ...proposal,
+            reviewState: "unreviewed",
+            approvedBoundaryRevision: null,
+          });
+        }
+      }
+      const nextCandidates = [...candidates, ...semanticCandidates].sort(
+        (left, right) => left.peakMs - right.peakMs || left.id.localeCompare(right.id),
+      );
+      setCandidates(nextCandidates);
+      setSelectionResult((current) =>
+        current === null
+          ? current
+          : { ...current, candidateCount: nextCandidates.length },
+      );
+      resetCandidateRanking(nextCandidates);
+      setSemanticLeadRefinementStatus("completed");
+      const needsVisualVerification = semanticCandidates
+        .map((candidate) => candidate.id)
+        .filter((candidateId) => candidateGeminiInsightById[candidateId] === undefined);
+      if (needsVisualVerification.length > 0 && candidatePassBRuntimeAvailable) {
+        window.setTimeout(() => {
+          void runCandidatePassBRef.current(needsVisualVerification);
+        }, 450);
+      }
+    };
+
+    void (async () => {
+      const refinementInputSignature = await createContentFingerprint([
+        currentAnalysisRunId,
+        JSON.stringify(plan),
+        JSON.stringify(broadcastContextResult.discoveredLeads),
+        BROADCAST_TRANSCRIPT_QWEN_MODEL_REVISION,
+      ]);
+      if (controller.signal.aborted || !isMounted.current) return;
+      const store = getResultStore();
+      const savedSession = await store.getBroadcastContextSession(currentAnalysisRunId);
+      if (
+        savedSession?.refinementInputSignature === refinementInputSignature &&
+        savedSession.refinementCandidatesJson !== null
+      ) {
+        let savedPayload: unknown;
+        try {
+          savedPayload = JSON.parse(savedSession.refinementCandidatesJson);
+        } catch {
+          savedPayload = null;
+        }
+        const savedCandidates = parseSemanticLeadCandidates(savedPayload);
+        if (savedCandidates !== null) {
+          applySemanticCandidates(savedCandidates);
+          return;
+        }
+      }
+
+      const result = await runBroadcastTranscriptWorker(sourceFile, {
+        sourceDurationMs: boundarySourceDurationMs,
+        chunks,
+        signal: controller.signal,
+      });
+      if (controller.signal.aborted || !isMounted.current) return;
+      if (result.results.length === 0) {
+        throw new Error("새 의미 후보의 정확한 대사 위치를 다시 찾지 못했어요.");
+      }
+      const semanticCandidates: UnifiedHighlightCandidate[] = [];
+        for (const lead of broadcastContextResult.discoveredLeads) {
+          const range = refineDiscoveredLeadRange(
+            lead,
+            plan,
+            result.results,
+            boundarySourceDurationMs,
+          );
+          if (range === null || range.transcriptMatchScore < 0.2) continue;
+          const matchedSegment = plan.segments.find(
+            (segment) => segment.segmentId === range.matchedSegmentId,
+          );
+          const transcript =
+            matchedSegment === undefined
+              ? undefined
+              : result.results.find(
+                  (item) =>
+                    item.sourceStartMs === matchedSegment.sourceStartMs &&
+                    item.sourceEndMs === matchedSegment.sourceEndMs,
+          );
+          if (transcript === undefined) continue;
+          const proposal = createSemanticLeadCandidate(lead, range, transcript.textKo);
+          semanticCandidates.push(proposal);
+        }
+      const currentSession = await store.getBroadcastContextSession(currentAnalysisRunId);
+      if (currentSession === null) {
+        throw new Error("새 의미 후보를 저장할 분석 세션을 찾지 못했어요.");
+      }
+      const refinementCandidatesJson = serializeSemanticLeadCandidates(
+        semanticCandidates,
+      );
+      await store.putBroadcastContextSession({
+        ...currentSession,
+        refinementInputSignature,
+        refinementCandidatesJson,
+        recordedAt: new Date().toISOString(),
+      });
+      const reopened = await store.getBroadcastContextSession(currentAnalysisRunId);
+      if (
+        reopened?.refinementInputSignature !== refinementInputSignature ||
+        reopened.refinementCandidatesJson !== refinementCandidatesJson
+      ) {
+        throw new Error("저장한 새 의미 후보 위치를 다시 확인하지 못했어요.");
+      }
+      applySemanticCandidates(semanticCandidates);
+    })()
+      .catch((error: unknown) => {
+        if (controller.signal.aborted || !isMounted.current) return;
+        setSemanticLeadRefinementStatus("failed");
+        setSemanticLeadRefinementError(
+          error instanceof Error && error.message.trim().length > 0
+            ? error.message
+            : "새 의미 후보의 정확한 위치를 찾지 못했어요.",
+        );
+      })
+      .finally(() => {
+        if (semanticLeadRefinementAbortController.current === controller) {
+          semanticLeadRefinementAbortController.current = null;
+        }
+      });
+  }, [
+    boundarySourceDurationMs,
+    broadcastContextResult,
+    broadcastContextStatus,
+    candidateGeminiInsightById,
+    candidatePassBRuntimeAvailable,
+    candidates,
+    currentAnalysisRunId,
+    getResultStore,
+    resetCandidateRanking,
+    sourceFile,
+  ]);
+
+  useEffect(() => {
+    const runId = currentAnalysisRunId;
+    const inputSignature =
+      openedRecoveredResult?.terminal.inputSignature ??
+      analysisRun?.inputSignature ??
+      sourceContentFingerprint;
+    if (
+      !analysisComplete ||
+      runId === null ||
+      inputSignature === null ||
+      sourceFile === null ||
+      sourceContentFingerprint === null ||
+      broadcastContextSamplingPlan === null ||
+      broadcastContextSamplingPlan.transcriptMode !== "adaptive-qwen-asr"
+    ) {
+      return;
+    }
+
+    const operationKey = `${runId}:${sourceContentFingerprint}`;
+    if (autoBroadcastTranscriptSourceRef.current === operationKey) {
+      return;
+    }
+    autoBroadcastTranscriptSourceRef.current = operationKey;
+    const sourceDurationMs = broadcastContextSamplingPlan.sourceDurationMs;
+    const chunks = createBroadcastContextTranscriptionChunks(
+      broadcastContextSamplingPlan.samplingWindows,
+    );
+    if (chunks.length === 0) {
+      setBroadcastTranscriptStatus("completed");
+      setBroadcastTranscriptChapters([]);
+      return;
+    }
+
+    broadcastTranscriptAbortController.current?.abort();
+    const controller = new AbortController();
+    broadcastTranscriptAbortController.current = controller;
+    setBroadcastTranscriptStatus("running");
+    setBroadcastTranscriptProgress(null);
+    setBroadcastTranscriptError(null);
+
+    void (async () => {
+      const store = getResultStore();
+      const saved = await store.getBroadcastContextSession(runId);
+      if (
+        saved !== null &&
+        saved.inputSignature === inputSignature &&
+        saved.sourceDurationMs === sourceDurationMs
+      ) {
+        if (!controller.signal.aborted && isMounted.current) {
+          setBroadcastTranscriptChapters(saved.chapters);
+          setBroadcastTranscriptStatus(
+            saved.gapChunkIds.length > 0 || !saved.completeAudioCoverage
+              ? "completedWithGaps"
+              : "completed",
+          );
+        }
+        return;
+      }
+
+      const result = await runBroadcastTranscriptWorker(sourceFile, {
+        sourceDurationMs,
+        chunks,
+        signal: controller.signal,
+        onProgress: (progress) => {
+          if (!controller.signal.aborted && isMounted.current) {
+            setBroadcastTranscriptProgress(progress);
+          }
+        },
+      });
+      if (controller.signal.aborted || !isMounted.current) {
+        return;
+      }
+      const completeAudioCoverage =
+        broadcastContextSamplingPlan.estimatedAudioCoverageRatio === 1 &&
+        result.gapChunkIds.length === 0;
+      const chapters = createBroadcastTranscriptChapters(
+        result.results,
+        sourceDurationMs,
+        completeAudioCoverage,
+      );
+      const record = {
+        kind: "broadcastContextSession" as const,
+        runId,
+        schemaVersion: BROADCAST_CONTEXT_SESSION_SCHEMA_VERSION,
+        inputSignature,
+        sourceDurationMs,
+        completeAudioCoverage,
+        chapters,
+        gapChunkIds: result.gapChunkIds,
+        modelRevision: BROADCAST_TRANSCRIPT_QWEN_MODEL_REVISION,
+        contextInputSignature: null,
+        contextResultJson: null,
+        refinementInputSignature: null,
+        refinementCandidatesJson: null,
+        recordedAt: new Date().toISOString(),
+      };
+      await store.putBroadcastContextSession(record);
+      const reopened = await store.getBroadcastContextSession(runId);
+      if (
+        reopened === null ||
+        reopened.inputSignature !== inputSignature ||
+        reopened.sourceDurationMs !== sourceDurationMs ||
+        JSON.stringify(reopened.chapters) !== JSON.stringify(chapters)
+      ) {
+        throw new Error("저장한 방송 대사 지도를 다시 확인하지 못했어요.");
+      }
+      if (!controller.signal.aborted && isMounted.current) {
+        setBroadcastTranscriptChapters(reopened.chapters);
+        setBroadcastTranscriptStatus(
+          reopened.gapChunkIds.length > 0 || !reopened.completeAudioCoverage
+            ? "completedWithGaps"
+            : "completed",
+        );
+      }
+    })()
+      .catch((error: unknown) => {
+        if (controller.signal.aborted || !isMounted.current) {
+          return;
+        }
+        setBroadcastTranscriptStatus("failed");
+        setBroadcastTranscriptError(
+          error instanceof Error && error.message.trim().length > 0
+            ? error.message
+            : "방송 전체 대사를 분석하지 못했어요.",
+        );
+      })
+      .finally(() => {
+        if (broadcastTranscriptAbortController.current === controller) {
+          broadcastTranscriptAbortController.current = null;
+        }
+      });
+  }, [
+    analysisComplete,
+    analysisRun?.inputSignature,
+    broadcastContextSamplingPlan,
+    broadcastTranscriptStatus,
+    currentAnalysisRunId,
+    getResultStore,
+    openedRecoveredResult?.terminal.inputSignature,
+    sourceContentFingerprint,
+    sourceFile,
+  ]);
+
   const copyApprovedTimecodes = async (): Promise<void> => {
     if (approvedCandidates.length === 0) {
       return;
@@ -4307,7 +5028,7 @@ function App() {
         <ol className="rh-stepper" aria-label="작업 순서">
           {[
             openedRecoveredResult !== null && !sourceReady && candidates.length > 0
-              ? "원본 다시 연결"
+              ? "원본 연결(선택)"
               : "원본 고르기",
             "AI가 먼저 찾기",
             "후보 검토",
@@ -4447,6 +5168,18 @@ function App() {
                   <button className="btn btn-secondary" type="button" onClick={focusSourceSection}>
                     원본 다시 연결
                   </button>
+                )}
+                {sourcePreviewUrl === null && candidates.length > 0 && (
+                  <input
+                    ref={reconnectSourceInput}
+                    hidden
+                    className="rh-hidden-input"
+                    type="file"
+                    accept="video/*,.mp4,.webm,.mkv,.mov,.m4v"
+                    disabled={sourceInputLocked}
+                    aria-label="원래 영상 파일 다시 연결"
+                    onChange={handleSourceInput}
+                  />
                 )}
                 <button
                   className="btn btn-secondary"
@@ -4768,10 +5501,10 @@ function App() {
                 <div>
                   <p className="rh-eyebrow">3단계 · 후보 검토</p>
                   <h3 id="candidate-title" ref={candidateHeading} tabIndex={-1}>
-                    AI가 찾은 클립 후보 {candidates.length}개
+                    빠른 탐색 후보 {candidates.length}개
                   </h3>
                   <p className="rh-help">
-                    전체 방송을 다시 보지 말고, 타임라인에서 후보를 골라 한 장면씩 판단하세요.
+                    아직 최종 클립이 아니에요. 화면·대사·전체 방송 맥락을 확인한 뒤 사용할 장면만 남깁니다.
                   </p>
                   {selectionResult.audioGapReasonCode !== undefined && selectionResult.audioGapReasonCode !== null && (
                     <p className="rh-notice" data-tone="warning" role="status">
@@ -4820,27 +5553,148 @@ function App() {
                 )}
               </div>
 
-              <div className="rh-phase-status" role="status" aria-live="polite">
-                <div>
-                  <span className="rh-phase-kicker">현재 페이즈</span>
-                  <strong>{candidatePassBDetailAnalysisLabel}</strong>
-                  <p>{candidatePassBStatusText}</p>
+              <section
+                className="rh-analysis-phase-map"
+                aria-label="AI 분석 단계"
+                aria-live="polite"
+              >
+                <div data-state="complete">
+                  <span>1</span>
+                  <strong>빠른 탐색</strong>
+                  <small>완료</small>
                 </div>
-                {candidatePassBRun !== null && (
-                  <progress
-                    className="rh-analysis-progress"
-                    max={1}
-                    value={candidatePassBProgressRatio}
-                    aria-label="자동 후보 해석 진행률"
-                  />
-                )}
-              </div>
+                <div
+                  data-state={
+                    candidatePassBBusy
+                      ? "active"
+                      : candidatePassBWorkStarted
+                        ? "complete"
+                        : "pending"
+                  }
+                >
+                  <span>2</span>
+                  <strong>후보 화면·대사</strong>
+                  <small>{candidatePassBDetailAnalysisLabel}</small>
+                  {candidatePassBRun !== null && (
+                    <progress
+                      className="rh-analysis-progress"
+                      max={1}
+                      value={candidatePassBProgressRatio}
+                      aria-label="자동 후보 해석 진행률"
+                    />
+                  )}
+                </div>
+                <div
+                  data-state={
+                    broadcastTranscriptStatus === "running" ||
+                    broadcastContextStatus === "running"
+                      ? "active"
+                      : broadcastContextStatus === "completed"
+                        ? "complete"
+                        : broadcastTranscriptStatus === "failed" ||
+                            broadcastContextStatus === "failed"
+                          ? "error"
+                          : "pending"
+                  }
+                >
+                  <span>3</span>
+                  <strong>방송 전체 맥락</strong>
+                  <small>{broadcastTranscriptStatusText}</small>
+                  {(broadcastTranscriptStatus === "running" ||
+                    broadcastContextStatus === "running") && (
+                    <progress
+                      className="rh-analysis-progress"
+                      max={1}
+                      {...(broadcastContextStatus === "running"
+                        ? {}
+                        : { value: broadcastTranscriptProgressRatio })}
+                      aria-label="방송 전체 대사 지도 진행률"
+                    />
+                  )}
+                </div>
+                <div
+                  data-state={
+                    broadcastContextStatus === "completed" &&
+                    semanticLeadRefinementStatus === "completed"
+                      ? "complete"
+                      : broadcastContextStatus === "running" ||
+                          semanticLeadRefinementStatus === "running"
+                        ? "active"
+                        : semanticLeadRefinementStatus === "failed"
+                          ? "error"
+                          : "pending"
+                  }
+                >
+                  <span>4</span>
+                  <strong>최종 클립 선별</strong>
+                  <small>
+                    {semanticLeadRefinementStatus === "running"
+                      ? "새 의미 후보 위치 확인 중"
+                      : broadcastContextStatus === "completed" &&
+                          semanticLeadRefinementStatus === "completed"
+                      ? `남은 후보 ${candidates.length}개 · 0개도 정상`
+                      : "0개도 정상"}
+                  </small>
+                </div>
+              </section>
+
+              {(broadcastTranscriptStatus === "failed" ||
+                broadcastContextStatus === "failed" ||
+                semanticLeadRefinementStatus === "failed") && (
+                <div className="rh-notice rh-notice-with-action" data-tone="warning" role="status">
+                  <span>
+                    {semanticLeadRefinementError ??
+                      broadcastContextError ??
+                      broadcastTranscriptError ??
+                      "방송 전체 맥락 분석을 마치지 못했어요."}
+                  </span>
+                  <button
+                    className="btn btn-secondary"
+                    type="button"
+                    onClick={() => {
+                      if (semanticLeadRefinementStatus === "failed") {
+                        autoSemanticLeadRefinementSourceRef.current = null;
+                        setSemanticLeadRefinementStatus("idle");
+                        setSemanticLeadRefinementError(null);
+                      } else if (broadcastContextStatus === "failed") {
+                        autoBroadcastContextSourceRef.current = null;
+                        setBroadcastContextStatus("idle");
+                        setBroadcastContextError(null);
+                      } else {
+                        autoBroadcastTranscriptSourceRef.current = null;
+                        setBroadcastTranscriptStatus("idle");
+                        setBroadcastTranscriptProgress(null);
+                        setBroadcastTranscriptError(null);
+                      }
+                    }}
+                  >
+                    다시 시도
+                  </button>
+                </div>
+              )}
+
+              {broadcastContextResult !== null && (
+                <section className="rh-context-summary" aria-labelledby="broadcast-context-title">
+                  <div>
+                    <p className="rh-eyebrow">AI 방송 요약</p>
+                    <h4 id="broadcast-context-title">전체 흐름에서 남긴 후보</h4>
+                  </div>
+                  <p>{broadcastContextResult.broadcastSummaryKo}</p>
+                  <div className="rh-context-summary-meta">
+                    <span>의미 구간 {broadcastContextResult.semanticChapters.length}개</span>
+                    <span>새 의미 후보 {broadcastContextResult.discoveredLeads.length}개</span>
+                    {broadcastContextResult.recurringThemesKo.slice(0, 4).map((themeLabel) => (
+                      <span key={themeLabel}>{themeLabel}</span>
+                    ))}
+                  </div>
+                </section>
+              )}
 
               {openedRecoveredResult !== null &&
                 sourcePreviewUrl === null &&
                 candidateReviewFeatureAvailability.hasCandidates && (
-                <div className="rh-notice rh-notice-with-action" data-tone="warning">
-                  <span>후보 시간표는 바로 검토할 수 있어요. 장면 재생은 원래 영상 파일을 다시 연결한 뒤 켜집니다.</span>
+                <div className="rh-notice rh-notice-with-action">
+                  <span>원본을 연결하면 타임라인 카드에서 바로 재생하고 클립을 받을 수 있어요.</span>
                   <button className="btn btn-secondary" type="button" onClick={focusSourceSection}>
                     원본 연결하러 가기
                   </button>
@@ -5228,10 +6082,10 @@ function App() {
                   >
                     <div className="rh-candidate-timeline-heading">
                       <div>
-                        <p className="rh-eyebrow">방송 전체 위치</p>
-                        <h3 id="candidate-timeline-heading">클립 후보 타임라인</h3>
+                        <p className="rh-eyebrow">방송 전체 사건 지도</p>
+                        <h3 id="candidate-timeline-heading">오늘 방송에서 먼저 볼 장면</h3>
                         <p>
-                          원본 방송에서 후보가 어디에 몰려 있는지 먼저 확인하세요. 원을 누르면 해당 후보를 바로 재생합니다.
+                          선의 위치는 방송 시각, 흐릿한 높이는 잠재 점수예요. 원과 요약 카드를 누르면 같은 장면을 바로 확인합니다.
                         </p>
                       </div>
                       <span className="rh-timeline-count">{orderedCandidates.length}개 후보</span>
@@ -5915,6 +6769,19 @@ function App() {
                               {candidate.evidence.chat.reactionMessageCount > 0 && (
                                 <span className="rh-evidence" data-signal="chat">반응 표현 {candidate.evidence.chat.reactionMessageCount}개</span>
                               )}
+                            </>
+                          )}
+                          {candidate.evidence.semantic !== undefined && (
+                            <>
+                              <span className="rh-evidence" data-signal="semantic">
+                                방송 전체 맥락
+                              </span>
+                              <span className="rh-evidence" data-signal="semantic">
+                                의미 확신도 {Math.round(candidate.evidence.semantic.confidence * 100)}%
+                              </span>
+                              <span className="rh-evidence" data-signal="semantic">
+                                {candidate.evidence.semantic.evidenceCueKo}
+                              </span>
                             </>
                           )}
                           </div>

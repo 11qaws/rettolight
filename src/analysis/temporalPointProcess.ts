@@ -20,31 +20,43 @@ export interface TemporalEventDensityResult {
   readonly diagnostics: TemporalEventDensityDiagnostics;
 }
 
-// Factorial helper for Poisson calculation
-function factorial(n: number): number {
-  if (n < 0) return 1;
-  let result = 1;
-  for (let i = 2; i <= n; i++) {
-    result *= i;
-  }
-  return result;
-}
-
-// Compute the probability of observing exactly k events given expected mean lambda
-function poissonProbability(k: number, lambda: number): number {
-  if (lambda === 0) return k === 0 ? 1 : 0;
-  return (Math.pow(lambda, k) * Math.exp(-lambda)) / factorial(k);
-}
-
 // Upper tail probability P(X >= k)
 function poissonUpperTail(k: number, lambda: number): number {
   if (lambda === 0) return k === 0 ? 1 : 0;
-  let sum = 0;
-  // Sum P(X = i) for i from 0 to k-1
-  for (let i = 0; i < k; i++) {
-    sum += poissonProbability(i, lambda);
+  if (k <= 0) return 1;
+
+  // Recurrence P(X=i+1)=P(X=i)*lambda/(i+1) avoids factorial overflow.
+  // For very large lambda, the first term may underflow; the normal
+  // approximation is sufficiently stable for the density diagnostic only.
+  if (lambda > 700) {
+    const z = (k - 0.5 - lambda) / Math.sqrt(lambda);
+    const cdf = 0.5 * (1 + approximateErf(z / Math.SQRT2));
+    return clampProbability(1 - cdf);
   }
-  return Math.max(0, 1 - sum);
+  let probability = Math.exp(-lambda);
+  let lowerTail = probability;
+  for (let i = 1; i < k; i += 1) {
+    probability *= lambda / i;
+    lowerTail += probability;
+  }
+  return clampProbability(1 - lowerTail);
+}
+
+function clampProbability(value: number): number {
+  return Math.max(0, Math.min(1, value));
+}
+
+// Abramowitz-Stegun 7.1.26, adequate for a diagnostic fallback.
+function approximateErf(value: number): number {
+  const sign = value < 0 ? -1 : 1;
+  const x = Math.abs(value);
+  const t = 1 / (1 + 0.3275911 * x);
+  const polynomial =
+    (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t -
+      0.284496736) * t +
+      0.254829592) *
+    t;
+  return sign * (1 - polynomial * Math.exp(-x * x));
 }
 
 export function calculateTemporalEventDensity(
