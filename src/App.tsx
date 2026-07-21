@@ -57,7 +57,9 @@ import {
 } from "./analysis/candidatePassBCost";
 import { createAnalysisBudgetEnvelope } from "./analysis/analysisBudgetPolicy";
 import {
+  createDiscoveredLeadRefinementChapters,
   createDiscoveredLeadRefinementPlan,
+  materializeRefinedDiscoveredLeadEvidence,
   refineDiscoveredLeadRange,
 } from "./analysis/discoveredLeadRefinement";
 import {
@@ -74,8 +76,14 @@ import {
 } from "./analysis/broadcastTranscriptWorkerClient";
 import type { BroadcastTranscriptWorkerProgress } from "./analysis/broadcastTranscriptWorkerProtocol";
 import {
-  BROADCAST_TRANSCRIPT_QWEN_MODEL_REVISION,
+  BROADCAST_TRANSCRIPT_ACTIVE_MODEL_REVISION,
 } from "./analysis/broadcastTranscriptQwen";
+import {
+  YOUTUBE_CAPTION_MODEL_REVISION,
+  createYouTubeCaptionChapters,
+  youtubeVideoIdFromSourceName,
+} from "./analysis/youtubeCaptionTrack";
+import { requestYouTubeCaptionTrack } from "./analysis/youtubeCaptionClient";
 import { sampleCandidateVideoFrames } from "./analysis/candidateVideoFrames";
 import {
   mergeCandidatePassBEvidence,
@@ -274,7 +282,7 @@ interface AudioAnalysisOutcome {
   readonly coverageComplete: boolean;
 }
 
-const APP_VERSION = "0.3.28";
+const APP_VERSION = "0.3.29";
 const PERSISTENCE_SCHEMA_VERSION = "0.3.0";
 const SIGNAL_ENGINE_VERSION =
   "streamer-reaction-fast-pass-v5-chat-fallback-music-confirmation";
@@ -432,25 +440,25 @@ function explainCandidatePassBError(error: unknown): string {
       ? ` (오류 코드: ${error.workerReasonCode})`
       : "";
     if (error.code === "ABORTED") {
-      return `Gemini 후보 분석을 멈췄어요. 이미 찾은 단서는 이 탭에서 그대로 볼 수 있어요.${diagnosticSuffix}`;
+      return `AI 후보 분석을 멈췄어요. 이미 찾은 단서는 이 탭에서 그대로 볼 수 있어요.${diagnosticSuffix}`;
     }
     switch (error.workerReasonCode) {
       case "PROXY_AUTH_REJECTED":
-        return `Gemini 연결 설정을 확인하지 못했어요. 잠시 뒤 다시 시도해 주세요. 기존 후보는 그대로 사용할 수 있어요.${diagnosticSuffix}`;
+        return `AI 연결 설정을 확인하지 못했어요. 잠시 뒤 다시 시도해 주세요. 기존 후보는 그대로 사용할 수 있어요.${diagnosticSuffix}`;
       case "PROXY_BAD_REQUEST":
-        return `Gemini가 앱의 요청 형식을 받을 수 없었어요. 자동 재시도하지 않았습니다. 앱을 새로고침하거나 최신 버전을 확인해 주세요. 기존 후보는 그대로 사용할 수 있어요.${diagnosticSuffix}`;
+        return `AI가 앱의 요청 형식을 받을 수 없었어요. 자동 재시도하지 않았습니다. 앱을 새로고침하거나 최신 버전을 확인해 주세요. 기존 후보는 그대로 사용할 수 있어요.${diagnosticSuffix}`;
       case "PROXY_RATE_LIMITED":
-        return `Gemini 분석 요청이 잠시 많아요. 1분 정도 기다린 뒤 직접 다시 시도해 주세요. 자동으로 반복 요청하지 않았어요.${diagnosticSuffix}`;
+        return `AI 분석 요청이 잠시 많아요. 1분 정도 기다린 뒤 직접 다시 시도해 주세요. 자동으로 반복 요청하지 않았어요.${diagnosticSuffix}`;
       case "PROXY_UNAVAILABLE":
-        return `Gemini에 연결하지 못했어요. 인터넷 연결을 확인한 뒤 원할 때 다시 시도해 주세요. 기존 후보는 그대로 사용할 수 있어요.${diagnosticSuffix}`;
+        return `AI에 연결하지 못했어요. 인터넷 연결을 확인한 뒤 원할 때 다시 시도해 주세요. 기존 후보는 그대로 사용할 수 있어요.${diagnosticSuffix}`;
       case "PROXY_INVALID_RESPONSE":
-        return `Gemini 답변을 안전한 후보 단서로 확인하지 못했어요. 잘못된 문장은 표시하지 않았고 기존 후보는 그대로예요.${diagnosticSuffix}`;
+        return `AI 답변을 안전한 후보 단서로 확인하지 못했어요. 잘못된 문장은 표시하지 않았고 기존 후보는 그대로예요.${diagnosticSuffix}`;
       case "PROXY_REQUEST_REJECTED":
-        return `Gemini가 후보 분석 요청을 완료하지 못했어요. 잠시 뒤 다시 시도해 주세요.${diagnosticSuffix}`;
+        return `AI가 후보 분석 요청을 완료하지 못했어요. 잠시 뒤 다시 시도해 주세요.${diagnosticSuffix}`;
     }
-    return `Gemini 후보 분석을 끝까지 마치지 못했어요.${diagnosticSuffix}`;
+    return `AI 후보 분석을 끝까지 마치지 못했어요.${diagnosticSuffix}`;
   }
-  return "Gemini 후보 분석을 끝까지 마치지 못했어요. 기존 오디오·채팅 근거와 후보는 그대로 사용할 수 있어요.";
+  return "AI 후보 분석을 끝까지 마치지 못했어요. 기존 오디오·채팅 근거와 후보는 그대로 사용할 수 있어요.";
 }
 
 function candidateAudioEventRunFailureReason(
@@ -565,7 +573,7 @@ function candidateRankingTranscriptNote(entry: CandidateRankingEntry): string | 
     return "재생해 볼 대사 위치도 있어요. 대사 유무 자체는 순위 점수에 더하지 않았어요.";
   }
   if (entry.reasonCodes.includes("provisional-transcript-cue")) {
-    return "Gemini 대사 추정 위치도 있지만 틀릴 수 있어 순위 점수에는 더하지 않았어요.";
+    return "AI 대사 추정 위치도 있지만 틀릴 수 있어 순위 점수에는 더하지 않았어요.";
   }
   return null;
 }
@@ -1158,44 +1166,44 @@ function App() {
         ));
   const candidatePassBStatusText =
     candidatePassBStartPending
-      ? "Gemini가 후보 오디오와 대표 화면을 함께 준비하고 있어요."
+      ? "AI가 후보 오디오와 대표 화면을 함께 준비하고 있어요."
       : candidatePassBRun === null
-      ? "빠르게 찾은 후보는 지금 바로 검토할 수 있어요. 원할 때 Gemini로 한국어 대사와 사건 단서를 더 붙여 보세요."
+      ? "빠르게 찾은 후보는 지금 바로 검토할 수 있어요. 원할 때 AI로 한국어 대사와 사건 단서를 더 붙여 보세요."
       : candidatePassBRun.status === "idle" || candidatePassBRun.status === "preparing"
-        ? "Gemini 후보 분석 작업을 준비하고 있어요."
+        ? "AI 후보 분석 작업을 준비하고 있어요."
         : candidatePassBRun.status === "loadingModel"
-          ? "Gemini 연결을 준비하고 있어요."
+          ? "AI 연결을 준비하고 있어요."
           : candidatePassBRun.status === "transcribing"
             ? `후보 ${candidatePassBCurrentOrdinal}/${candidatePassBSummary?.totalCandidateCount ?? candidates.length}의 짧은 오디오와 대표 화면에서 한국어 대사·사건 단서를 확인하고 있어요.`
             : candidatePassBRun.status === "finalizing"
-              ? "Gemini 답변과 후보 시간을 마지막으로 확인하고 있어요."
+              ? "AI 답변과 후보 시간을 마지막으로 확인하고 있어요."
             : candidatePassBRun.status === "cancelling"
               ? "분석을 멈추고 현재 작업을 안전하게 정리하고 있어요."
               : candidatePassBRun.status === "completed"
-                ? `후보 ${candidatePassBSummary?.clueFoundCount ?? 0}개에서 Gemini 한국어 대사·사건 단서를 찾았어요.`
+                ? `후보 ${candidatePassBSummary?.clueFoundCount ?? 0}개에서 AI 한국어 대사·사건 단서를 찾았어요.`
                 : candidatePassBRun.status === "completedWithGaps"
-                  ? `Gemini 단서 ${candidatePassBSummary?.clueFoundCount ?? 0}개 후보 · 분명한 대사 없음 ${candidatePassBSummary?.noClearSpeechCount ?? 0}개 · 건너뜀 ${candidatePassBSummary?.failedCount ?? 0}개로 마쳤어요.`
+                  ? `AI 단서 ${candidatePassBSummary?.clueFoundCount ?? 0}개 후보 · 분명한 대사 없음 ${candidatePassBSummary?.noClearSpeechCount ?? 0}개 · 건너뜀 ${candidatePassBSummary?.failedCount ?? 0}개로 마쳤어요.`
                   : candidatePassBRun.status === "cancelled"
-                    ? "Gemini 후보 분석을 멈췄어요. 이미 찾은 단서는 그대로 남아 있어요."
-                     : "Gemini 후보 분석을 마치지 못했어요. 기존 후보는 그대로 검토할 수 있어요.";
+                    ? "AI 후보 분석을 멈췄어요. 이미 찾은 단서는 그대로 남아 있어요."
+                     : "AI 후보 분석을 마치지 못했어요. 기존 후보는 그대로 검토할 수 있어요.";
   const candidatePassBDetailAnalysisLabel =
     candidatePassBStartPending
-      ? "Gemini 준비 중"
+      ? "AI 준비 중"
       : candidatePassBRun === null || candidatePassBRun.status === "idle"
         ? "시작 전"
         : candidatePassBRun.status === "preparing" || candidatePassBRun.status === "loadingModel"
-          ? "Gemini 준비 중"
+          ? "AI 준비 중"
           : candidatePassBRun.status === "transcribing" || candidatePassBRun.status === "finalizing"
-            ? "Gemini 분석 중"
+            ? "AI 분석 중"
             : candidatePassBRun.status === "cancelling"
-              ? "Gemini 중지 중"
+              ? "AI 중지 중"
               : candidatePassBRun.status === "completed"
-                ? "Gemini 분석 완료"
+                ? "AI 분석 완료"
                 : candidatePassBRun.status === "completedWithGaps"
-                  ? "Gemini 일부 완료"
+                  ? "AI 일부 완료"
                   : candidatePassBRun.status === "cancelled"
-                    ? "Gemini 분석 중지"
-                    : "Gemini 분석 실패";
+                    ? "AI 분석 중지"
+                    : "AI 분석 실패";
   const candidateAudioEventBusy =
     candidateAudioEventStartPending ||
     (candidateAudioEventRun !== null &&
@@ -2888,7 +2896,7 @@ function App() {
       .catch(() => {
         if (isMounted.current && candidatePassBIdentity.current?.analysisRunId === runId) {
           setCandidatePassBError(
-            "Gemini 결과를 브라우저 기록에 저장하지 못했어요. 현재 화면의 결과는 계속 확인할 수 있어요.",
+            "AI 결과를 브라우저 기록에 저장하지 못했어요. 현재 화면의 결과는 계속 확인할 수 있어요.",
           );
         }
       });
@@ -2948,7 +2956,7 @@ function App() {
       candidatePassBStartPendingRef.current = false;
       setCandidatePassBStartPending(false);
       setCandidatePassBError(
-        "Gemini로 확인할 후보 시간을 읽지 못했어요. 빠른 분석을 다시 실행해 주세요.",
+        "AI로 확인할 후보 시간을 읽지 못했어요. 빠른 분석을 다시 실행해 주세요.",
       );
       return;
     }
@@ -3046,7 +3054,7 @@ function App() {
     setCandidatePassBCandidateProgress(null);
     setCandidatePassBError(null);
     if (!applyCandidatePassBEvent({ type: "START_REQUESTED" })) {
-      setCandidatePassBError("Gemini 후보 분석을 시작하지 못했어요. 다시 시도해 주세요.");
+      setCandidatePassBError("AI 후보 분석을 시작하지 못했어요. 다시 시도해 주세요.");
       return;
     }
     if (
@@ -3056,7 +3064,7 @@ function App() {
         type: "WORKER_PREPARED",
       })
     ) {
-      setCandidatePassBError("Gemini 후보 분석 작업을 준비하지 못했어요. 다시 시도해 주세요.");
+      setCandidatePassBError("AI 후보 분석 작업을 준비하지 못했어요. 다시 시도해 주세요.");
       return;
     }
 
@@ -3263,8 +3271,8 @@ function App() {
         });
         setCandidatePassBError(
           forcedTerminationAccepted
-            ? "Gemini 후보 분석을 멈추고 작업 공간을 정리했어요. 이미 찾은 단서는 이 탭에 그대로 남아 있어요."
-            : "Gemini 후보 분석 작업을 정리하지 못했어요. 기존 후보는 그대로 사용할 수 있어요.",
+            ? "AI 후보 분석을 멈추고 작업 공간을 정리했어요. 이미 찾은 단서는 이 탭에 그대로 남아 있어요."
+            : "AI 후보 분석 작업을 정리하지 못했어요. 기존 후보는 그대로 사용할 수 있어요.",
         );
         return;
       }
@@ -4675,7 +4683,7 @@ function App() {
         currentAnalysisRunId,
         JSON.stringify(plan),
         JSON.stringify(broadcastContextResult.discoveredLeads),
-        BROADCAST_TRANSCRIPT_QWEN_MODEL_REVISION,
+        BROADCAST_TRANSCRIPT_ACTIVE_MODEL_REVISION,
       ]);
       if (controller.signal.aborted || !isMounted.current) return;
       const store = getResultStore();
@@ -4706,30 +4714,116 @@ function App() {
       if (result.results.length === 0) {
         throw new Error("새 의미 후보의 정확한 대사 위치를 다시 찾지 못했어요.");
       }
-      const semanticCandidates: UnifiedHighlightCandidate[] = [];
-        for (const lead of broadcastContextResult.discoveredLeads) {
-          const range = refineDiscoveredLeadRange(
-            lead,
+      const parentLeadById = new Map(
+        broadcastContextResult.discoveredLeads.map((lead) => [lead.leadId, lead]),
+      );
+      const refinementResults = await Promise.all(
+        plan.selectedLeadIds.map(async (leadId) => {
+          const chapters = createDiscoveredLeadRefinementChapters(
+            leadId,
             plan,
             result.results,
-            boundarySourceDurationMs,
+            (() => {
+              const parent = parentLeadById.get(leadId);
+              return parent === undefined
+                ? ""
+                : `${parent.eventSummaryKo} / ${parent.evidenceCueKo}`;
+            })(),
           );
-          if (range === null || range.transcriptMatchScore < 0.2) continue;
-          const matchedSegment = plan.segments.find(
-            (segment) => segment.segmentId === range.matchedSegmentId,
+          if (chapters.length === 0) {
+            return { leadId, failed: true, leads: [] } as const;
+          }
+          try {
+            const refined = await requestBroadcastContextDeepseek(
+              {
+                sourceDurationMs: boundarySourceDurationMs,
+                chapters,
+                candidates: [],
+              },
+              { signal: controller.signal, analysisMode: "refinement" },
+            );
+            return {
+              leadId,
+              failed: false,
+              leads: refined.discoveredLeads,
+            } as const;
+          } catch {
+            return { leadId, failed: true, leads: [] } as const;
+          }
+        }),
+      );
+      if (controller.signal.aborted || !isMounted.current) return;
+
+      const proposals: UnifiedHighlightCandidate[] = [];
+      for (const refinement of refinementResults) {
+        if (!refinement.failed) {
+          for (const lead of refinement.leads) {
+            const evidence = materializeRefinedDiscoveredLeadEvidence(
+              lead,
+              result.results,
+              boundarySourceDurationMs,
+            );
+            if (evidence === null) continue;
+            proposals.push(
+              createSemanticLeadCandidate(
+                lead,
+                evidence.range,
+                evidence.transcriptKo,
+              ),
+            );
+          }
+          continue;
+        }
+
+        // A transport failure must not erase a paid overview result. Keep the
+        // previous cue matcher for that parent only; a successful empty result
+        // is an intentional abstention and therefore stays empty.
+        const parentLead = parentLeadById.get(refinement.leadId);
+        if (parentLead === undefined) continue;
+        const range = refineDiscoveredLeadRange(
+          parentLead,
+          plan,
+          result.results,
+          boundarySourceDurationMs,
+        );
+        if (range === null || range.transcriptMatchScore < 0.2) continue;
+        const matchedSegment = plan.segments.find(
+          (segment) => segment.segmentId === range.matchedSegmentId,
+        );
+        const transcript = matchedSegment === undefined
+          ? undefined
+          : result.results.find(
+              (item) =>
+                item.sourceStartMs === matchedSegment.sourceStartMs &&
+                item.sourceEndMs === matchedSegment.sourceEndMs,
+            );
+        if (transcript !== undefined) {
+          proposals.push(
+            createSemanticLeadCandidate(parentLead, range, transcript.textKo),
           );
-          const transcript =
-            matchedSegment === undefined
-              ? undefined
-              : result.results.find(
-                  (item) =>
-                    item.sourceStartMs === matchedSegment.sourceStartMs &&
-                    item.sourceEndMs === matchedSegment.sourceEndMs,
+        }
+      }
+
+      const semanticCandidates: UnifiedHighlightCandidate[] = [];
+      for (const proposal of [...proposals].sort(
+        (left, right) => right.score - left.score || left.peakMs - right.peakMs,
+      )) {
+        const duplicate = semanticCandidates.some((existing) => {
+          const overlapMs = Math.max(
+            0,
+            Math.min(existing.endMs, proposal.endMs) -
+              Math.max(existing.startMs, proposal.startMs),
           );
-          if (transcript === undefined) continue;
-          const proposal = createSemanticLeadCandidate(lead, range, transcript.textKo);
+          const shorterMs = Math.min(
+            existing.endMs - existing.startMs,
+            proposal.endMs - proposal.startMs,
+          );
+          return shorterMs > 0 && overlapMs / shorterMs >= 0.6;
+        });
+        if (!duplicate && semanticCandidates.length < 12) {
           semanticCandidates.push(proposal);
         }
+      }
       const currentSession = await store.getBroadcastContextSession(currentAnalysisRunId);
       if (currentSession === null) {
         throw new Error("새 의미 후보를 저장할 분석 세션을 찾지 못했어요.");
@@ -4821,10 +4915,14 @@ function App() {
 
     void (async () => {
       const store = getResultStore();
+      const youtubeVideoId = youtubeVideoIdFromSourceName(sourceFile.name);
       const saved = await store.getBroadcastContextSession(runId);
       if (
         saved !== null &&
         saved.inputSignature === inputSignature &&
+        (saved.modelRevision === BROADCAST_TRANSCRIPT_ACTIVE_MODEL_REVISION ||
+          (youtubeVideoId !== null &&
+            saved.modelRevision === YOUTUBE_CAPTION_MODEL_REVISION)) &&
         saved.sourceDurationMs === sourceDurationMs
       ) {
         if (!controller.signal.aborted && isMounted.current) {
@@ -4836,6 +4934,70 @@ function App() {
           );
         }
         return;
+      }
+
+      const persistTranscriptMap = async (
+        chapters: readonly BroadcastContextChapterInput[],
+        completeAudioCoverage: boolean,
+        gapChunkIds: readonly string[],
+        modelRevision: string,
+      ) => {
+        const record = {
+          kind: "broadcastContextSession" as const,
+          runId,
+          schemaVersion: BROADCAST_CONTEXT_SESSION_SCHEMA_VERSION,
+          inputSignature,
+          sourceDurationMs,
+          completeAudioCoverage,
+          chapters,
+          gapChunkIds,
+          modelRevision,
+          contextInputSignature: null,
+          contextResultJson: null,
+          refinementInputSignature: null,
+          refinementCandidatesJson: null,
+          recordedAt: new Date().toISOString(),
+        };
+        await store.putBroadcastContextSession(record);
+        const reopened = await store.getBroadcastContextSession(runId);
+        if (
+          reopened === null ||
+          reopened.inputSignature !== inputSignature ||
+          reopened.sourceDurationMs !== sourceDurationMs ||
+          JSON.stringify(reopened.chapters) !== JSON.stringify(chapters)
+        ) {
+          throw new Error("저장한 방송 대사 지도를 다시 확인하지 못했어요.");
+        }
+        return reopened;
+      };
+
+      if (youtubeVideoId !== null) {
+        try {
+          const captionTrack = await requestYouTubeCaptionTrack(youtubeVideoId, {
+            signal: controller.signal,
+          });
+          if (controller.signal.aborted || !isMounted.current) return;
+          const captionChapters = createYouTubeCaptionChapters(
+            captionTrack,
+            sourceDurationMs,
+          );
+          if (captionChapters.length > 0) {
+            const reopened = await persistTranscriptMap(
+              captionChapters,
+              true,
+              [],
+              YOUTUBE_CAPTION_MODEL_REVISION,
+            );
+            if (!controller.signal.aborted && isMounted.current) {
+              setBroadcastTranscriptChapters(reopened.chapters);
+              setBroadcastTranscriptStatus("completed");
+            }
+            return;
+          }
+        } catch {
+          // YouTube may throttle or withhold captions. The bounded Qwen audio
+          // path below is the automatic fallback and needs no user action.
+        }
       }
 
       const result = await runBroadcastTranscriptWorker(sourceFile, {
@@ -4859,32 +5021,12 @@ function App() {
         sourceDurationMs,
         completeAudioCoverage,
       );
-      const record = {
-        kind: "broadcastContextSession" as const,
-        runId,
-        schemaVersion: BROADCAST_CONTEXT_SESSION_SCHEMA_VERSION,
-        inputSignature,
-        sourceDurationMs,
-        completeAudioCoverage,
+      const reopened = await persistTranscriptMap(
         chapters,
-        gapChunkIds: result.gapChunkIds,
-        modelRevision: BROADCAST_TRANSCRIPT_QWEN_MODEL_REVISION,
-        contextInputSignature: null,
-        contextResultJson: null,
-        refinementInputSignature: null,
-        refinementCandidatesJson: null,
-        recordedAt: new Date().toISOString(),
-      };
-      await store.putBroadcastContextSession(record);
-      const reopened = await store.getBroadcastContextSession(runId);
-      if (
-        reopened === null ||
-        reopened.inputSignature !== inputSignature ||
-        reopened.sourceDurationMs !== sourceDurationMs ||
-        JSON.stringify(reopened.chapters) !== JSON.stringify(chapters)
-      ) {
-        throw new Error("저장한 방송 대사 지도를 다시 확인하지 못했어요.");
-      }
+        completeAudioCoverage,
+        result.gapChunkIds,
+        BROADCAST_TRANSCRIPT_ACTIVE_MODEL_REVISION,
+      );
       if (!controller.signal.aborted && isMounted.current) {
         setBroadcastTranscriptChapters(reopened.chapters);
         setBroadcastTranscriptStatus(
@@ -5796,9 +5938,9 @@ function App() {
               {candidateReviewFeatureAvailability.showPassB && (
                 <section className="rh-passb-panel rh-gemini-panel" aria-labelledby="pass-b-title">
                   <div className="rh-passb-copy">
-                    <p className="rh-eyebrow">자동 페이즈 · Gemini 해석</p>
+                    <p className="rh-eyebrow">자동 페이즈 · AI 해석</p>
                     <h4 id="pass-b-title">화면·오디오·대사 맥락 정리</h4>
-                    <p>Gemini가 후보마다 사건과 스트리머 반응을 한국어로 설명합니다.</p>
+                    <p>AI가 후보마다 사건과 스트리머 반응을 한국어로 설명합니다.</p>
                     <p className="rh-cost-note">
                       현재 전송량 기준 예상 비용 {formatEstimatedUsd(candidatePassBCostEstimate.totalCostUsd)} ·
                       입력 약 {candidatePassBCostEstimate.inputTokens.toLocaleString()}토큰 + 후보별 화면 4장 기준
@@ -5836,7 +5978,7 @@ function App() {
                           ? "오디오와 대표 화면 준비 중…"
                           : candidatePassBRun?.status === "cancelling"
                             ? "멈추는 중…"
-                            : "Gemini 분석 멈추기"}
+                            : "AI 분석 멈추기"}
                       </button>
                     )}
                     {sourceFile === null && (
@@ -5852,25 +5994,25 @@ function App() {
                         className="rh-analysis-progress"
                         max={1}
                         value={candidatePassBProgressRatio}
-                        aria-label="Gemini 후보 대사와 사건 분석 진행률"
+                        aria-label="AI 후보 대사와 사건 분석 진행률"
                       />
                     )}
                     {selectionResult.audioGapReasonCode === "NO_AUDIO_TRACK" && (
-                      <p>이 원본에는 읽을 소리가 없어 Gemini 오디오 분석을 사용할 수 없어요.</p>
+                      <p>이 원본에는 읽을 소리가 없어 AI 오디오 분석을 사용할 수 없어요.</p>
                     )}
                     {sourceFile !== null && !candidatePassBRuntimeAvailable && (
                       <p>이 브라우저에서는 후보 오디오를 안전하게 준비할 수 없어요. 최신 Chrome이나 Edge에서 다시 열어 주세요.</p>
                     )}
                     {sourceFile === null && (
-                      <p>Gemini 분석을 시작하려면 먼저 같은 원본 영상 파일을 다시 연결해 주세요.</p>
+                      <p>AI 분석을 시작하려면 먼저 같은 원본 영상 파일을 다시 연결해 주세요.</p>
                     )}
                     {!candidatePassBBusy && candidateAudioEventBusy && (
-                      <p>반응 종류 AI 확인이 끝나면 Gemini 분석을 시작할 수 있어요.</p>
+                      <p>반응 종류 확인이 끝나면 AI 분석을 시작할 수 있어요.</p>
                     )}
                     {candidatePassBError !== null && <p role="alert">{candidatePassBError}</p>}
                     {candidatePassBWorkStarted && (
                       <p>
-                        Gemini 대사·해석은 재생 확인을 돕는 임시 단서예요. 새로고침하면
+                        AI 대사·해석은 재생 확인을 돕는 임시 단서예요. 새로고침하면
                         사라지며, 현재 CSV·Markdown·JSON·복사 결과에는 포함되지 않아요.
                       </p>
                     )}
@@ -5901,7 +6043,7 @@ function App() {
                       <p>
                         방송 오디오와 채팅 반응을 중심으로 보고 화면 변화는 문맥으로만 낮게
                         반영해요. 모든 후보를 빠짐없이 끝낸 반응 종류 분석만 오디오 근거를 조금
-                        보강하고, Gemini 대사 문구는 순위 점수에 넣지 않아요.
+                        보강하고, AI 대사 문구는 순위 점수에 넣지 않아요.
                       </p>
                     </div>
                     <span className="rh-ranking-count" aria-hidden="true">
@@ -6514,10 +6656,10 @@ function App() {
                         {candidateGeminiInsight !== undefined && (
                           <div
                             className="rh-gemini-quick-summary"
-                            aria-label={`후보 ${index + 1}의 Gemini 화면·오디오 요약`}
+                            aria-label={`후보 ${index + 1}의 AI 화면·오디오 요약`}
                           >
                             <div>
-                            <strong>Gemini가 화면·오디오에서 해석한 사건 단서</strong>
+                            <strong>AI가 화면·오디오에서 해석한 사건 단서</strong>
                               <span>재생 확인 필요</span>
                             </div>
                             <p>{candidateGeminiInsight.eventSummaryKo}</p>
@@ -6565,10 +6707,10 @@ function App() {
                           {candidateGeminiInsight !== undefined && (
                             <section
                               className="rh-gemini-insight"
-                              aria-label={`후보 ${index + 1}의 Gemini 화면·오디오 해석`}
+                              aria-label={`후보 ${index + 1}의 AI 화면·오디오 해석`}
                             >
                               <div className="rh-gemini-insight-heading">
-                                <strong>Gemini 화면·오디오 해석</strong>
+                                <strong>AI 화면·오디오 해석</strong>
                                 <span>직접 재생 확인 필요</span>
                               </div>
                               <p>
@@ -6591,7 +6733,7 @@ function App() {
                               </dl>
                               {candidateGeminiInsight.uncertaintiesKo.length > 0 && (
                                 <div className="rh-gemini-uncertainties">
-                                  <strong>Gemini도 확실히 알 수 없었던 점</strong>
+                                  <strong>AI도 확실히 알 수 없었던 점</strong>
                                   <ul>
                                     {candidateGeminiInsight.uncertaintiesKo.map((uncertainty, uncertaintyIndex) => (
                                       <li key={`${uncertaintyIndex}-${uncertainty}`}>{uncertainty}</li>
@@ -6690,8 +6832,8 @@ function App() {
                             </div>
                           )}
                           {narrative.cues.length > 0 && (
-                            <div className="rh-transcript-cues" aria-label="시간 위치가 있는 Gemini 한국어 대사 추정">
-                              <strong>눌러서 바로 확인할 Gemini 한국어 대사 위치</strong>
+                            <div className="rh-transcript-cues" aria-label="시간 위치가 있는 AI 한국어 대사 추정">
+                              <strong>눌러서 바로 확인할 AI 한국어 대사 위치</strong>
                               <ul>
                                 {narrative.cues.map((cue) => {
                                   const cueInsideCurrentRange =
@@ -6705,7 +6847,7 @@ function App() {
                                         className="rh-transcript-cue"
                                         type="button"
                                         disabled={cueDisabled}
-                                        aria-label={`${formatDuration(cue.absoluteStartMs)} ${cue.phaseLabel}, Gemini 한국어 대사 추정 “${cue.text}”${cueInsideCurrentRange ? " 재생" : ", 현재 조정한 구간 밖"}`}
+                                        aria-label={`${formatDuration(cue.absoluteStartMs)} ${cue.phaseLabel}, AI 한국어 대사 추정 “${cue.text}”${cueInsideCurrentRange ? " 재생" : ", 현재 조정한 구간 밖"}`}
                                         onClick={() =>
                                           playCandidateCue(
                                             candidate,

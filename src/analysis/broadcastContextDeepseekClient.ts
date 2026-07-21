@@ -11,6 +11,11 @@ import {
 export const BROADCAST_CONTEXT_PROXY_ENDPOINT =
   "https://rettohighlight-gemini.11qaws.workers.dev/v1/broadcast-context" as const;
 
+export type BroadcastContextAnalysisMode =
+  | "overview"
+  | "refinement"
+  | "selection";
+
 type FetchImplementation = (
   input: RequestInfo | URL,
   init?: RequestInit,
@@ -52,6 +57,7 @@ export async function requestBroadcastContextDeepseek(
   options: {
     readonly signal?: AbortSignal;
     readonly fetchImplementation?: FetchImplementation;
+    readonly analysisMode?: BroadcastContextAnalysisMode;
   } = {},
 ): Promise<BroadcastContextResult> {
   let request;
@@ -75,6 +81,9 @@ export async function requestBroadcastContextDeepseek(
           sourceDurationMs: request.sourceDurationMs,
           chapters: request.chapters,
           candidates: request.candidates,
+          ...(options.analysisMode === undefined || options.analysisMode === "overview"
+            ? {}
+            : { analysisMode: options.analysisMode }),
         }),
         credentials: "omit",
         cache: "no-store",

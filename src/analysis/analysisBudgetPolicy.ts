@@ -1,11 +1,11 @@
 import { createBroadcastContextSamplingPlan } from "./broadcastContextSamplingPlan";
 import { estimateCandidatePassBCost } from "./candidatePassBCost";
 
-export const ANALYSIS_BUDGET_POLICY_VERSION = "1.0.0" as const;
+export const ANALYSIS_BUDGET_POLICY_VERSION = "1.1.0" as const;
 export const ANALYSIS_BUDGET_LIMIT_USD = 1;
 
 const VISUAL_CHAPTERING_RESERVE_USD = 0.08;
-const DEEPSEEK_CONTEXT_RESERVE_USD = 0.06;
+const CONTEXT_REASONING_RESERVE_USD = 0.06;
 const SEMANTIC_LEAD_REFINEMENT_ASR_RESERVE_USD = 0.03;
 const PRO_ADJUDICATION_PER_CANDIDATE_USD = 0.04;
 const PRO_ADJUDICATION_LIMIT_USD = 0.12;
@@ -15,9 +15,9 @@ export interface AnalysisBudgetEnvelope {
   readonly policyVersion: typeof ANALYSIS_BUDGET_POLICY_VERSION;
   readonly limitUsd: typeof ANALYSIS_BUDGET_LIMIT_USD;
   readonly qwenAsrUsd: number;
-  readonly geminiCandidatePerceptionUsd: number;
+  readonly candidatePerceptionUsd: number;
   readonly qwenVisualChapteringReserveUsd: number;
-  readonly deepseekContextReserveUsd: number;
+  readonly contextReasoningReserveUsd: number;
   readonly semanticLeadRefinementAsrReserveUsd: number;
   readonly proAdjudicationReserveUsd: number;
   readonly retryAndPriceVarianceReserveUsd: number;
@@ -56,7 +56,7 @@ export function createAnalysisBudgetEnvelope(
     asr.estimatedAsrCostUsd +
     candidatePerception.totalCostUsd +
     VISUAL_CHAPTERING_RESERVE_USD +
-    DEEPSEEK_CONTEXT_RESERVE_USD +
+    CONTEXT_REASONING_RESERVE_USD +
     SEMANTIC_LEAD_REFINEMENT_ASR_RESERVE_USD +
     proAdjudicationReserveUsd +
     RETRY_AND_PRICE_VARIANCE_RESERVE_USD;
@@ -65,9 +65,9 @@ export function createAnalysisBudgetEnvelope(
     policyVersion: ANALYSIS_BUDGET_POLICY_VERSION,
     limitUsd: ANALYSIS_BUDGET_LIMIT_USD,
     qwenAsrUsd: asr.estimatedAsrCostUsd,
-    geminiCandidatePerceptionUsd: candidatePerception.totalCostUsd,
+    candidatePerceptionUsd: candidatePerception.totalCostUsd,
     qwenVisualChapteringReserveUsd: VISUAL_CHAPTERING_RESERVE_USD,
-    deepseekContextReserveUsd: DEEPSEEK_CONTEXT_RESERVE_USD,
+    contextReasoningReserveUsd: CONTEXT_REASONING_RESERVE_USD,
     semanticLeadRefinementAsrReserveUsd:
       SEMANTIC_LEAD_REFINEMENT_ASR_RESERVE_USD,
     proAdjudicationReserveUsd,

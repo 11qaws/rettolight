@@ -1,5 +1,15 @@
 # Development Log
 
+## 2026-07-22 `0.3.29` Qwen multimodal hierarchy and negative-stream precision
+
+- Switched the deployed candidate audio+frame path to `qwen3.5-omni-flash` and kept `qwen3.7-plus` for compressed whole-broadcast routing. Candidate frames now carry relative timestamp labels, small unreadable text and avatar-frame motion are explicitly uncertain, and the UI uses provider-neutral AI wording.
+- Replaced the stale Gemini cost display with Singapore Qwen3.5 Omni modality pricing. The conservative twelve-candidate 45-second estimate is about `$0.05`; whole-broadcast transcription, context, refinement, adjudication, and retry reserves remain under the `$1` planning envelope.
+- Added hierarchical semantic refinement. A broad overview lead is re-transcribed in one-minute cells under a `$0.03` reserve, parent events are refined in parallel into up to three distinct moments, and the evidence cue selects the final 60-second source cell rather than a potentially wrong broad midpoint.
+- Added a precision-first routine-gameplay gate after model output. Ordinary falling, dying, getting lost, resource collection, crafting, construction, and survival do not add editor cards solely because the streamer describes them dramatically; accountability, rare achievements, serious bugs, social conflict, and long-running payoffs remain exceptions.
+- Added best-effort matching YouTube Korean captions through the public Android player/timedtext route. The selected file's bracketed video ID is validated, successful captions become the saved complete transcript map, and 403/429/missing captions fall through to bounded Qwen audio transcription.
+- Three real-sample checks now satisfy separate contracts: food overview recovers the broad quiz range and the production refinement separates 칼국수·껍데기·두바이초콜릿; accidental subscription recovers the exact apology/accountability cells; Minecraft relay produces zero selected and zero discovered clips.
+- Worker deployments advanced through prompt and transport smokes; the current verified Worker is `cd863679-9423-41fd-a512-95c8f606ad89` before the final static release. Targeted tests, TypeScript, ESLint, and the Vite production build pass.
+
 ## 2026-07-22 `0.3.27` context-qualified selection and negative ground truth
 
 - Reframed the three long-form samples as distinct evaluation contracts: food talk preserves the known 칼국수·껍데기·두바이초콜릿 positives while rejecting opening music; the Minecraft relay is a valid all-negative/abstention sample; the accidental-subscription stream requires the exact apology/accountability moment and does not invent a timestamp before human annotation.

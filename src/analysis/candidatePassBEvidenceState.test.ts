@@ -12,7 +12,7 @@ const provisional: CandidatePassBEvidence = {
       phase: "near-peak",
       absoluteStartMs: 10_000,
       absoluteEndMs: 12_000,
-      text: "Gemini 대사 추정",
+      text: "AI 대사 추정",
       confidence: null,
     },
   ],
@@ -20,7 +20,7 @@ const provisional: CandidatePassBEvidence = {
     event: "추정",
     why: "확인 필요",
     reviewHint: "재생 확인",
-    basisLabel: "Gemini 대사 추정 · 빠른 근거 유지",
+    basisLabel: "AI 대사 추정 · 빠른 근거 유지",
   },
   quality: {
     receivedChunkCount: 1,
@@ -82,7 +82,7 @@ describe("mergeCandidatePassBEvidence", () => {
       fallbackReason: null,
       overlay: {
         ...provisional.overlay,
-        basisLabel: "Gemini 대사 단서 · 재생 확인 필요",
+        basisLabel: "AI 대사 단서 · 재생 확인 필요",
       },
     } satisfies CandidatePassBEvidence;
     const current = { "candidate-1": grounded };

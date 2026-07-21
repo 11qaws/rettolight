@@ -178,7 +178,7 @@ describe("broadcastContextProtocol", () => {
         chapters: [
           {
             ...input.chapters[0],
-            summaryKo: "가".repeat(1_201),
+            summaryKo: "가".repeat(3_001),
           },
         ],
       }),

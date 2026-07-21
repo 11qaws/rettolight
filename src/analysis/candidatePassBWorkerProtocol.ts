@@ -1,6 +1,11 @@
-/** Google AI's official Gemini 3.5 Flash model identifier. */
-export const CANDIDATE_PASS_B_MODEL_ID = "gemini-3.5-flash" as const;
-export const CANDIDATE_PASS_B_MODEL_REVISION = "3.5-flash-07-2026" as const;
+/** Provider-specific IDs plus the currently deployed default. */
+export const CANDIDATE_PASS_B_GEMINI_MODEL_ID = "gemini-3.5-flash" as const;
+export const CANDIDATE_PASS_B_GEMINI_MODEL_REVISION = "3.5-flash-07-2026" as const;
+export const CANDIDATE_PASS_B_QWEN_MODEL_ID = "qwen3.5-omni-flash" as const;
+export const CANDIDATE_PASS_B_QWEN_MODEL_REVISION =
+  "qwen3.5-omni-flash-multimodal-2026-07-22" as const;
+export const CANDIDATE_PASS_B_MODEL_ID = CANDIDATE_PASS_B_QWEN_MODEL_ID;
+export const CANDIDATE_PASS_B_MODEL_REVISION = CANDIDATE_PASS_B_QWEN_MODEL_REVISION;
 export const CANDIDATE_PASS_B_DTYPE = "remote" as const;
 export const CANDIDATE_PASS_B_DEVICE = "remote" as const;
 export const CANDIDATE_PASS_B_LANGUAGE = "korean" as const;

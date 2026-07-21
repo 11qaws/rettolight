@@ -25,7 +25,7 @@ describe("aiProviderConfiguration", () => {
     });
   });
 
-  it("resolves a bounded Qwen connection without making it active", () => {
+  it("resolves an active bounded Qwen candidate connection", () => {
     const environment = {
       CANDIDATE_INSIGHT_PROVIDER: "qwen",
       QWEN_API_KEY: "qwen-secret",
@@ -43,17 +43,16 @@ describe("aiProviderConfiguration", () => {
         endpoint:
           "https://workspace-123.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1/chat/completions",
         apiKey: "qwen-secret",
-        workspaceId: "workspace-123",
         region: "singapore",
       },
     });
     expect(manifest.candidateInsight).toEqual({
       selectedProvider: "qwen",
       modelId: "qwen3.5-omni-flash",
-      modelRevision: "qwen3.5-omni-flash-api-reviewed-2026-07-22",
-      implementationStatus: "prepared",
+      modelRevision: "qwen3.5-omni-flash-multimodal-2026-07-22",
+      implementationStatus: "active",
       configured: true,
-      active: false,
+      active: true,
     });
   });
 
@@ -159,8 +158,8 @@ describe("aiProviderConfiguration", () => {
     });
     expect(createAiProviderReadinessManifest(environment).broadcastTranscript).toEqual({
       selectedProvider: "qwen",
-      modelId: "qwen3-asr-flash",
-      modelRevision: "qwen3-asr-flash-api-reviewed-2026-07-22",
+      modelId: "qwen3.5-omni-flash",
+      modelRevision: "qwen3.5-omni-flash-audio-transcript-reviewed-2026-07-22",
       implementationStatus: "active",
       configured: true,
       active: true,

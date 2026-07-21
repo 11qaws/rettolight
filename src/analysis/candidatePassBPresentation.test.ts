@@ -60,10 +60,10 @@ function groundedEvidence(
     fallbackReason: null,
     cues,
     overlay: {
-      event: "반응 전후의 Gemini 대사 단서가 시간 위치와 함께 잡혔어요.",
-      why: "Gemini 대사 단서로 반응의 맥락을 확인하기 쉬워졌어요.",
+      event: "반응 전후의 AI 대사 단서가 시간 위치와 함께 잡혔어요.",
+      why: "AI 대사 단서로 반응의 맥락을 확인하기 쉬워졌어요.",
       reviewHint: "전사와 실제 장면의 관계를 재생해 확인해 주세요.",
-      basisLabel: "Gemini 대사 단서 · 재생 확인 필요",
+      basisLabel: "AI 대사 단서 · 재생 확인 필요",
     },
     quality,
   };
@@ -78,8 +78,8 @@ function provisionalEvidence(candidateId = "candidate-1"): CandidatePassBEvidenc
     overlay: {
       event: "이 provisional 사건 문구는 화면 설명을 바꾸면 안 돼요.",
       why: "이 provisional 추천도 사용하면 안 돼요.",
-      reviewHint: "독립적인 품질 신호가 없는 Gemini 대사 추정이므로 재생해 확인해 주세요.",
-      basisLabel: "Gemini 대사 추정 · 빠른 근거 유지",
+      reviewHint: "독립적인 품질 신호가 없는 AI 대사 추정이므로 재생해 확인해 주세요.",
+      basisLabel: "AI 대사 추정 · 빠른 근거 유지",
     },
     quality: {
       ...quality,
@@ -179,7 +179,7 @@ describe("buildCandidatePassBPresentation", () => {
       basis: baseNarrative.basis,
       reviewHint: evidence.overlay.reviewHint,
       basisLabel: evidence.overlay.basisLabel,
-      passBStatusLabel: "Gemini 대사 단서 · 재생 확인 필요",
+      passBStatusLabel: "AI 대사 단서 · 재생 확인 필요",
     });
     expect(presentation.event).not.toBe(baseNarrative.event);
     expect(presentation.whyRecommended).not.toBe(baseNarrative.whyRecommended);
@@ -203,7 +203,7 @@ describe("buildCandidatePassBPresentation", () => {
       basis: baseNarrative.basis,
       basisLabel: baseNarrative.basisLabel,
       reviewHint: evidence.overlay.reviewHint,
-      passBStatusLabel: "Gemini 대사 추정 · 재생 확인 필요",
+      passBStatusLabel: "AI 대사 추정 · 재생 확인 필요",
     });
     expect(presentation.cues).toEqual([
       {

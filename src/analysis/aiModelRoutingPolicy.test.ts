@@ -10,14 +10,15 @@ describe("aiModelRoutingPolicy", () => {
     expect(
       plan.steps.find((step) => step.stage === "candidate-perception"),
     ).toMatchObject({
-      primaryModelId: "gemini-3.5-flash",
-      fallbackModelId: "qwen3.5-omni-flash",
+      primaryModelId: "qwen3.5-omni-flash",
+      fallbackModelId: "gemini-3.5-flash",
       maximumCalls: 12,
     });
     expect(
       plan.steps.find((step) => step.stage === "candidate-adjudication"),
     ).toMatchObject({
-      primaryModelId: "gemini-3.1-pro-preview",
+      primaryModelId: "qwen3.7-plus",
+      fallbackModelId: "gemini-3.1-pro-preview",
       maximumCalls: 3,
     });
   });
@@ -50,7 +51,7 @@ describe("aiModelRoutingPolicy", () => {
       plan.steps.find((step) => step.stage === "broadcast-context-reasoning"),
     ).toMatchObject({
       primaryModelId: "qwen3.7-plus",
-      fallbackModelId: "deepseek-v4-pro",
+      fallbackModelId: "qwen3.6-flash",
     });
     expect(
       plan.steps.find((step) => step.stage === "candidate-adjudication")

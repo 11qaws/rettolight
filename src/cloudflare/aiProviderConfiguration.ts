@@ -1,26 +1,33 @@
 import {
-  CANDIDATE_PASS_B_MODEL_ID,
-  CANDIDATE_PASS_B_MODEL_REVISION,
+  CANDIDATE_PASS_B_GEMINI_MODEL_ID,
+  CANDIDATE_PASS_B_GEMINI_MODEL_REVISION,
+  CANDIDATE_PASS_B_QWEN_MODEL_ID,
+  CANDIDATE_PASS_B_QWEN_MODEL_REVISION,
 } from "../analysis/candidatePassBWorkerProtocol";
-import { BROADCAST_TRANSCRIPT_QWEN_MODEL_ID } from "../analysis/broadcastTranscriptQwen";
+import {
+  BROADCAST_TRANSCRIPT_GEMINI_MODEL_ID,
+  BROADCAST_TRANSCRIPT_GEMINI_MODEL_REVISION,
+  BROADCAST_TRANSCRIPT_QWEN_OMNI_MODEL_ID,
+  BROADCAST_TRANSCRIPT_QWEN_OMNI_MODEL_REVISION,
+} from "../analysis/broadcastTranscriptQwen";
 
 export const AI_PROVIDER_CONFIGURATION_VERSION = "1.0.0" as const;
 
-export const QWEN_CANDIDATE_MODEL_ID = "qwen3.5-omni-flash" as const;
-export const QWEN_CANDIDATE_MODEL_REVISION =
-  "qwen3.5-omni-flash-api-reviewed-2026-07-22" as const;
+export const QWEN_CANDIDATE_MODEL_ID = CANDIDATE_PASS_B_QWEN_MODEL_ID;
+export const QWEN_CANDIDATE_MODEL_REVISION = CANDIDATE_PASS_B_QWEN_MODEL_REVISION;
 export const DEEPSEEK_CONTEXT_MODEL_ID = "deepseek-v4-pro" as const;
 export const DEEPSEEK_CONTEXT_MODEL_REVISION =
   "deepseek-v4-pro-api-reviewed-2026-07-22" as const;
 export const QWEN_CONTEXT_MODEL_ID = "qwen3.7-plus" as const;
 export const QWEN_CONTEXT_MODEL_REVISION =
   "qwen3.7-plus-api-reviewed-2026-07-22" as const;
-export const QWEN_TRANSCRIPT_MODEL_REVISION =
-  "qwen3-asr-flash-api-reviewed-2026-07-22" as const;
+export const QWEN_CONTEXT_SELECTION_MODEL_ID = "qwen3.6-flash" as const;
+export const QWEN_CONTEXT_SELECTION_MODEL_REVISION =
+  "qwen3.6-flash-skeptical-selection-reviewed-2026-07-22" as const;
 
 export type CandidateInsightProviderId = "gemini" | "qwen";
 export type BroadcastContextProviderId = "disabled" | "deepseek" | "qwen";
-export type BroadcastTranscriptProviderId = "disabled" | "qwen";
+export type BroadcastTranscriptProviderId = "disabled" | "gemini" | "qwen";
 export type AiProviderImplementationStatus = "active" | "prepared";
 export type QwenRegion = "singapore" | "beijing";
 
@@ -45,8 +52,8 @@ export const AI_PROVIDER_CATALOG = {
     gemini: {
       role: "candidate-insight",
       provider: "gemini",
-      modelId: CANDIDATE_PASS_B_MODEL_ID,
-      modelRevision: CANDIDATE_PASS_B_MODEL_REVISION,
+      modelId: CANDIDATE_PASS_B_GEMINI_MODEL_ID,
+      modelRevision: CANDIDATE_PASS_B_GEMINI_MODEL_REVISION,
       implementationStatus: "active",
     },
     qwen: {
@@ -54,7 +61,7 @@ export const AI_PROVIDER_CATALOG = {
       provider: "qwen",
       modelId: QWEN_CANDIDATE_MODEL_ID,
       modelRevision: QWEN_CANDIDATE_MODEL_REVISION,
-      implementationStatus: "prepared",
+      implementationStatus: "active",
     },
   },
   broadcastContext: {
@@ -74,11 +81,18 @@ export const AI_PROVIDER_CATALOG = {
     },
   },
   broadcastTranscript: {
+    gemini: {
+      role: "broadcast-transcript",
+      provider: "gemini",
+      modelId: BROADCAST_TRANSCRIPT_GEMINI_MODEL_ID,
+      modelRevision: BROADCAST_TRANSCRIPT_GEMINI_MODEL_REVISION,
+      implementationStatus: "active",
+    },
     qwen: {
       role: "broadcast-transcript",
       provider: "qwen",
-      modelId: BROADCAST_TRANSCRIPT_QWEN_MODEL_ID,
-      modelRevision: QWEN_TRANSCRIPT_MODEL_REVISION,
+      modelId: BROADCAST_TRANSCRIPT_QWEN_OMNI_MODEL_ID,
+      modelRevision: BROADCAST_TRANSCRIPT_QWEN_OMNI_MODEL_REVISION,
       implementationStatus: "active",
     },
   },
@@ -90,7 +104,7 @@ export const AI_PROVIDER_CATALOG = {
     Record<"deepseek" | "qwen", AiProviderDescriptor>
   >;
   readonly broadcastTranscript: Readonly<
-    Record<"qwen", AiProviderDescriptor>
+    Record<"gemini" | "qwen", AiProviderDescriptor>
   >;
 };
 
@@ -128,7 +142,6 @@ export type CandidateInsightConnection =
       readonly descriptor: typeof AI_PROVIDER_CATALOG.candidateInsight.qwen;
       readonly endpoint: string;
       readonly apiKey: string;
-      readonly workspaceId: string;
       readonly region: QwenRegion;
     };
 
@@ -166,6 +179,12 @@ export type BroadcastContextConnectionResolution =
 
 export type BroadcastTranscriptConnection =
   | { readonly provider: "disabled" }
+  | {
+      readonly provider: "gemini";
+      readonly descriptor: typeof AI_PROVIDER_CATALOG.broadcastTranscript.gemini;
+      readonly endpoint: string;
+      readonly apiKey: string;
+    }
   | {
       readonly provider: "qwen";
       readonly descriptor: typeof AI_PROVIDER_CATALOG.broadcastTranscript.qwen;
@@ -207,7 +226,7 @@ export interface AiProviderReadinessManifest {
 }
 
 const GEMINI_ENDPOINT =
-  `https://generativelanguage.googleapis.com/v1beta/models/${CANDIDATE_PASS_B_MODEL_ID}:generateContent`;
+  `https://generativelanguage.googleapis.com/v1beta/models/${CANDIDATE_PASS_B_GEMINI_MODEL_ID}:generateContent`;
 const DEEPSEEK_ENDPOINT = "https://api.deepseek.com/chat/completions";
 const DEFAULT_QWEN_REGION: QwenRegion = "singapore";
 const MAX_API_KEY_LENGTH = 512;
@@ -255,7 +274,9 @@ function readBroadcastTranscriptProvider(
   value: unknown,
 ): BroadcastTranscriptProviderId | null {
   if (value === undefined) return "disabled";
-  return value === "disabled" || value === "qwen" ? value : null;
+  return value === "disabled" || value === "gemini" || value === "qwen"
+    ? value
+    : null;
 }
 
 function normalizeWorkspaceId(value: unknown): string | null {
@@ -313,8 +334,11 @@ export function resolveCandidateInsightConnection(
   if (apiKey === null) {
     return { ok: false, code: "MISSING_CREDENTIALS" };
   }
-  const workspaceId = normalizeWorkspaceId(environment.QWEN_WORKSPACE_ID);
-  if (workspaceId === null) {
+  const rawWorkspaceId = environment.QWEN_WORKSPACE_ID;
+  const workspaceId = rawWorkspaceId === undefined
+    ? null
+    : normalizeWorkspaceId(rawWorkspaceId);
+  if (rawWorkspaceId !== undefined && workspaceId === null) {
     return { ok: false, code: "INVALID_WORKSPACE_ID" };
   }
   const region = readQwenRegion(environment.QWEN_REGION);
@@ -326,9 +350,11 @@ export function resolveCandidateInsightConnection(
     connection: {
       provider,
       descriptor: AI_PROVIDER_CATALOG.candidateInsight.qwen,
-      endpoint: qwenEndpoint(workspaceId, region),
+      endpoint:
+        workspaceId === null
+          ? QWEN_SHARED_COMPATIBLE_ENDPOINTS[region]
+          : qwenEndpoint(workspaceId, region),
       apiKey,
-      workspaceId,
       region,
     },
   };
@@ -397,6 +423,19 @@ export function resolveBroadcastTranscriptConnection(
   if (provider === "disabled") {
     return { ok: true, connection: { provider } };
   }
+  if (provider === "gemini") {
+    const apiKey = normalizeSecret(environment.GEMINI_API_KEY);
+    if (apiKey === null) return { ok: false, code: "MISSING_CREDENTIALS" };
+    return {
+      ok: true,
+      connection: {
+        provider,
+        descriptor: AI_PROVIDER_CATALOG.broadcastTranscript.gemini,
+        endpoint: GEMINI_ENDPOINT,
+        apiKey,
+      },
+    };
+  }
   const apiKey = normalizeSecret(environment.QWEN_API_KEY);
   if (apiKey === null) return { ok: false, code: "MISSING_CREDENTIALS" };
   const region = readQwenRegion(environment.QWEN_REGION);
@@ -452,9 +491,11 @@ export function createAiProviderReadinessManifest(
     environment.BROADCAST_TRANSCRIPT_PROVIDER,
   );
   const transcriptResolution = resolveBroadcastTranscriptConnection(environment);
-  const transcriptDescriptor = transcriptProvider === "qwen"
-    ? AI_PROVIDER_CATALOG.broadcastTranscript.qwen
-    : null;
+  const transcriptDescriptor = transcriptProvider === "gemini"
+    ? AI_PROVIDER_CATALOG.broadcastTranscript.gemini
+    : transcriptProvider === "qwen"
+      ? AI_PROVIDER_CATALOG.broadcastTranscript.qwen
+      : null;
 
   return {
     schemaVersion: AI_PROVIDER_CONFIGURATION_VERSION,

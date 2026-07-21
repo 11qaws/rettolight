@@ -4,6 +4,11 @@ import {
   extractCandidatePassBGeminiResponse,
 } from "../analysis/candidatePassBGemini";
 import {
+  buildCandidatePassBQwenOmniRequestBody,
+  extractCandidatePassBQwenOmniSseResponse,
+  inspectCandidatePassBQwenOmniSseResponse,
+} from "../analysis/candidatePassBQwenOmni";
+import {
   CANDIDATE_PASS_B_SAMPLE_RATE_HZ,
   MAX_CANDIDATE_PASS_B_TARGET_DURATION_MS,
   MAX_CANDIDATE_PASS_B_VIDEO_FRAME_BASE64_LENGTH,
@@ -15,6 +20,9 @@ import {
   buildBroadcastContextDeepseekRequestBody,
   buildBroadcastContextQwenRequestBody,
   extractBroadcastContextDeepseekResponse,
+  extractBroadcastContextQwenRefinementResponse,
+  extractBroadcastContextQwenSelectionResponse,
+  extractBroadcastContextQwenOverviewResponse,
 } from "../analysis/broadcastContextDeepseek";
 import {
   createBroadcastContextRequest,
@@ -25,12 +33,21 @@ import {
   MAX_BROADCAST_TRANSCRIPT_QWEN_BASE64_LENGTH,
   MAX_BROADCAST_TRANSCRIPT_QWEN_DURATION_MS,
   MAX_BROADCAST_TRANSCRIPT_QWEN_RESPONSE_BYTES,
-  buildBroadcastTranscriptQwenRequestBody,
-  extractBroadcastTranscriptQwenResponse,
+  buildBroadcastTranscriptGeminiRequestBody,
+  buildBroadcastTranscriptQwenOmniRequestBody,
+  extractBroadcastTranscriptGeminiResponse,
+  extractBroadcastTranscriptQwenOmniSseResponse,
   parseBroadcastTranscriptQwenProxyRequest,
+  type BroadcastTranscriptQwenResult,
 } from "../analysis/broadcastTranscriptQwen";
+import {
+  YOUTUBE_VIDEO_ID_PATTERN,
+  extractKoreanYouTubeCaptionTrackFromPlayerResponse,
+  parseYouTubeCaptionJson3,
+} from "../analysis/youtubeCaptionTrack";
 
 import {
+  QWEN_CONTEXT_SELECTION_MODEL_ID,
   resolveCandidateInsightConnection,
   resolveBroadcastContextConnection,
   resolveBroadcastTranscriptConnection,
@@ -40,6 +57,7 @@ import {
 const ENDPOINT_PATH = "/v1/candidate-insights";
 const BROADCAST_CONTEXT_ENDPOINT_PATH = "/v1/broadcast-context";
 const BROADCAST_TRANSCRIPT_ENDPOINT_PATH = "/v1/broadcast-transcript";
+const YOUTUBE_CAPTIONS_ENDPOINT_PATH = "/v1/youtube-captions";
 const HEALTH_PATH = "/healthz";
 const PRODUCTION_ORIGIN = "https://11qaws.github.io";
 const WAV_HEADER_BYTES = 44;
@@ -67,7 +85,14 @@ const DEFAULT_UPSTREAM_RETRY_DELAYS_MS = Object.freeze([1_000, 2_000]);
 const RATE_LIMIT_KEY = "candidate-insights";
 const BROADCAST_CONTEXT_RATE_LIMIT_KEY = "broadcast-context";
 const BROADCAST_TRANSCRIPT_RATE_LIMIT_KEY = "broadcast-transcript";
+const YOUTUBE_CAPTIONS_RATE_LIMIT_KEY = "youtube-captions";
+// YouTube embeds this public Android bootstrap key in its clients. It is not a
+// user credential; it only selects the public Innertube surface.
+const YOUTUBE_INNERTUBE_API_KEY = "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8";
+const YOUTUBE_ANDROID_CLIENT_VERSION = "20.10.38";
 const JSON_CONTENT_TYPE = "application/json; charset=utf-8";
+const MAX_YOUTUBE_WATCH_PAGE_BYTES = 2 * 1024 * 1024;
+const MAX_YOUTUBE_CAPTION_BYTES = 8 * 1024 * 1024;
 
 interface RateLimitBinding {
   readonly limit: (
@@ -167,9 +192,9 @@ function jsonResponse(
   });
 }
 
-function preflightResponse(origin: string): Response {
+function preflightResponse(origin: string, methods = "POST, OPTIONS"): Response {
   const headers = corsHeaders(origin);
-  headers.set("Access-Control-Allow-Methods", "POST, OPTIONS");
+  headers.set("Access-Control-Allow-Methods", methods);
   headers.set("Access-Control-Allow-Headers", "content-type");
   headers.set("Access-Control-Max-Age", "600");
   headers.set("Cache-Control", "no-store");
@@ -515,6 +540,29 @@ async function classifyUpstreamRejection(
   return status === "INVALID_ARGUMENT" ? "invalid-argument" : "other";
 }
 
+async function readSafeProviderErrorCode(response: Response): Promise<string> {
+  let bytes: Uint8Array;
+  try {
+    bytes = await readBodyWithLimit(response.body, MAX_UPSTREAM_ERROR_BYTES);
+  } catch {
+    return "unreadable";
+  }
+  let payload: unknown;
+  try {
+    payload = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+  } catch {
+    bytes.fill(0);
+    return "invalid-json";
+  }
+  bytes.fill(0);
+  if (!isRecord(payload)) return "missing";
+  const nestedError = isRecord(payload.error) ? payload.error : null;
+  const rawCode = payload.code ?? nestedError?.code ?? nestedError?.status;
+  return typeof rawCode === "string" && /^[A-Za-z0-9_.:-]{1,80}$/u.test(rawCode)
+    ? rawCode
+    : "missing";
+}
+
 function successResponse(payload: unknown, origin: string): Response {
   const headers = corsHeaders(origin);
   headers.set("Content-Type", JSON_CONTENT_TYPE);
@@ -598,14 +646,6 @@ export async function handleCandidateInsightRequest(
       503,
       "PROXY_NOT_CONFIGURED",
       "AI 연결 준비가 아직 끝나지 않았어요.",
-      origin,
-    );
-  }
-  if (providerResolution.connection.provider !== "gemini") {
-    return jsonResponse(
-      503,
-      "PROVIDER_NOT_ACTIVE",
-      "선택한 후보 분석 공급자는 아직 운영 경로가 활성화되지 않았어요.",
       origin,
     );
   }
@@ -726,11 +766,17 @@ export async function handleCandidateInsightRequest(
   let upstreamRequestBody: string;
   try {
     upstreamRequestBody = JSON.stringify(
-      buildCandidatePassBGeminiRequestBody(
-        candidateRequest.audioBase64,
-        candidateRequest.candidateDurationMs,
-        candidateRequest.videoFrames,
-      ),
+      providerConnection.provider === "qwen"
+        ? buildCandidatePassBQwenOmniRequestBody(
+            candidateRequest.audioBase64,
+            candidateRequest.candidateDurationMs,
+            candidateRequest.videoFrames,
+          )
+        : buildCandidatePassBGeminiRequestBody(
+            candidateRequest.audioBase64,
+            candidateRequest.candidateDurationMs,
+            candidateRequest.videoFrames,
+          ),
     );
   } catch {
     wavBytes.fill(0);
@@ -754,10 +800,15 @@ export async function handleCandidateInsightRequest(
       providerConnection.endpoint,
       {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-goog-api-key": providerConnection.apiKey,
-        },
+        headers: providerConnection.provider === "qwen"
+          ? {
+              "Content-Type": "application/json",
+              "Authorization": `Bearer ${providerConnection.apiKey}`,
+            }
+          : {
+              "Content-Type": "application/json",
+              "x-goog-api-key": providerConnection.apiKey,
+            },
         body: upstreamRequestBody,
         cache: "no-store",
         credentials: "omit",
@@ -771,7 +822,7 @@ export async function handleCandidateInsightRequest(
       return jsonResponse(
         504,
         "UPSTREAM_TIMEOUT",
-        "Gemini 응답 시간이 길어져 요청을 멈췄어요. 다시 시도해 주세요.",
+        "AI 응답 시간이 길어져 요청을 멈췄어요. 다시 시도해 주세요.",
         origin,
       );
     }
@@ -787,7 +838,7 @@ export async function handleCandidateInsightRequest(
       return jsonResponse(
         429,
         "UPSTREAM_RATE_LIMITED",
-        "Gemini 사용 한도에 도달했어요. 잠시 뒤 다시 시도해 주세요.",
+        "AI 사용 한도에 도달했어요. 잠시 뒤 다시 시도해 주세요.",
         origin,
         { "Retry-After": "60" },
       );
@@ -873,10 +924,19 @@ export async function handleCandidateInsightRequest(
   }
 
   let upstreamPayload: unknown;
+  let qwenDiagnostics: ReturnType<typeof inspectCandidatePassBQwenOmniSseResponse> | null = null;
   try {
     const text = new TextDecoder("utf-8", { fatal: true }).decode(upstreamBytes);
     upstreamBytes.fill(0);
-    upstreamPayload = JSON.parse(text);
+    if (providerConnection.provider === "qwen") {
+      qwenDiagnostics = inspectCandidatePassBQwenOmniSseResponse(text);
+      upstreamPayload = extractCandidatePassBQwenOmniSseResponse(
+        text,
+        candidateRequest.candidateDurationMs,
+      );
+    } else {
+      upstreamPayload = JSON.parse(text);
+    }
   } catch {
     upstreamBytes.fill(0);
     return jsonResponse(
@@ -896,6 +956,15 @@ export async function handleCandidateInsightRequest(
       "UPSTREAM_INVALID_RESPONSE",
       "AI 답변을 안전하게 확인하지 못했어요.",
       origin,
+      qwenDiagnostics === null
+        ? undefined
+        : {
+            "X-Qwen-Stop": qwenDiagnostics.sawStop ? "yes" : "no",
+            "X-Qwen-Text-Length": String(qwenDiagnostics.textLength),
+            "X-Qwen-Content-Type": qwenDiagnostics.contentWasString ? "string" : "other",
+            "X-Qwen-Json": qwenDiagnostics.jsonObject ? "record" : "invalid",
+            "X-Qwen-Keys": qwenDiagnostics.keys.join(",").slice(0, 160),
+          },
     );
   }
   return successResponse(upstreamPayload, origin);
@@ -938,7 +1007,7 @@ export async function handleBroadcastTranscriptRequest(
   const providerResolution = resolveBroadcastTranscriptConnection(environment);
   if (
     !providerResolution.ok ||
-    providerResolution.connection.provider !== "qwen" ||
+    providerResolution.connection.provider === "disabled" ||
     environment.RATE_LIMITER === undefined ||
     environment.IP_RATE_LIMITER === undefined
   ) {
@@ -1057,7 +1126,9 @@ export async function handleBroadcastTranscriptRequest(
   let upstreamBody: string;
   try {
     upstreamBody = JSON.stringify(
-      buildBroadcastTranscriptQwenRequestBody(transcriptRequest.audioBase64),
+      providerConnection.provider === "gemini"
+        ? buildBroadcastTranscriptGeminiRequestBody(transcriptRequest.audioBase64)
+        : buildBroadcastTranscriptQwenOmniRequestBody(transcriptRequest.audioBase64),
     );
   } catch {
     return jsonResponse(
@@ -1079,7 +1150,9 @@ export async function handleBroadcastTranscriptRequest(
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${providerConnection.apiKey}`,
+          ...(providerConnection.provider === "gemini"
+            ? { "x-goog-api-key": providerConnection.apiKey }
+            : { Authorization: `Bearer ${providerConnection.apiKey}` }),
         },
         body: upstreamBody,
         cache: "no-store",
@@ -1099,7 +1172,65 @@ export async function handleBroadcastTranscriptRequest(
     );
   }
   if (!upstreamResponse.ok) {
-    await upstreamResponse.body?.cancel().catch(() => undefined);
+    if (providerConnection.provider === "qwen") {
+      const providerCode = await readSafeProviderErrorCode(upstreamResponse);
+      console.error("broadcast_transcript_upstream_rejected", {
+        status: upstreamResponse.status,
+        providerCode,
+      });
+    } else if (upstreamResponse.status === 400) {
+      const rejection = await classifyUpstreamRejection(upstreamResponse);
+      if (rejection === "api-key") {
+        return jsonResponse(
+          503,
+          "PROXY_NOT_CONFIGURED",
+          "방송 대사 분석 연결 설정을 확인해야 해요.",
+          origin,
+        );
+      }
+      if (rejection === "response-format") {
+        return jsonResponse(
+          502,
+          "UPSTREAM_RESPONSE_FORMAT_REJECTED",
+          "방송 대사 응답 형식 설정을 확인해야 해요.",
+          origin,
+        );
+      }
+      if (rejection === "invalid-argument") {
+        return jsonResponse(
+          502,
+          "UPSTREAM_INVALID_ARGUMENT",
+          "AI가 방송 대사 분석 요청을 받아들이지 않았어요.",
+          origin,
+        );
+      }
+    } else {
+      await upstreamResponse.body?.cancel().catch(() => undefined);
+    }
+    if (upstreamResponse.status === 401 || upstreamResponse.status === 403) {
+      return jsonResponse(
+        503,
+        "PROXY_NOT_CONFIGURED",
+        "방송 대사 분석 연결 설정을 확인해야 해요.",
+        origin,
+      );
+    }
+    if (upstreamResponse.status === 404) {
+      return jsonResponse(
+        502,
+        "UPSTREAM_MODEL_NOT_FOUND",
+        "방송 대사 분석 모델을 찾지 못했어요.",
+        origin,
+      );
+    }
+    if (upstreamResponse.status === 413) {
+      return jsonResponse(
+        502,
+        "UPSTREAM_PAYLOAD_TOO_LARGE",
+        "방송 대사 분석 조각이 모델의 허용 크기를 넘었어요.",
+        origin,
+      );
+    }
     return jsonResponse(
       upstreamResponse.status === 429 ? 429 : 502,
       upstreamResponse.status === 429
@@ -1111,16 +1242,25 @@ export async function handleBroadcastTranscriptRequest(
     );
   }
 
-  let upstreamPayload: unknown;
+  let result: BroadcastTranscriptQwenResult | null;
   try {
     const bytes = await readBodyWithLimit(
       upstreamResponse.body,
       MAX_BROADCAST_TRANSCRIPT_QWEN_RESPONSE_BYTES,
     );
-    upstreamPayload = JSON.parse(
-      new TextDecoder("utf-8", { fatal: true }).decode(bytes),
-    );
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
     bytes.fill(0);
+    if (providerConnection.provider === "gemini") {
+      result = extractBroadcastTranscriptGeminiResponse(
+        JSON.parse(text),
+        transcriptRequest,
+      );
+    } else {
+      result = extractBroadcastTranscriptQwenOmniSseResponse(
+        text,
+        transcriptRequest,
+      );
+    }
   } catch {
     return jsonResponse(
       502,
@@ -1129,10 +1269,6 @@ export async function handleBroadcastTranscriptRequest(
       origin,
     );
   }
-  const result = extractBroadcastTranscriptQwenResponse(
-    upstreamPayload,
-    transcriptRequest,
-  );
   if (result === null) {
     return jsonResponse(
       502,
@@ -1140,6 +1276,146 @@ export async function handleBroadcastTranscriptRequest(
       "방송 대사 분석 응답 형식을 확인하지 못했어요.",
       origin,
     );
+  }
+  return successResponse(result, origin);
+}
+
+export async function handleYouTubeCaptionsRequest(
+  request: Request,
+  environment: AiProxyEnvironment,
+  dependencies: AiProxyDependencies = {},
+): Promise<Response> {
+  const origin = request.headers.get("Origin");
+  if (!isAllowedOrigin(origin)) {
+    return jsonResponse(403, "ORIGIN_NOT_ALLOWED", "이 페이지에서는 YouTube 자막을 확인할 수 없어요.", origin);
+  }
+  if (request.method === "OPTIONS") {
+    return preflightResponse(origin, "GET, OPTIONS");
+  }
+  if (request.method !== "GET") {
+    return jsonResponse(405, "METHOD_NOT_ALLOWED", "지원하지 않는 요청 방식이에요.", origin, { Allow: "GET, OPTIONS" });
+  }
+  const url = new URL(request.url);
+  if ([...url.searchParams.keys()].some((key) => key !== "v")) {
+    return jsonResponse(400, "INVALID_REQUEST", "YouTube 영상 ID를 확인해 주세요.", origin);
+  }
+  const videoId = url.searchParams.get("v") ?? "";
+  if (!YOUTUBE_VIDEO_ID_PATTERN.test(videoId)) {
+    return jsonResponse(400, "INVALID_REQUEST", "YouTube 영상 ID를 확인해 주세요.", origin);
+  }
+  if (environment.RATE_LIMITER === undefined || environment.IP_RATE_LIMITER === undefined) {
+    return jsonResponse(503, "PROXY_NOT_CONFIGURED", "자막 확인 연결을 준비하지 못했어요.", origin);
+  }
+  try {
+    const clientLimit = await environment.IP_RATE_LIMITER.limit({
+      key: scopedClientRateLimitKey(request, YOUTUBE_CAPTIONS_RATE_LIMIT_KEY),
+    });
+    const globalLimit = await environment.RATE_LIMITER.limit({ key: YOUTUBE_CAPTIONS_RATE_LIMIT_KEY });
+    if (!clientLimit.success || !globalLimit.success) {
+      return jsonResponse(429, "RATE_LIMITED", "잠시 요청이 많아요. 1분 뒤 다시 시도해 주세요.", origin, { "Retry-After": "60" });
+    }
+  } catch {
+    return jsonResponse(503, "RATE_LIMIT_UNAVAILABLE", "요청 보호 장치를 확인하지 못했어요.", origin);
+  }
+
+  const fetchImplementation = dependencies.fetchImplementation ?? fetch;
+  let playerResponse: Response;
+  try {
+    playerResponse = await fetchWithTimeout(
+      fetchImplementation,
+      `https://www.youtube.com/youtubei/v1/player?key=${YOUTUBE_INNERTUBE_API_KEY}`,
+      {
+        method: "POST",
+        headers: {
+          "User-Agent":
+            `com.google.android.youtube/${YOUTUBE_ANDROID_CLIENT_VERSION} (Linux; U; Android 12) gzip`,
+          "Content-Type": "application/json",
+          "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.7,en;q=0.6",
+          "Origin": "https://www.youtube.com",
+          "X-YouTube-Client-Name": "3",
+          "X-YouTube-Client-Version": YOUTUBE_ANDROID_CLIENT_VERSION,
+        },
+        body: JSON.stringify({
+          context: {
+            client: {
+              clientName: "ANDROID",
+              clientVersion: YOUTUBE_ANDROID_CLIENT_VERSION,
+              androidSdkVersion: 31,
+              hl: "ko",
+              gl: "KR",
+            },
+          },
+          videoId,
+          contentCheckOk: true,
+          racyCheckOk: true,
+        }),
+        cache: "no-store",
+        credentials: "omit",
+        referrerPolicy: "no-referrer",
+      },
+      dependencies.upstreamTimeoutMs ?? UPSTREAM_TIMEOUT_MS,
+    );
+  } catch {
+    return jsonResponse(502, "UPSTREAM_UNAVAILABLE", "YouTube 영상 정보를 확인하지 못했어요.", origin);
+  }
+  if (!playerResponse.ok) {
+    return jsonResponse(502, "UPSTREAM_REJECTED", "YouTube 영상 정보를 확인하지 못했어요.", origin, {
+      "X-Upstream-Status": String(playerResponse.status),
+    });
+  }
+  let track;
+  try {
+    const bytes = await readBodyWithLimit(playerResponse.body, MAX_YOUTUBE_WATCH_PAGE_BYTES);
+    const payload = JSON.parse(
+      new TextDecoder("utf-8", { fatal: true }).decode(bytes),
+    ) as unknown;
+    bytes.fill(0);
+    track = extractKoreanYouTubeCaptionTrackFromPlayerResponse(payload, videoId);
+  } catch {
+    track = null;
+  }
+  if (track === null) {
+    return jsonResponse(404, "CAPTIONS_NOT_FOUND", "이 영상에서 한국어 자막을 찾지 못했어요.", origin);
+  }
+
+  let captionResponse: Response;
+  try {
+    captionResponse = await fetchWithTimeout(
+      fetchImplementation,
+      track.baseUrl,
+      {
+        method: "GET",
+        headers: {
+          "User-Agent":
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36",
+          "Accept": "application/json,text/plain,*/*",
+          "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.7,en;q=0.6",
+        },
+        cache: "no-store",
+        credentials: "omit",
+        referrerPolicy: "no-referrer",
+      },
+      dependencies.upstreamTimeoutMs ?? UPSTREAM_TIMEOUT_MS,
+    );
+  } catch {
+    return jsonResponse(502, "UPSTREAM_UNAVAILABLE", "YouTube 자막을 불러오지 못했어요.", origin);
+  }
+  if (!captionResponse.ok) {
+    return jsonResponse(502, "UPSTREAM_REJECTED", "YouTube 자막을 불러오지 못했어요.", origin, {
+      "X-Upstream-Status": String(captionResponse.status),
+    });
+  }
+  let result;
+  try {
+    const bytes = await readBodyWithLimit(captionResponse.body, MAX_YOUTUBE_CAPTION_BYTES);
+    const payload = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as unknown;
+    bytes.fill(0);
+    result = parseYouTubeCaptionJson3(payload, track);
+  } catch {
+    result = null;
+  }
+  if (result === null) {
+    return jsonResponse(502, "UPSTREAM_INVALID_RESPONSE", "YouTube 자막 형식을 확인하지 못했어요.", origin);
   }
   return successResponse(result, origin);
 }
@@ -1190,6 +1466,11 @@ export async function handleBroadcastContextRequest(
     return jsonResponse(400, "INVALID_REQUEST", "요청 형식을 확인해 주세요.", origin);
   }
 
+  const contextMode = isRecord(inputValue) && inputValue.analysisMode === "refinement"
+    ? "refinement" as const
+    : isRecord(inputValue) && inputValue.analysisMode === "selection"
+      ? "selection" as const
+      : "overview" as const;
   let broadcastContextRequest;
   try {
     broadcastContextRequest = createBroadcastContextRequest(inputValue as BroadcastContextRequestInput);
@@ -1215,7 +1496,10 @@ export async function handleBroadcastContextRequest(
     providerConnection.provider === "qwen"
       ? buildBroadcastContextQwenRequestBody(
           broadcastContextRequest,
-          providerConnection.descriptor.modelId,
+          contextMode === "selection"
+            ? QWEN_CONTEXT_SELECTION_MODEL_ID
+            : providerConnection.descriptor.modelId,
+          contextMode,
         )
       : buildBroadcastContextDeepseekRequestBody(
           broadcastContextRequest,
@@ -1251,7 +1535,13 @@ export async function handleBroadcastContextRequest(
   }
 
   if (!upstreamResponse.ok) {
-    return jsonResponse(502, "UPSTREAM_REJECTED", "AI가 요청을 처리하지 못했어요.", origin);
+    return jsonResponse(
+      502,
+      "UPSTREAM_REJECTED",
+      "AI가 요청을 처리하지 못했어요.",
+      origin,
+      { "X-Upstream-Status": String(upstreamResponse.status) },
+    );
   }
 
   let upstreamBytes: Uint8Array;
@@ -1269,9 +1559,64 @@ export async function handleBroadcastContextRequest(
     return jsonResponse(502, "UPSTREAM_INVALID_RESPONSE", "답변을 안전하게 확인하지 못했어요.", origin);
   }
 
-  const parsed = extractBroadcastContextDeepseekResponse(upstreamPayload, broadcastContextRequest);
+  const parsed = providerConnection.provider === "qwen" && contextMode === "refinement"
+    ? extractBroadcastContextQwenRefinementResponse(upstreamPayload, broadcastContextRequest)
+    : providerConnection.provider === "qwen" && contextMode === "selection"
+      ? extractBroadcastContextQwenSelectionResponse(upstreamPayload, broadcastContextRequest)
+      : providerConnection.provider === "qwen"
+        ? extractBroadcastContextQwenOverviewResponse(upstreamPayload, broadcastContextRequest)
+      : extractBroadcastContextDeepseekResponse(
+          upstreamPayload,
+          broadcastContextRequest,
+          { recoverMalformedItems: true },
+        );
   if (!parsed.ok) {
-    return jsonResponse(502, "UPSTREAM_INVALID_RESPONSE", "답변 형식을 확인할 수 없어요.", origin);
+    const choices: readonly unknown[] =
+      isRecord(upstreamPayload) && Array.isArray(upstreamPayload.choices)
+        ? upstreamPayload.choices
+        : [];
+    const choice: unknown = choices[0] ?? null;
+    const message = isRecord(choice) && isRecord(choice.message)
+      ? choice.message
+      : null;
+    const content = message !== null && typeof message.content === "string"
+      ? message.content
+      : null;
+    let generatedKeys: readonly string[] = [];
+    let generatedJson = false;
+    if (content !== null) {
+      try {
+        const generated = JSON.parse(content) as unknown;
+        if (isRecord(generated)) {
+          generatedJson = true;
+          generatedKeys = Object.keys(generated).sort();
+        }
+      } catch {
+        // Only shape metadata is logged; source captions and model text are not.
+      }
+    }
+    console.warn("broadcast-context-invalid-response", {
+      finishReason: isRecord(choice) && typeof choice.finish_reason === "string"
+        ? choice.finish_reason
+        : null,
+      contentLength: content?.length ?? null,
+      generatedJson,
+      generatedKeys,
+    });
+    return jsonResponse(
+      502,
+      "UPSTREAM_INVALID_RESPONSE",
+      "답변 형식을 확인할 수 없어요.",
+      origin,
+      {
+        "X-Upstream-Finish": isRecord(choice) && typeof choice.finish_reason === "string"
+          ? choice.finish_reason.slice(0, 40)
+          : "unknown",
+        "X-Upstream-Content-Length": String(content?.length ?? -1),
+        "X-Upstream-Json": generatedJson ? "record" : "invalid",
+        "X-Upstream-Keys": generatedKeys.join(",").slice(0, 160),
+      },
+    );
   }
 
   return successResponse(parsed.result, origin);
@@ -1285,6 +1630,9 @@ export default {
     }
     if (url.pathname === BROADCAST_CONTEXT_ENDPOINT_PATH) {
       return handleBroadcastContextRequest(request, environment);
+    }
+    if (url.pathname === YOUTUBE_CAPTIONS_ENDPOINT_PATH) {
+      return handleYouTubeCaptionsRequest(request, environment);
     }
     return handleCandidateInsightRequest(request, environment);
   },

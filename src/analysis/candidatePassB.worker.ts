@@ -59,7 +59,7 @@ const SOURCE_CACHE_BYTES = 8 * 1024 * 1024;
 const CANDIDATE_DECODE_RATIO_CEILING = 0.45;
 const CANDIDATE_TRANSCRIBE_RATIO = 0.5;
 // Keep candidate interpretation parallel, but bounded so a full day's worth of
-// candidates does not trigger a burst of Gemini requests and quota failures.
+// candidates does not trigger an unbounded burst of remote AI requests.
 const MAX_PARALLEL_GEMINI_REQUESTS = 2;
 const PROGRESS_MIN_INTERVAL_MS = 150;
 const PROGRESS_MIN_RATIO_STEP = 0.01;
@@ -904,7 +904,7 @@ async function runTask(request: AnalyzeRequest, task: ActiveTask): Promise<void>
               cause instanceof ProxyWorkerFailure
                 ? new CandidateFailure(
                     "TRANSCRIPTION_FAILED",
-                    "Gemini 응답에서 안전하게 후보 설명을 읽지 못했습니다.",
+                    "AI 응답에서 안전하게 후보 설명을 읽지 못했습니다.",
                   )
                 : cause instanceof CandidateFailure
                   ? cause
@@ -942,7 +942,7 @@ async function runTask(request: AnalyzeRequest, task: ActiveTask): Promise<void>
           cause instanceof ProxyWorkerFailure
             ? new CandidateFailure(
                 "TRANSCRIPTION_FAILED",
-                "Gemini 응답에서 안전하게 사용할 대사 단서를 얻지 못했어요.",
+                "AI 응답에서 안전하게 사용할 대사 단서를 얻지 못했어요.",
               )
             : cause instanceof CandidateFailure
             ? cause

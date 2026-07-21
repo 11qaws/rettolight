@@ -110,7 +110,7 @@ export function serializeSemanticLeadCandidates(
 export function parseSemanticLeadCandidates(
   value: unknown,
 ): readonly UnifiedHighlightCandidate[] | null {
-  if (!Array.isArray(value) || value.length > 4) return null;
+  if (!Array.isArray(value) || value.length > 12) return null;
   const candidates: UnifiedHighlightCandidate[] = [];
   const seenIds = new Set<string>();
   for (const item of value) {

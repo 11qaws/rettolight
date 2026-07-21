@@ -253,7 +253,10 @@ export function encodeCandidatePassBBase64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
-function buildPrompt(candidateDurationMs: number, frameCount: number): string {
+export function buildCandidatePassBPrompt(
+  candidateDurationMs: number,
+  frameCount: number,
+): string {
   return `당신은 VTuber 스트리머 방송에서 하이라이트 클립을 찾는 전문 영상 편집 어시스턴트입니다. 첨부된 ${candidateDurationMs}ms 길이 후보를 오디오와 대표 화면 ${frameCount}장으로 깊게 분석하세요.
 
 필수 규칙:
@@ -295,7 +298,7 @@ export function buildCandidatePassBGeminiRequestBody(
       {
         role: "user",
         parts: [
-          { text: buildPrompt(candidateDurationMs, normalizedFrames.length) },
+          { text: buildCandidatePassBPrompt(candidateDurationMs, normalizedFrames.length) },
           {
             inlineData: {
               mimeType: "audio/wav",

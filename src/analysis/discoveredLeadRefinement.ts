@@ -1,5 +1,7 @@
-import type {
-  BroadcastContextDiscoveredLead,
+import {
+  MAX_BROADCAST_CONTEXT_SUMMARY_LENGTH,
+  type BroadcastContextChapterInput,
+  type BroadcastContextDiscoveredLead,
 } from "./broadcastContextProtocol";
 import type { BroadcastTranscriptQwenResult } from "./broadcastTranscriptQwen";
 import { QWEN_ASR_FILETRANS_USD_PER_SECOND } from "./broadcastContextSamplingPlan";
@@ -7,8 +9,8 @@ import { QWEN_ASR_FILETRANS_USD_PER_SECOND } from "./broadcastContextSamplingPla
 export const DISCOVERED_LEAD_REFINEMENT_VERSION = "1.0.0" as const;
 export const DISCOVERED_LEAD_REFINEMENT_BUDGET_USD = 0.03;
 export const MAX_DISCOVERED_LEADS_TO_REFINE = 4;
-export const REFINEMENT_SEGMENT_DURATION_MS = 70_000;
-export const REFINED_CLIP_DURATION_MS = 45_000;
+export const REFINEMENT_SEGMENT_DURATION_MS = 60_000;
+export const REFINED_CLIP_DURATION_MS = 60_000;
 
 export interface DiscoveredLeadRefinementSegment {
   readonly segmentId: string;
@@ -53,9 +55,9 @@ function boundedInspectionRange(
 }
 
 /**
- * Re-ASRs only a few context-discovered ranges in 70-second cells. This turns
- * a coarse 3.5-minute chapter lead into a bounded location before Gemini sees
- * the final 45-second audio/video candidate.
+ * Re-ASRs only a few context-discovered ranges in one-minute cells. This turns
+ * a coarse chapter lead into a bounded location before multimodal AI sees
+ * the final one-minute audio/video candidate.
  */
 export function createDiscoveredLeadRefinementPlan(
   leads: readonly BroadcastContextDiscoveredLead[],
@@ -110,6 +112,141 @@ export function createDiscoveredLeadRefinementPlan(
     segments,
     estimatedAsrCostUsd:
       (sampledMs / 1_000) * QWEN_ASR_FILETRANS_USD_PER_SECOND,
+  };
+}
+
+/**
+ * Converts the source-fenced refinement ASR results back into the chapter
+ * protocol used by the context router. Each parent lead is sent separately so
+ * one broad event can yield several independent clip moments without competing
+ * with unrelated parts of the broadcast.
+ */
+export function createDiscoveredLeadRefinementChapters(
+  leadId: string,
+  plan: DiscoveredLeadRefinementPlan,
+  transcripts: readonly BroadcastTranscriptQwenResult[],
+  parentContextKo = "",
+): readonly BroadcastContextChapterInput[] {
+  const transcriptByRange = new Map(
+    transcripts.map((transcript) => [
+      `${transcript.sourceStartMs}:${transcript.sourceEndMs}`,
+      transcript,
+    ]),
+  );
+  let emittedCount = 0;
+  return plan.segments
+    .filter((segment) => segment.leadId === leadId)
+    .flatMap((segment) => {
+      const transcript = transcriptByRange.get(
+        `${segment.sourceStartMs}:${segment.sourceEndMs}`,
+      );
+      if (transcript === undefined || transcript.textKo.trim().length === 0) {
+        return [];
+      }
+      const prefix = emittedCount === 0 && parentContextKo.trim().length > 0
+        ? `[상위 사건] ${parentContextKo.trim()} `
+        : "";
+      const summaryKo = Array.from(
+        `${prefix}${transcript.textKo}`
+          .replace(/[\p{Cc}\p{Cf}]/gu, " ")
+          .replace(/\s+/gu, " ")
+          .trim(),
+      )
+        .slice(0, MAX_BROADCAST_CONTEXT_SUMMARY_LENGTH)
+        .join("")
+        .trim();
+      if (summaryKo.length === 0) return [];
+      emittedCount += 1;
+      return [{
+        chapterId: segment.segmentId,
+        startMs: segment.sourceStartMs,
+        endMs: segment.sourceEndMs,
+        evidenceMode: "complete-transcript" as const,
+        evidenceCoverageRatio: 1,
+        summaryKo,
+      }];
+    });
+}
+
+export interface MaterializedRefinedLeadEvidence {
+  readonly range: RefinedDiscoveredLeadRange;
+  readonly transcriptKo: string;
+}
+
+/** Makes a 30–60 second source-fenced candidate from a router-selected cell. */
+export function materializeRefinedDiscoveredLeadEvidence(
+  lead: BroadcastContextDiscoveredLead,
+  transcripts: readonly BroadcastTranscriptQwenResult[],
+  sourceDurationMs: number,
+): MaterializedRefinedLeadEvidence | null {
+  if (
+    !Number.isSafeInteger(sourceDurationMs) ||
+    sourceDurationMs < 30_000 ||
+    lead.startMs < 0 ||
+    lead.endMs <= lead.startMs ||
+    lead.endMs > sourceDurationMs
+  ) {
+    return null;
+  }
+  const overlappingTranscripts = transcripts
+    .filter(
+      (transcript) =>
+        transcript.sourceStartMs < lead.endMs &&
+        transcript.sourceEndMs > lead.startMs &&
+        transcript.textKo.trim().length > 0,
+    )
+    .sort((left, right) => left.sourceStartMs - right.sourceStartMs);
+  const cueMatches = overlappingTranscripts
+    .map((transcript) => ({
+      transcript,
+      score: transcriptMatchScore(lead.evidenceCueKo, transcript.textKo),
+    }))
+    .sort(
+      (left, right) =>
+        right.score - left.score ||
+        left.transcript.sourceStartMs - right.transcript.sourceStartMs,
+    );
+  const bestCueMatch = cueMatches[0];
+  const peakMs = bestCueMatch !== undefined && bestCueMatch.score >= 0.2
+    ? Math.round(
+        bestCueMatch.transcript.sourceStartMs +
+          (bestCueMatch.transcript.sourceEndMs -
+            bestCueMatch.transcript.sourceStartMs) /
+            2,
+      )
+    : Math.round(lead.startMs + (lead.endMs - lead.startMs) / 2);
+  const desiredDurationMs = Math.min(REFINED_CLIP_DURATION_MS, sourceDurationMs);
+  const unclampedStartMs = peakMs - Math.floor(desiredDurationMs / 2);
+  const startMs = Math.max(
+    0,
+    Math.min(sourceDurationMs - desiredDurationMs, unclampedStartMs),
+  );
+  const endMs = startMs + desiredDurationMs;
+  const transcriptKo = transcripts
+    .filter(
+      (transcript) =>
+        transcript.sourceStartMs < endMs && transcript.sourceEndMs > startMs,
+    )
+    .sort((left, right) => left.sourceStartMs - right.sourceStartMs)
+    .map((transcript) => transcript.textKo.trim())
+    .filter((text) => text.length > 0)
+    .join(" ")
+    .replace(/\s+/gu, " ")
+    .trim();
+  if (transcriptKo.length === 0) return null;
+  return {
+    range: {
+      leadId: lead.leadId,
+      startMs,
+      peakMs: Math.max(startMs, Math.min(endMs - 1, peakMs)),
+      endMs,
+      transcriptMatchScore: bestCueMatch?.score ?? 0,
+      matchedSegmentId:
+        bestCueMatch === undefined
+          ? lead.startChapterId
+          : `${bestCueMatch.transcript.sourceStartMs}:${bestCueMatch.transcript.sourceEndMs}`,
+    },
+    transcriptKo,
   };
 }
 

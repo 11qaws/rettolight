@@ -4,19 +4,19 @@
 
 The working assumption for the clip page is a maximized desktop window. The top of the page therefore uses a wide two-column workspace: source input and an always-visible readiness summary. The primary analysis action is placed immediately below that row so a beginner does not have to scroll to start.
 
-The analysis pipeline is phased: fast local audio/visual/chat signals scan the full source (up to 12 hours) and produce a broad reservoir of 30–60 second leads. Event Episode grouping removes fragments of the same moment before a context-aware selector chooses at most 12 detail-analysis targets. Candidate Pass B sends candidate audio plus representative frames to Gemini 3.5 Flash. A later whole-broadcast judgment may select, defer, or reject every candidate; zero final clips is valid for a negative stream.
+The analysis pipeline is phased: fast local audio/visual/chat signals scan the full source (up to 12 hours) and produce a broad reservoir of 30–60 second leads. Event Episode grouping removes fragments of the same moment before a context-aware selector chooses at most 12 detail-analysis targets. Candidate Pass B sends candidate audio plus timestamp-labelled representative frames to Qwen3.5 Omni Flash. Qwen3.7 Plus reads the whole-broadcast transcript map, and broad semantic leads are split again into one-minute cells. A whole-broadcast judgment may select, defer, or reject every candidate; zero final clips is valid for a negative stream.
 
-The fast pass includes a conservative dialogue-led signal. A novel speech-band and articulation change can become a candidate even without a loudness spike. It is a review lead, not semantic understanding; Gemini and playback confirmation remain authoritative.
+The fast pass includes a conservative dialogue-led signal. A novel speech-band and articulation change can become a candidate even without a loudness spike. It is a review lead, not semantic understanding; multimodal AI and playback confirmation remain authoritative.
 
-### Gemini planning estimate
+### Qwen Omni planning estimate
 
-The default estimate assumes up to 12 candidates, 45–60 seconds of audio each, four representative JPEG frames per candidate, approximately 900 prompt tokens and 700 output tokens per candidate. Google documents 32 tokens/second for audio and Gemini 3.5 Flash standard pricing of $1.50/M input and $9/M output. Under those assumptions, one 12-candidate 45-second run is roughly `$0.20` before retries or provider-side thinking-token variation. The UI shows this as an estimate only.
+The default estimate assumes up to 12 candidates, 45–60 seconds of audio each, four representative JPEG frames per candidate, approximately 900 prompt tokens and 700 output tokens per candidate. Alibaba documents seven input tokens per audio second and one image token per 32x32 pixels for Qwen3.5 Omni, with Singapore prices separated by text/image, audio, and text output. The conservative 640px portrait-frame estimate puts twelve 45-second candidates near `$0.05` before retries or provider-side variation. The UI shows this as an estimate only.
 
-Whole-broadcast context has an independent hard allocation. A complete supplied caption track is preferred. Without one, Qwen ASR sampling is capped at `$0.42` using the official `$0.000035/second` file-transcription rate: every ten-minute cell receives distributed speech samples and up to twelve fast-pass event neighborhoods receive two minutes of context. A short source that fits the allocation can be fully transcribed; a twelve-hour source remains uniformly sampled instead of spending the entire budget only around loud moments. Candidate perception, visual chapters, compressed context reasoning, difficult adjudication, and retry reserve must together remain inside the `$1` run target.
+Whole-broadcast context has an independent hard allocation. A matching public YouTube Korean caption track is preferred and stored in the same analysis session. Without one, Qwen Omni audio sampling is capped at `$0.42` using a conservative `$0.000035/second` planning rate: every ten-minute cell receives distributed speech samples and up to twelve fast-pass event neighborhoods receive context. A short source that fits the allocation can be fully transcribed; a twelve-hour source remains uniformly sampled instead of spending the entire budget only around loud moments. Candidate perception, compressed context reasoning, semantic refinement, difficult adjudication, and retry reserve must together remain inside the `$1` run target.
 
 ### YouTube script boundary
 
-A YouTube link is useful for identifying a matching public video, but the official captions list/download API requires authorized access to caption tracks. ExClipper should accept an explicitly supplied `.vtt`, `.srt`, or transcript file as the first reliable script path; it must not pretend that a public URL alone guarantees a readable transcript.
+A bracketed YouTube ID in the selected source filename identifies a matching public video. ExClipper first tries the public Android player caption track through the Worker with fixed-host and response-size validation. Public caption availability is not guaranteed: YouTube 403/429, a missing Korean track, or malformed timedtext falls through to Qwen audio transcription without blocking analysis.
 
 ### `0.3.26` 편집자 중심 작업공간
 
@@ -28,13 +28,13 @@ A YouTube link is useful for identifying a matching public video, but the offici
 4. 이전·다음 후보로 이동하며 남은 검토 수를 줄인다.
 5. 사용할 후보가 생긴 뒤에만 결과 다운로드 영역을 본다.
 
-반응 종류 재분석, Gemini 재시도, 추천 순서 비교는 결과를 이해하거나 장애를 복구할 때만 필요한 보조 도구다. 따라서 기본 화면에서는 접어 두되 기능을 제거하지 않는다. 모든 상세 후보를 세로로 동시에 펼치지 않으며, 최대화 데스크톱에서는 왼쪽의 고정 미리보기와 오른쪽의 현재 후보 판단 영역을 함께 보여 준다. 원본을 재연결하지 않은 복구 결과도 타임라인 선택과 설명 검토는 가능해야 한다.
+반응 종류 재분석, AI 재시도, 추천 순서 비교는 결과를 이해하거나 장애를 복구할 때만 필요한 보조 도구다. 따라서 기본 화면에서는 접어 두되 기능을 제거하지 않는다. 모든 상세 후보를 세로로 동시에 펼치지 않으며, 최대화 데스크톱에서는 왼쪽의 고정 미리보기와 오른쪽의 현재 후보 판단 영역을 함께 보여 준다. 원본을 재연결하지 않은 복구 결과도 타임라인 선택과 설명 검토는 가능해야 한다.
 
 후보 포커스는 현재 탭의 표현 상태일 뿐이다. 포커스 이동은 점수·추천 순서·경계·사용/제외·내보내기 순서를 바꾸지 않고 저장 자료를 dirty 상태로 만들지 않는다. 이 상태 전이는 `STATE_LIFECYCLE.md` 23.13을 따른다.
 
-- 문서 상태: ExClipper 개인 편집 어시스턴트·상태/운영 모델을 확정한 초안 `0.3.27`
+- 문서 상태: ExClipper 개인 편집 어시스턴트·상태/운영 모델을 확정한 초안 `0.3.29`
 - 기준일: 2026-07-20 (Asia/Seoul)
-- 배포 원칙: GitHub Pages에서 빠른 분석·후보 검토·출력을 완주하고, Gemini 정밀 분석은 배포 Secret을 사용하는 전용 중계로 제공함
+- 배포 원칙: GitHub Pages에서 빠른 분석·후보 검토·출력을 완주하고, Qwen 정밀 분석은 배포 Secret을 사용하는 전용 중계로 제공함
 - 제품 정체성: 공유 서비스가 아닌 1인용 AI 편집 어시스턴트
 - 대상 사용자: 컴퓨터와 영상 편집에 익숙하지 않은 스트리머 또는 개인 편집자
 - 상세 계약: 상태·전이는 `STATE_LIFECYCLE.md`, 배포·백업·장애 대응은 `OPERATIONS.md`
@@ -43,10 +43,10 @@ A YouTube link is useful for identifying a matching public video, but the offici
 
 2026-07-20 외부 평가에서 확인한 ExClipper의 강점은 기능 수가 아니라 불완전한 무료·로컬·외부 구성요소를 신뢰 계층으로 감싸는 방식이다. 따라서 다음 원칙을 품질 기준으로 고정한다.
 
-- 빠른 로컬 오디오·선택적 CHZZK 채팅·희소한 시각 변화는 후보 생성에 사용하고, Gemini는 상위 후보의 한국어 해석과 확인 위치를 제공하는 보조 계층으로 둔다. Gemini 문장을 사실·직접 점수·자동 승인으로 취급하지 않는다.
-- 채팅, 음성, Gemini 중 하나가 실패해도 다른 신호의 확정 결과를 지우지 않는다. `success`, `failed`, `unknown`, `partial`, `recovered`를 구분하고, 모르는 상태를 성공처럼 꾸미지 않는다.
+- 빠른 로컬 오디오·선택적 CHZZK 채팅·희소한 시각 변화는 후보 생성에 사용하고, Qwen Omni는 상위 후보의 한국어 해석과 확인 위치를 제공하는 보조 계층으로 둔다. AI 문장을 사실·직접 점수·자동 승인으로 취급하지 않는다.
+- 채팅, 음성, AI 중 하나가 실패해도 다른 신호의 확정 결과를 지우지 않는다. `success`, `failed`, `unknown`, `partial`, `recovered`를 구분하고, 모르는 상태를 성공처럼 꾸미지 않는다.
 - 모든 외부·로컬 신호는 source, source timestamp, received timestamp, quality와 fallback 이유를 잃지 않도록 정규화한다. 새 adapter가 추가돼도 UI와 상태 머신이 공급자 응답 형식에 직접 묶이지 않게 한다.
-- 다음 품질 게이트는 기능 추가보다 평가 데이터셋이다. 허용된 샘플 영상과 사람이 표시한 기준 구간을 축적하고 후보 recall, 후보 precision, 승인율, 시작·끝 경계 수정량, 후보별 Gemini 실패율을 버전별로 측정한다.
+- 다음 품질 게이트는 기능 추가보다 평가 데이터셋이다. 허용된 샘플 영상과 사람이 표시한 기준 구간을 축적하고 후보 recall, 후보 precision, 승인율, 시작·끝 경계 수정량, 후보별 AI 실패율을 버전별로 측정한다.
 - 개인용 범위를 지키기 위해 원본·채팅·닉네임을 외부 telemetry로 보내지 않는다. 필요하면 사용자가 직접 내보내는 비식별 집계만 별도 기능으로 검토한다.
 
 ## 0. 먼저 합의해야 할 결론
@@ -2259,7 +2259,7 @@ YouTube IFrame이 요구하는 Referer를 유지하고 `strict-origin-when-cross
 - GitHub Pages 정적 핵심, 계정·팀·공용 백엔드·원격 DB·기기간 자동 동기화 없음
 - AI가 몇 시간 전체에서 먼저 후보를 고르고 사람은 후보만 검토
 - CHZZK 채팅 파일 import·분석은 핵심, 공식 실시간 수집은 선택형 로컬 동반 도구만 허용
-- 원본 전체·채팅을 Gemini 분석이나 서버 렌더 대상으로 삼지 않으며, 정밀 분석 입력은 빠른 분석이 고른 후보 오디오와 후보별 제한 대표 화면으로 제한
+- 원본 전체·채팅을 한 번에 AI 분석이나 서버 렌더 대상으로 삼지 않으며, 후보 정밀 분석은 제한된 오디오·대표 화면을, 전체 문맥 분석은 시간순으로 압축된 챕터만 입력으로 사용
 
 다음은 코드 작성 전에 승인을 받는 것이 좋다.
 
@@ -2367,9 +2367,20 @@ YouTube IFrame이 요구하는 Referer를 유지하고 `strict-origin-when-cross
 
 ## 24. `0.3.28` 전체 맥락 우선 자동 분석
 
+> 이 절은 `0.3.28` 당시 구조의 변경 기록이다. 현재 운영 배치는 아래 `0.3.29` 절을 따른다.
+
 - 첫 fast pass는 정답이 있는 음식 토크 표본의 음성 반응 recall을 보존하면서 반복 음악·노래·MV·오프닝·엔딩을 후보에서 제외하는 값싼 탐색 단계다. 소리 크기는 사건의 증명이 아니라 어디를 먼저 읽을지 정하는 anchor다.
 - 후보별 `gemini-3.5-flash` 오디오·대표 화면 검증과 `qwen3-asr-flash-filetrans` 방송 표본 전사를 서로 독립적으로 시작한다. 후보 검증 완료 뒤 `qwen3.7-plus`가 시간순 챕터와 후보를 함께 읽어 선택·보류·제외를 설명하고, 기존 소리 후보 밖의 사과·조용한 성공·설정 회수 lead를 최대 12개까지 제안한다.
 - 의미 lead는 chapter ID를 근거로 가져야 하며 70초 이하 오디오를 다시 전사해 핵심 문구와의 어휘 근거를 확인한다. 확인된 lead만 30~60초 `semantic` 후보가 되고 기존 후보와 60% 이상 겹치면 중복 생성하지 않는다. 새 후보도 Gemini 오디오·화면 검증을 통과한다.
 - 전체 문맥 모델은 후보를 강제로 만들 수 없다. 독립된 사건이 없는 합방·릴레이 방송은 0개가 정상이며, 음악 또는 고정 대기 화면만으로는 선택할 수 없다. 구독 실수 방송처럼 핵심 사과가 조용하더라도 챕터 의미로 찾는 것이 목표다.
 - 유료 단계의 transcript, context, refinement 결과는 분석 세션의 입력 서명과 모델 revision별로 보존한다. 새로고침·원본 재연결 뒤 동일 서명이면 재사용하고, semantic 후보의 이미 저장된 Gemini 결과도 함께 복구해 이중 과금을 막는다.
 - 활성 역할은 Gemini 3.5 Flash(후보 AV), Qwen3 ASR Flash(긴 한국어 음성), Qwen3.7 Plus(전체 문맥)다. Qwen3.5 Omni Flash·Qwen3.6 Flash·Gemini 3.1 Pro·DeepSeek V4 Pro는 구현된 역할 정책과 공급자 경계 안에서만 폴백·상위 판정 후보로 유지하며, 검증되지 않은 transport는 자동 호출하지 않는다.
+
+## 25. `0.3.29` 역할별 모델 배치
+
+- `qwen3.5-omni-flash`는 후보의 오디오·대표 화면을 함께 읽고, YouTube 한국어 자막을 사용할 수 없을 때 방송 대사 챕터를 만드는 기본 지각 모델이다.
+- `qwen3.7-plus`는 압축된 방송 전체 챕터와 후보 근거를 함께 읽는 기본 문맥 모델이며, 넓게 잡힌 사건을 1분 단위의 서로 다른 순간으로 나누는 재검증에도 사용한다.
+- `qwen3.6-flash`는 텍스트만으로 충분한 보수적 선택 단계의 저비용 대안이다. 샘플에서 `qwen3.7-plus`보다 정확하다는 증거가 없으므로 기본 전체 문맥 모델을 대신하지 않는다.
+- `gemini-3.5-flash`는 후보 오디오·영상 지각 대체 경로, `gemini-3.1-pro-preview`는 맥락이 어려운 최대 3개 후보의 고급 재판정 대체 경로로 제한한다. 유효한 Google credential과 동일 회귀 검증이 없으면 자동 호출하지 않는다.
+- `deepseek-v4-pro`는 압축 텍스트 문맥의 비상 대체 경로다. 오디오·영상 원본을 직접 맡기지 않고 기본 자동 재시도로도 사용하지 않아 중복 과금을 막는다.
+- 현재 배포 기본값은 후보 지각·전사 `Qwen 3.5 Omni Flash`, 전체 문맥·의미 재확인 `Qwen 3.7 Plus`다. 모델별 결과는 provider·model revision을 포함해 분석 세션에 분리 저장하므로 다른 모델의 캐시로 가장하거나 새로고침 때 다시 결제하지 않는다.

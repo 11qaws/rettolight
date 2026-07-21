@@ -1,14 +1,15 @@
-export const AI_MODEL_ROUTING_POLICY_VERSION = "1.1.0" as const;
+export const AI_MODEL_ROUTING_POLICY_VERSION = "1.2.0" as const;
 
 export const EXCLIPPER_MODEL_IDS = {
-  candidatePerceptionPrimary: "gemini-3.5-flash",
-  candidatePerceptionFallback: "qwen3.5-omni-flash",
-  candidateAdjudicationPrimary: "gemini-3.1-pro-preview",
-  candidateAdjudicationFallback: "qwen3.7-plus",
-  broadcastTranscription: "qwen3-asr-flash",
-  broadcastVisualChaptering: "qwen3.6-flash",
+  candidatePerceptionPrimary: "qwen3.5-omni-flash",
+  candidatePerceptionFallback: "gemini-3.5-flash",
+  candidateAdjudicationPrimary: "qwen3.7-plus",
+  candidateAdjudicationFallback: "gemini-3.1-pro-preview",
+  broadcastTranscription: "qwen3.5-omni-flash",
+  broadcastVisualChaptering: "qwen3.5-omni-flash",
   broadcastContextReasoning: "qwen3.7-plus",
-  broadcastContextReasoningFallback: "deepseek-v4-pro",
+  broadcastContextReasoningFallback: "qwen3.6-flash",
+  broadcastContextEmergencyFallback: "deepseek-v4-pro",
 } as const;
 
 export type AiAnalysisStage =
@@ -27,7 +28,8 @@ export interface AiAnalysisPlanStep {
     | "candidate-av"
     | "sampled-audio"
     | "sampled-video"
-    | "compressed-text-context";
+    | "compressed-text-context"
+    | "compressed-candidate-evidence";
   readonly purposeKo: string;
 }
 
@@ -46,10 +48,11 @@ const QWEN_ASR_BILLABLE_COVERAGE_MS = 12_000_000;
 const QWEN_ASR_SAFE_CHUNK_MS = 210_000;
 
 /**
- * Creates a bounded role-based plan; it does not make paid calls. Fast models
- * perceive and transcribe, Qwen 3.7 Plus reasons over compressed whole-broadcast
- * context once (with DeepSeek as a credential-gated fallback), and Pro/Plus
- * models only resolve a few uncertain final cases.
+ * Creates a bounded role-based plan; it does not make paid calls. Qwen Omni
+ * perceives and transcribes, Qwen 3.7 Plus reasons over compressed evidence,
+ * and the expensive/optional adjudicator is restricted to a few uncertain
+ * final cases. DeepSeek V4 Pro remains a credential-gated emergency transport,
+ * not an automatic paid retry.
  */
 export function createAiAnalysisRoutingPlan(
   sourceDurationMs: number,
@@ -121,7 +124,7 @@ export function createAiAnalysisRoutingPlan(
         primaryModelId: EXCLIPPER_MODEL_IDS.candidateAdjudicationPrimary,
         fallbackModelId: EXCLIPPER_MODEL_IDS.candidateAdjudicationFallback,
         maximumCalls: adjudicationCalls,
-        inputScope: "candidate-av",
+        inputScope: "compressed-candidate-evidence",
         purposeKo: "사과·조용한 성취·맥락 의존 장면처럼 어려운 소수 후보만 재판정",
       },
     ],

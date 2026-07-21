@@ -1,7 +1,7 @@
 import type { BroadcastContextTranscriptionChunk } from "./broadcastContextSamplingPlan";
 import {
-  BROADCAST_TRANSCRIPT_QWEN_MODEL_ID,
   BROADCAST_TRANSCRIPT_QWEN_SCHEMA_VERSION,
+  isBroadcastTranscriptModelId,
   type BroadcastTranscriptQwenResult,
 } from "./broadcastTranscriptQwen";
 import {
@@ -69,7 +69,7 @@ function validResult(
   return (
     isRecord(value) &&
     value.schemaVersion === BROADCAST_TRANSCRIPT_QWEN_SCHEMA_VERSION &&
-    value.modelId === BROADCAST_TRANSCRIPT_QWEN_MODEL_ID &&
+    isBroadcastTranscriptModelId(value.modelId) &&
     value.sourceStartMs === chunk.sourceStartMs &&
     value.sourceEndMs === chunk.sourceEndMs &&
     typeof value.textKo === "string" &&

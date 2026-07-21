@@ -2,7 +2,10 @@ export const BROADCAST_CONTEXT_SCHEMA_VERSION = "1.4.0" as const;
 export const MAX_BROADCAST_CONTEXT_SOURCE_DURATION_MS = 12 * 60 * 60_000;
 export const MAX_BROADCAST_CONTEXT_CHAPTERS = 144;
 export const MAX_BROADCAST_CONTEXT_CANDIDATES = 12;
-export const MAX_BROADCAST_CONTEXT_SUMMARY_LENGTH = 1_200;
+// A 210-second Korean ASR cell can legitimately exceed 1,200 characters.
+// Keeping 3,000 avoids deleting a short apology or payoff near the end while
+// still bounding a 12-hour sampled request well below the model context limit.
+export const MAX_BROADCAST_CONTEXT_SUMMARY_LENGTH = 3_000;
 export const MAX_BROADCAST_CONTEXT_TRANSCRIPT_LENGTH = 12_000;
 export const MAX_SEMANTIC_CHAPTERS = 48;
 export const MAX_BROADCAST_CONTEXT_DISCOVERED_LEADS = 12;

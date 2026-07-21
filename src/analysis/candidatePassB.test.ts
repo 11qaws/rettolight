@@ -170,7 +170,7 @@ describe("buildCandidatePassBEvidence", () => {
     expect(result.overlay.event).toContain("반응 전에는");
     expect(result.overlay.event).toContain("반응 시점 부근에는");
     expect(result.overlay.event).toContain("반응 뒤에는");
-    expect(result.overlay.basisLabel).toBe("Gemini 대사 단서 · 재생 확인 필요");
+    expect(result.overlay.basisLabel).toBe("AI 대사 단서 · 재생 확인 필요");
   });
 
   it("keeps timestamped text without an independent quality signal as provisional cues", () => {
@@ -220,8 +220,8 @@ describe("buildCandidatePassBEvidence", () => {
 
     expect(result.status).toBe("grounded-transcript");
     expect(result.cues).toHaveLength(2);
-    expect(result.overlay.basisLabel).toBe("Gemini 대사 단서 · 재생 확인 필요");
-    expect(result.overlay.event).toContain("Gemini 대사에서");
+    expect(result.overlay.basisLabel).toBe("AI 대사 단서 · 재생 확인 필요");
+    expect(result.overlay.event).toContain("AI 대사에서");
     expect(result.overlay.event).not.toContain("실제 대사");
   });
 
@@ -302,7 +302,7 @@ describe("buildCandidatePassBEvidence", () => {
       { relativeStartMs: 26_000, relativeEndMs: 29_000, text: "우리 이겼다", confidence: 0.9, noSpeechProbability: 0.05 },
     ]);
 
-    expect(result.overlay.event).toContain("Gemini 대사에서 “우리 이겼다”로 인식됐어요");
+    expect(result.overlay.event).toContain("AI 대사에서 “우리 이겼다”로 인식됐어요");
     expect(result.overlay.event).not.toMatch(/승리(?:한|했다|장면|사건)/u);
     expect(result.overlay.event).toContain("사건의 종류");
   });

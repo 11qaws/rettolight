@@ -10,19 +10,18 @@ describe("broadcastTranscriptQwen", () => {
   it("builds the documented Korean ASR request without accepting provider controls", () => {
     expect(buildBroadcastTranscriptQwenRequestBody("UklGRg==")).toEqual({
       model: BROADCAST_TRANSCRIPT_QWEN_MODEL_ID,
-      messages: [
-        {
-          role: "user",
-          content: [
-            {
-              type: "input_audio",
-              input_audio: { data: "data:audio/wav;base64,UklGRg==" },
-            },
-          ],
-        },
-      ],
-      stream: false,
-      asr_options: { language: "ko", enable_itn: false },
+      input: {
+        messages: [
+          { role: "system", content: [{ text: "" }] },
+          {
+            role: "user",
+            content: [{ audio: "data:audio/wav;base64,UklGRg==" }],
+          },
+        ],
+      },
+      parameters: {
+        asr_options: { language: "ko", enable_itn: false },
+      },
     });
   });
 
@@ -36,15 +35,15 @@ describe("broadcastTranscriptQwen", () => {
   it("maps a validated provider response back onto the source timeline", () => {
     const result = extractBroadcastTranscriptQwenResponse(
       {
-        choices: [
+        output: { choices: [
           {
             finish_reason: "stop",
             message: {
-              content: "  두바이 초콜릿을 먹고 예상 밖의 맛에 놀란다.  ",
+              content: [{ text: "  두바이 초콜릿을 먹고 예상 밖의 맛에 놀란다.  " }],
               annotations: [{ type: "audio_info", language: "ko", emotion: "surprised" }],
             },
           },
-        ],
+        ] },
         usage: { seconds: 32 },
       },
       { sourceStartMs: 1_700_000, durationMs: 32_000 },
@@ -60,10 +59,10 @@ describe("broadcastTranscriptQwen", () => {
   });
 
   it("rejects incomplete and overlong provider output", () => {
-    expect(extractBroadcastTranscriptQwenResponse({ choices: [] }, { sourceStartMs: 0, durationMs: 1_000 })).toBeNull();
+    expect(extractBroadcastTranscriptQwenResponse({ output: { choices: [] } }, { sourceStartMs: 0, durationMs: 1_000 })).toBeNull();
     expect(
       extractBroadcastTranscriptQwenResponse(
-        { choices: [{ finish_reason: "length", message: { content: "partial" } }] },
+        { output: { choices: [{ finish_reason: "length", message: { content: [{ text: "partial" }] } }] } },
         { sourceStartMs: 0, durationMs: 1_000 },
       ),
     ).toBeNull();

@@ -3,6 +3,9 @@ import {
   buildBroadcastContextDeepseekRequestBody,
   buildBroadcastContextQwenRequestBody,
   extractBroadcastContextDeepseekResponse,
+  extractBroadcastContextQwenRefinementResponse,
+  extractBroadcastContextQwenSelectionResponse,
+  extractBroadcastContextQwenOverviewResponse,
 } from "./broadcastContextDeepseek";
 import type { BroadcastContextRequest } from "./broadcastContextProtocol";
 
@@ -62,10 +65,162 @@ describe("broadcastContextDeepseek", () => {
       const body = buildBroadcastContextQwenRequestBody(dummyRequest);
       expect(body.model).toBe("qwen3.7-plus");
       expect(body.enable_thinking).toBe(true);
-      expect(body.thinking_budget).toBe(4_096);
+      expect(body.thinking_budget).toBe(768);
+      expect(body.max_tokens).toBe(3_072);
+      expect(body.messages[0].content).toContain("클립 편집 라우터");
+      expect(body.messages[0].content).not.toContain("semanticChapters");
       expect(body.response_format).toEqual({ type: "json_object" });
       expect(body).not.toHaveProperty("thinking");
       expect(body).not.toHaveProperty("reasoning_effort");
+    });
+
+    it("bounds a selected event refinement to three concise leads", () => {
+      const body = buildBroadcastContextQwenRequestBody(
+        { ...dummyRequest, candidates: [] },
+        "qwen3.7-plus",
+        "refinement",
+      );
+      expect(body.max_tokens).toBe(1_024);
+      expect(body.messages[0].content).toContain("최대 3개");
+      expect(body.messages[0].content).toContain("1분 단위");
+    });
+
+    it("parses the compact refinement schema into grounded leads", () => {
+      const payload = {
+        choices: [{
+          message: {
+            content: JSON.stringify({
+              summary: "음식 오답에 반응하는 구간",
+              leads: [{
+                s: "c1",
+                e: "c1",
+                c: "reaction",
+                p: 0.91,
+                event: "음식 이름을 틀리고 강하게 항변한다.",
+                cue: "내가 틀린 게 아니야",
+              }],
+            }),
+          },
+        }],
+      };
+      const parsed = extractBroadcastContextQwenRefinementResponse(
+        payload,
+        { ...dummyRequest, candidates: [] },
+      );
+      expect(parsed.ok).toBe(true);
+      if (parsed.ok) {
+        expect(parsed.result.discoveredLeads).toEqual([
+          expect.objectContaining({
+            startMs: 0,
+            endMs: 300_000,
+            category: "reaction",
+          }),
+        ]);
+      }
+    });
+
+    it("turns a compact editorial selection into complete candidate decisions", () => {
+      const payload = {
+        choices: [{
+          message: {
+            content: JSON.stringify({
+              summary: "대표 반응 한 장면을 남김",
+              selected: [{ id: "can1", p: 0.93, reason: "사건과 반응이 완결된다." }],
+            }),
+          },
+        }],
+      };
+      const parsed = extractBroadcastContextQwenSelectionResponse(payload, dummyRequest);
+      expect(parsed.ok).toBe(true);
+      if (parsed.ok) {
+        expect(parsed.result.annotations).toEqual([
+          expect.objectContaining({
+            candidateId: "can1",
+            clipDecision: "select",
+            confidence: 0.93,
+          }),
+        ]);
+      }
+    });
+
+    it("grounds compact whole-broadcast leads and fills every candidate decision", () => {
+      const payload = {
+        choices: [{ message: { content: JSON.stringify({
+          summary: "실수의 경위를 설명하고 사과했다.",
+          themes: ["사과"],
+          candidates: [{
+            id: "can1",
+            d: "select",
+            c: "apology-accountability",
+            p: 0.95,
+            reason: "정확히 잘못을 인정한다.",
+          }],
+          leads: [{
+            s: "c1",
+            e: "c1",
+            c: "apology-accountability",
+            p: 0.96,
+            event: "실수를 인정하고 사과한다.",
+            cue: "제가 잘못했습니다",
+          }],
+        }) } }],
+      };
+      const parsed = extractBroadcastContextQwenOverviewResponse(payload, dummyRequest);
+      expect(parsed.ok).toBe(true);
+      if (parsed.ok) {
+        expect(parsed.result.annotations[0]).toMatchObject({
+          candidateId: "can1",
+          clipDecision: "select",
+        });
+        expect(parsed.result.discoveredLeads[0]).toMatchObject({
+          category: "apology-accountability",
+          startMs: 0,
+          endMs: 300_000,
+        });
+      }
+    });
+
+    it("keeps routine gameplay on the score map without adding editor-review clips", () => {
+      const gameRequest: BroadcastContextRequest = {
+        ...dummyRequest,
+        candidates: [{
+          ...dummyRequest.candidates[0]!,
+          transcriptKo: "동굴에 추락해서 물에 떠내려가다가 겨우 살아남았어.",
+          eventSummaryKo: "마인크래프트 동굴 추락과 생존",
+          reactionSummaryKo: "애니 한 편 찍었다며 크게 당황한다.",
+        }],
+      };
+      const payload = {
+        choices: [{ message: { content: JSON.stringify({
+          summary: "마인크래프트 건축 방송에서 자원 수집과 이동을 이어간다.",
+          themes: ["건축"],
+          candidates: [{
+            id: "can1",
+            d: "select",
+            c: "reaction",
+            p: 0.95,
+            reason: "동굴 추락 후 극적으로 생존했다.",
+          }],
+          leads: [{
+            s: "c1",
+            e: "c2",
+            c: "reaction",
+            p: 0.94,
+            event: "동굴 물에 빠졌다가 생존한다.",
+            cue: "애니 한 편 찍었어",
+          }],
+        }) } }],
+      };
+      const parsed = extractBroadcastContextQwenOverviewResponse(payload, gameRequest);
+      expect(parsed.ok).toBe(true);
+      if (parsed.ok) {
+        expect(parsed.result.annotations[0]).toMatchObject({
+          clipDecision: "reject",
+          category: "not-clip-worthy",
+          rejectionReasons: ["no-distinct-event"],
+        });
+        expect(parsed.result.discoveredLeads).toEqual([]);
+      }
     });
   });
 
@@ -315,6 +470,48 @@ describe("broadcastContextDeepseek", () => {
 
       const parsed = extractBroadcastContextDeepseekResponse(payload, dummyRequest);
       expect(parsed.ok).toBe(false);
+    });
+
+    it("recovers paid routing results while failing malformed items closed", () => {
+      const payload = {
+        choices: [{
+          message: {
+            content: JSON.stringify({
+              broadcastSummaryKo: "음악 대기 뒤 본 방송이 이어졌다.",
+              recurringThemesKo: ["음식 토크"],
+              annotations: [],
+              discoveredLeads: [
+                {
+                  leadId: "bad-range",
+                  startChapterId: "missing",
+                  endChapterId: "missing",
+                  category: "reaction",
+                  confidence: 0.9,
+                  eventSummaryKo: "잘못된 범위",
+                  whyThisMomentKo: "범위가 없다.",
+                  evidenceCueKo: "없음",
+                  uncertaintiesKo: [],
+                },
+              ],
+            }),
+          },
+        }],
+      };
+
+      const parsed = extractBroadcastContextDeepseekResponse(payload, dummyRequest, {
+        recoverMalformedItems: true,
+      });
+      expect(parsed.ok).toBe(true);
+      if (parsed.ok) {
+        expect(parsed.result.annotations).toEqual([
+          expect.objectContaining({
+            candidateId: "can1",
+            clipDecision: "reject",
+            rejectionReasons: ["uncertain-evidence"],
+          }),
+        ]);
+        expect(parsed.result.discoveredLeads).toEqual([]);
+      }
     });
   });
 });

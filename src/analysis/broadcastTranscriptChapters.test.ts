@@ -62,4 +62,26 @@ describe("broadcastTranscriptChapters", () => {
       { startMs: 150_000, endMs: 600_000 },
     ]);
   });
+
+  it("keeps evidence from the beginning, middle, and end of a long ASR cell", () => {
+    const textKo = `시작사건 ${"가".repeat(1_000)} 중간사건 ${"나".repeat(1_000)} 정확한사과`;
+    const [chapter] = createBroadcastTranscriptChapters(
+      [{
+        schemaVersion: "1.0.0",
+        modelId: "qwen3.5-omni-flash",
+        sourceStartMs: 0,
+        sourceEndMs: 210_000,
+        textKo,
+        detectedLanguage: "ko",
+        emotion: null,
+        billedSeconds: null,
+      }],
+      210_000,
+      true,
+    );
+    expect(chapter?.summaryKo).toContain("시작사건");
+    expect(chapter?.summaryKo).toContain("중간사건");
+    expect(chapter?.summaryKo).toContain("정확한사과");
+    expect(Array.from(chapter?.summaryKo ?? "").length).toBeLessThanOrEqual(3_000);
+  });
 });

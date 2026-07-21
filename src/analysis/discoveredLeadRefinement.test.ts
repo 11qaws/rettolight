@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import type { BroadcastContextDiscoveredLead } from "./broadcastContextProtocol";
 import {
   DISCOVERED_LEAD_REFINEMENT_BUDGET_USD,
+  createDiscoveredLeadRefinementChapters,
   createDiscoveredLeadRefinementPlan,
+  materializeRefinedDiscoveredLeadEvidence,
   refineDiscoveredLeadRange,
 } from "./discoveredLeadRefinement";
 
@@ -33,7 +35,7 @@ describe("discoveredLeadRefinement", () => {
     );
     expect(
       plan.segments.every(
-        (segment) => segment.sourceEndMs - segment.sourceStartMs <= 70_000,
+        (segment) => segment.sourceEndMs - segment.sourceStartMs <= 60_000,
       ),
     ).toBe(true);
   });
@@ -52,11 +54,88 @@ describe("discoveredLeadRefinement", () => {
           : "게임 화면을 보며 평범한 이야기를 이어간다.",
       detectedLanguage: "ko",
       emotion: index === 1 ? "sad" : "neutral",
-      billedSeconds: 70,
+      billedSeconds: 60,
     }));
     const refined = refineDiscoveredLeadRange(target, plan, transcripts, 2_000_000);
     expect(refined?.matchedSegmentId).toBe(plan.segments[1]?.segmentId);
     expect(refined?.transcriptMatchScore).toBeGreaterThan(0.5);
-    expect((refined?.endMs ?? 0) - (refined?.startMs ?? 0)).toBe(45_000);
+    expect((refined?.endMs ?? 0) - (refined?.startMs ?? 0)).toBe(60_000);
+  });
+
+  it("builds source-fenced chapters and materializes more than one refined event", () => {
+    const parent = lead("food-quiz", 600_000);
+    const plan = createDiscoveredLeadRefinementPlan([parent]);
+    const transcripts = plan.segments.slice(0, 3).map((segment, index) => ({
+      schemaVersion: "1.0.0" as const,
+      modelId: "qwen3.5-omni-flash" as const,
+      sourceStartMs: segment.sourceStartMs,
+      sourceEndMs: segment.sourceEndMs,
+      textKo: index === 0 ? "칼국수를 보고 억울해한다." : `음식 퀴즈 ${index}`,
+      detectedLanguage: "ko",
+      emotion: "neutral",
+      billedSeconds: 60,
+    }));
+    const chapters = createDiscoveredLeadRefinementChapters(
+      parent.leadId,
+      plan,
+      transcripts,
+      "음식 이름 맞히기 사건",
+    );
+    expect(chapters).toHaveLength(3);
+    expect(chapters[0]).toMatchObject({
+      chapterId: plan.segments[0]?.segmentId,
+      summaryKo: "[상위 사건] 음식 이름 맞히기 사건 칼국수를 보고 억울해한다.",
+    });
+
+    const refinedLead = {
+      ...parent,
+      leadId: "refined-kalguksu",
+      startChapterId: chapters[0]?.chapterId ?? "missing",
+      endChapterId: chapters[0]?.chapterId ?? "missing",
+      startMs: chapters[0]?.startMs ?? 0,
+      endMs: chapters[0]?.endMs ?? 0,
+    };
+    const evidence = materializeRefinedDiscoveredLeadEvidence(
+      refinedLead,
+      transcripts,
+      2_000_000,
+    );
+    expect(evidence?.transcriptKo).toContain("칼국수");
+    expect((evidence?.range.endMs ?? 0) - (evidence?.range.startMs ?? 0)).toBe(
+      60_000,
+    );
+  });
+
+  it("uses the evidence cue cell instead of the midpoint of a broad refined range", () => {
+    const parent = { ...lead("broad", 600_000), endMs: 840_000 };
+    const plan = createDiscoveredLeadRefinementPlan([parent]);
+    const transcripts = plan.segments.slice(0, 4).map((segment, index) => ({
+      schemaVersion: "1.0.0" as const,
+      modelId: "qwen3.5-omni-flash" as const,
+      sourceStartMs: segment.sourceStartMs,
+      sourceEndMs: segment.sourceEndMs,
+      textKo:
+        index === 3
+          ? "참치 초밥은 초밥이라면서 왜 칼국수는 안 됩니까"
+          : "다른 음식 이름을 맞히는 평범한 진행",
+      detectedLanguage: "ko",
+      emotion: "neutral",
+      billedSeconds: 60,
+    }));
+    const refined = {
+      ...parent,
+      leadId: "kalguksu",
+      startMs: transcripts[0]?.sourceStartMs ?? 0,
+      endMs: transcripts[3]?.sourceEndMs ?? 0,
+      evidenceCueKo: "참치 초밥은 초밥 칼국수",
+    };
+    const evidence = materializeRefinedDiscoveredLeadEvidence(
+      refined,
+      transcripts,
+      2_000_000,
+    );
+    expect(evidence?.range.startMs).toBe(transcripts[3]?.sourceStartMs);
+    expect(evidence?.range.transcriptMatchScore).toBeGreaterThanOrEqual(0.5);
+    expect(evidence?.transcriptKo).toContain("칼국수");
   });
 });

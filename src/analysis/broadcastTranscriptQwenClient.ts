@@ -1,10 +1,10 @@
 import {
-  BROADCAST_TRANSCRIPT_QWEN_MODEL_ID,
   BROADCAST_TRANSCRIPT_QWEN_SCHEMA_VERSION,
   MAX_BROADCAST_TRANSCRIPT_QWEN_BASE64_LENGTH,
   MAX_BROADCAST_TRANSCRIPT_QWEN_DURATION_MS,
   MAX_BROADCAST_TRANSCRIPT_QWEN_RESPONSE_BYTES,
   MAX_BROADCAST_TRANSCRIPT_QWEN_TEXT_LENGTH,
+  isBroadcastTranscriptModelId,
   type BroadcastTranscriptQwenResult,
 } from "./broadcastTranscriptQwen";
 
@@ -52,7 +52,7 @@ function parseResult(
   if (
     !isRecord(value) ||
     value.schemaVersion !== BROADCAST_TRANSCRIPT_QWEN_SCHEMA_VERSION ||
-    value.modelId !== BROADCAST_TRANSCRIPT_QWEN_MODEL_ID ||
+    !isBroadcastTranscriptModelId(value.modelId) ||
     value.sourceStartMs !== sourceStartMs ||
     value.sourceEndMs !== sourceStartMs + durationMs ||
     typeof value.textKo !== "string" ||
@@ -72,7 +72,7 @@ function parseResult(
   }
   return {
     schemaVersion: BROADCAST_TRANSCRIPT_QWEN_SCHEMA_VERSION,
-    modelId: BROADCAST_TRANSCRIPT_QWEN_MODEL_ID,
+    modelId: value.modelId,
     sourceStartMs,
     sourceEndMs: sourceStartMs + durationMs,
     textKo: value.textKo,

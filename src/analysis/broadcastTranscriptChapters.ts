@@ -4,11 +4,20 @@ import {
 } from "./broadcastContextProtocol";
 import type { BroadcastTranscriptQwenResult } from "./broadcastTranscriptQwen";
 
-function truncateCodePoints(value: string, maximumLength: number): string {
+function representativeCodePoints(value: string, maximumLength: number): string {
   const points = Array.from(value);
-  return points.length <= maximumLength
-    ? value
-    : `${points.slice(0, Math.max(0, maximumLength - 1)).join("")}…`;
+  if (points.length <= maximumLength) return value;
+  const separator = " … ";
+  const separatorLength = Array.from(separator).length;
+  const sampleCount = 4;
+  const sampleLength = Math.floor(
+    (maximumLength - separatorLength * (sampleCount - 1)) / sampleCount,
+  );
+  const maximumStart = points.length - sampleLength;
+  return Array.from({ length: sampleCount }, (_, index) => {
+    const start = Math.round((maximumStart * index) / (sampleCount - 1));
+    return points.slice(start, start + sampleLength).join("");
+  }).join(separator);
 }
 
 /**
@@ -53,7 +62,7 @@ export function createBroadcastTranscriptChapters(
         ? "complete-transcript"
         : "sampled-audio-video",
       evidenceCoverageRatio: 1,
-      summaryKo: truncateCodePoints(
+      summaryKo: representativeCodePoints(
         `${emotionPrefix}${transcript.textKo}`,
         MAX_BROADCAST_CONTEXT_SUMMARY_LENGTH,
       ),

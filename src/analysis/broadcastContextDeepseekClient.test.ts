@@ -112,4 +112,26 @@ describe("requestBroadcastContextDeepseek", () => {
       code: "PROXY_INVALID_RESPONSE",
     });
   });
+
+  it("sends the explicit refinement mode without changing the validated input", async () => {
+    let receivedBody: unknown;
+    const response = await requestBroadcastContextDeepseek(input, {
+      analysisMode: "refinement",
+      fetchImplementation: (_input, init) => {
+        if (typeof init?.body !== "string") {
+          throw new TypeError("Expected a serialized refinement request.");
+        }
+        receivedBody = JSON.parse(init.body) as unknown;
+        return Promise.resolve(
+          new Response(JSON.stringify(result), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      },
+    });
+
+    expect(response.broadcastSummaryKo).toContain("사과");
+    expect(receivedBody).toEqual({ ...input, analysisMode: "refinement" });
+  });
 });

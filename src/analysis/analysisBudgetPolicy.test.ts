@@ -10,7 +10,7 @@ describe("analysisBudgetPolicy", () => {
   it("keeps the worst supported source and bounded model calls below one dollar", () => {
     const envelope = createAnalysisBudgetEnvelope(12 * HOUR_MS, 12, 3);
     expect(envelope.qwenAsrUsd).toBeLessThanOrEqual(0.42);
-    expect(envelope.geminiCandidatePerceptionUsd).toBeLessThanOrEqual(0.24);
+    expect(envelope.candidatePerceptionUsd).toBeLessThanOrEqual(0.08);
     expect(envelope.projectedMaximumUsd).toBeLessThanOrEqual(
       ANALYSIS_BUDGET_LIMIT_USD,
     );
@@ -26,7 +26,7 @@ describe("analysisBudgetPolicy", () => {
 
   it("still reserves whole-context reasoning for a negative fast pass", () => {
     const envelope = createAnalysisBudgetEnvelope(2 * HOUR_MS, 0, 0);
-    expect(envelope.geminiCandidatePerceptionUsd).toBe(0);
-    expect(envelope.deepseekContextReserveUsd).toBeGreaterThan(0);
+    expect(envelope.candidatePerceptionUsd).toBe(0);
+    expect(envelope.contextReasoningReserveUsd).toBeGreaterThan(0);
   });
 });

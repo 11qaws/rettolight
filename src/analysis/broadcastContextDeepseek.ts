@@ -1,5 +1,6 @@
 import {
   BROADCAST_CONTEXT_SCHEMA_VERSION,
+  type BroadcastContextCandidateAnnotation,
   type BroadcastContextCandidateCategory,
   type BroadcastContextClipDecision,
   type BroadcastContextRejectionReason,
@@ -44,9 +45,20 @@ export interface BroadcastContextQwenRequestBody {
   readonly thinking_budget: number;
 }
 
+export type BroadcastContextQwenMode = "overview" | "refinement" | "selection";
+
 export type BroadcastContextDeepseekParseOutcome =
   | { readonly ok: true; readonly result: BroadcastContextResult }
   | { readonly ok: false };
+
+export interface BroadcastContextParseOptions {
+  /**
+   * Provider JSON is generated, not trusted program input. In production a
+   * malformed item should fail closed by being discarded, without losing the
+   * other paid-for judgments in the same response.
+   */
+  readonly recoverMalformedItems?: boolean;
+}
 
 const SYSTEM_PROMPT = `당신은 긴 인터넷 방송(라이브 스트리밍)의 전체 흐름과 맥락을 파악하여, 특정 하이라이트 구간(후보)들이 전체 방송에서 어떤 역할을 하는지 분류하고 방송을 의미 단위로 묶는(Semantic Chapters) 전문 편집 어시스턴트입니다.
 
@@ -125,6 +137,76 @@ const SYSTEM_PROMPT = `당신은 긴 인터넷 방송(라이브 스트리밍)의
 - 노래·MV·오프닝·엔딩·대기·휴식, 맥락 없는 단편, 이미 주어진 후보와 같은 사건은 discoveredLeads에 넣지 마세요.
 - 의미 있는 새 사건이 없다면 discoveredLeads는 빈 배열이어야 합니다.`;
 
+/**
+ * Qwen is used as the inexpensive whole-broadcast router.  This prompt keeps
+ * the output deliberately small: it finds evidence-bearing chapter ranges and
+ * rejects weak fast-pass peaks, while the later candidate pass performs the
+ * expensive audio/video explanation only for those ranges.
+ */
+export const LEGACY_QWEN_ROUTING_SYSTEM_PROMPT = `당신은 VTuber 인터넷 방송의 클립 편집 라우터입니다. 입력에는 시간순 대사 챕터와 빠른 음향 탐색 후보가 있습니다. 방송 전체 흐름을 한꺼번에 읽고, 편집자가 다시 볼 가치가 있는 소수 구간만 고르세요.
+
+클립의 중심은 화려한 연출이나 큰 소리가 아니라 구체적인 사건과 스트리머의 반응입니다. 조용한 성공, 실수의 정확한 인정·사과, 앞선 설정의 회수, 반복 농담의 절정처럼 전체 맥락이 있어야 의미가 생기는 장면도 찾으세요.
+
+다음은 반드시 제외합니다.
+- 노래, MV, 음악 감상, 오프닝·엔딩·대기·휴식 화면. 단, 그 구간에서 별도의 특이 사건이나 명확한 대화가 발생한 경우만 예외입니다.
+- 사건 없이 평범하게 이어지는 진행, 맥락 없는 짧은 감탄, 소리가 크다는 이유만으로 잡힌 구간.
+- 같은 사건의 중복 후보. 의미 있는 장면이 없으면 빈 배열이 올바른 답입니다.
+
+아래 JSON만 출력하세요. 설명 문장이나 마크다운은 쓰지 마세요.
+{
+  "broadcastSummaryKo": "방송 전체 흐름 요약, 300자 이내",
+  "recurringThemesKo": ["전체 판단에 필요한 핵심 주제, 최대 3개"],
+  "annotations": [
+    {
+      "candidateId": "입력 candidateId",
+      "category": "reaction | quiet-achievement | setup-and-payoff | running-gag | context-dependent | apology-accountability | music-or-intermission | not-clip-worthy | uncertain",
+      "clipDecision": "select | review | reject",
+      "confidence": 0.0,
+      "rejectionReasons": ["music-or-song | opening-ending-or-break | no-distinct-event | reaction-without-context | insufficient-context | duplicate-episode | uncertain-evidence"],
+      "contextSummaryKo": "방송 맥락에서 이 구간이 하는 역할, 100자 이내",
+      "whyThisMomentKo": "선택하거나 제외한 구체적인 이유, 100자 이내",
+      "relatedCandidateIds": [],
+      "uncertaintiesKo": []
+    }
+  ],
+  "discoveredLeads": [
+    {
+      "leadId": "lead-01 형식의 고유 ID",
+      "startChapterId": "실제 chapterId",
+      "endChapterId": "실제 chapterId",
+      "category": "reaction | quiet-achievement | setup-and-payoff | running-gag | context-dependent | apology-accountability",
+      "confidence": 0.0,
+      "eventSummaryKo": "무슨 사건인지, 60자 이내",
+      "whyThisMomentKo": "왜 다시 볼 가치가 있는지, 60자 이내",
+      "evidenceCueKo": "대사에서 확인한 30자 이내의 짧은 근거",
+      "uncertaintiesKo": []
+    }
+  ]
+}
+
+annotations에는 입력된 모든 candidateId를 정확히 한 번씩 넣으세요. reject에는 rejectionReasons가 하나 이상 필요하고 select에는 빈 배열이어야 합니다. discoveredLeads는 신뢰도 0.75 이상인 최대 6개만 점수순으로 남기고 입력 챕터 범위만 참조합니다. 반복되는 오답·감탄·비슷한 사건을 전부 나열하지 말고, 전후 맥락과 스트리머 반응이 가장 분명하게 완결되는 절정이나 회수만 고르세요. 빠른 후보와 같은 사건은 새 lead로 중복하지 마세요.`;
+
+const QWEN_REFINEMENT_SYSTEM_PROMPT = `당신은 이미 선택된 VTuber 방송 사건을 1분 단위 대사 칸으로 좁히는 편집 라우터입니다. 화려한 화면이나 큰 소리가 아니라 구체적인 원인→스트리머의 특징적인 반응→결과가 짧게 완결되는 장면을 찾으세요. 조용한 인정·사과·성공도 이 구조가 분명하면 중요합니다. 노래·MV·음악·오프닝·엔딩·대기·휴식, 평범한 진행, 일반적인 설명과 의견, 반복되는 비슷한 오답은 제외합니다. 한 큰 범위에 서로 다른 사건이 있으면 절정이 다른 장면을 각각 분리하되, 같은 논쟁의 연속은 가장 선명한 회수 하나만 최대 3개 고르세요.
+
+반드시 다음의 짧은 JSON만 출력하세요. 다른 키, 설명, 마크다운을 추가하지 마세요.
+{"summary":"입력 범위 요약 80자 이내","leads":[{"s":"실제 시작 chapterId","e":"실제 끝 chapterId","c":"reaction | quiet-achievement | setup-and-payoff | running-gag | context-dependent | apology-accountability","p":0.0,"event":"사건과 반응 60자 이내","cue":"근거 대사 30자 이내"}]}`;
+
+const QWEN_COMPACT_OVERVIEW_SYSTEM_PROMPT = `당신은 VTuber 인터넷 방송의 전체 맥락을 읽는 1차 클립 편집 라우터입니다. 큰 소리나 화려한 연출이 아니라 구체적인 사건과 그에 대한 스트리머의 반응을 넓게 찾으세요. 특히 직접적인 반박·논쟁·억울함·당황·웃음, 실수의 정확한 인정과 사과, 조용한 성공, 앞선 설정의 회수를 놓치지 마세요. 한 넓은 구간 안에 서로 다른 반응 사건이 여러 개 있으면 후속 1분 정밀 단계가 나눌 수 있도록 그 범위를 lead로 남겨도 됩니다.
+
+노래·MV·음악·오프닝·엔딩·대기·휴식, 사건 없는 평범한 진행, 맥락 없는 감탄은 제외합니다. 빠른 소리 후보는 소리가 크다는 이유만으로 선택하지 말고 대사 맥락에서 실제 사건이 확인된 경우만 남기세요. 의미 있는 장면이 없으면 leads는 빈 배열이어야 하며 개수를 채우지 마세요. 흔한 게임 진행의 최종 제외는 별도 안전 게이트가 담당하므로, 이 단계에서는 사건을 누락시키지 않는 것을 우선하세요.
+
+반드시 다음의 짧은 JSON만 출력하세요. 다른 키, 설명, 마크다운을 추가하지 마세요.
+{"summary":"방송 전체 흐름 300자 이내","themes":["핵심 주제 최대 3개"],"candidates":[{"id":"실제 candidateId","d":"select | review | reject","c":"reaction | quiet-achievement | setup-and-payoff | running-gag | context-dependent | apology-accountability | music-or-intermission | not-clip-worthy | uncertain","p":0.0,"reason":"판정 이유 50자 이내"}],"leads":[{"s":"실제 시작 chapterId","e":"실제 끝 chapterId","c":"reaction | quiet-achievement | setup-and-payoff | running-gag | context-dependent | apology-accountability","p":0.0,"event":"사건과 반응 60자 이내","cue":"근거 대사 30자 이내"}]}
+입력된 모든 candidateId를 candidates에 정확히 한 번 넣고, leads는 신뢰도 0.75 이상 최대 6개만 점수순으로 반환하세요.`;
+
+const QWEN_SELECTION_SYSTEM_PROMPT = `당신은 VTuber 방송의 보수적인 최종 클립 편집 심사자입니다. 이미 정밀 탐색된 후보들을 서로 비교해, 독립된 사건과 스트리머의 특징적인 반응이 함께 완결되고 처음 보는 시청자가 실제로 다시 볼 가치가 있는 대표 후보만 남기세요. 클립은 음식·게임 정보가 아니라 그 사건을 겪는 스트리머의 반응을 보는 콘텐츠입니다. 설명이 논리적이거나 정보가 많다는 이유만으로 고르지 말고, 전제가 즉시 이해되며 반박·당황·억울함·웃음·채팅과의 충돌처럼 반응의 원인→고조→결과가 선명한 장면을 우선하세요.
+
+큰 소리·화려한 화면·반복 오답 자체는 선정 근거가 아닙니다. 게임의 흔한 추락·사망·길 찾기·자원 부족·제작 실수·건축 완료·일반적인 생존은 패닉이나 극적인 자기 묘사가 있어도 제외하세요. 큰 손실, 희귀 성취, 예상 밖 버그·사회적 상호작용, 장기 설정 회수처럼 방송 흐름을 실질적으로 바꾼 경우만 예외입니다. 스트리머가 스스로 '애니', '드라마', '레전드'라고 말한 것은 가치 증거가 아닙니다. 같은 농담이나 같은 논쟁은 가장 선명한 절정 하나만 남기고 중복을 버리세요. 조용한 성공, 정확한 사과·인정, 설정 회수는 소리가 작아도 중요하지만 방송 전체의 핵심 책임 사건이 아닌 평범한 퀴즈 인정은 강한 반응 장면보다 우선하지 않습니다. 노래·MV·음악·오프닝·엔딩·대기·휴식은 제외합니다. 가치 있는 후보가 없으면 빈 배열이 정답이며 개수를 채우지 마세요.
+
+반드시 다음의 짧은 JSON만 출력하세요. 다른 키, 설명, 마크다운을 추가하지 마세요.
+{"summary":"선정 결과 80자 이내","selected":[{"id":"실제 candidateId","p":0.0,"reason":"선정 이유 50자 이내"}]}
+신뢰도 0.88 이상만 최대 8개를 점수순으로 반환하세요.`;
+
 function formatDuration(ms: number): string {
   const totalSeconds = Math.floor(ms / 1000);
   const hours = Math.floor(totalSeconds / 3600);
@@ -172,16 +254,369 @@ export function buildBroadcastContextDeepseekRequestBody(
 export function buildBroadcastContextQwenRequestBody(
   request: BroadcastContextRequest,
   model = "qwen3.7-plus",
+  mode: BroadcastContextQwenMode = "overview",
 ): BroadcastContextQwenRequestBody {
-  const deepseekBody = buildBroadcastContextDeepseekRequestBody(request, model);
+  let userContent = `총 방송 길이: ${formatDuration(request.sourceDurationMs)}\n\n### 시간순 대사 챕터\n`;
+  for (const chapter of request.chapters) {
+    userContent += `- ${chapter.chapterId} [${formatDuration(chapter.startMs)}~${formatDuration(chapter.endMs)} / ${chapter.evidenceMode} / 근거 ${Math.round(chapter.evidenceCoverageRatio * 100)}%]: ${chapter.summaryKo}\n`;
+  }
+  userContent += "\n### 빠른 탐색 후보\n";
+  if (request.candidates.length === 0) {
+    userContent += "- 없음. 챕터에서 의미 후보만 찾으세요.\n";
+  }
+  for (const candidate of request.candidates) {
+    userContent += `- ${candidate.candidateId} [${formatDuration(candidate.startMs)}~${formatDuration(candidate.endMs)}]\n`;
+    userContent += `  대사: ${candidate.transcriptKo}\n`;
+    userContent += `  사건: ${candidate.eventSummaryKo}\n`;
+    userContent += `  반응: ${candidate.reactionSummaryKo}\n`;
+    if (candidate.chatReactionSummaryKo) {
+      userContent += `  채팅: ${candidate.chatReactionSummaryKo}\n`;
+    }
+  }
+  if (mode === "refinement") {
+    userContent += "\n### 정밀 라우팅 제한\n신뢰도 0.75 이상만 최대 3개 반환하세요.\n";
+  } else if (mode === "selection") {
+    userContent += "\n### 최종 심사 제한\n후보끼리 직접 비교하고 중복을 제거하세요. 개수를 채우지 마세요.\n";
+  }
+
   return {
-    model: deepseekBody.model,
-    messages: deepseekBody.messages,
-    response_format: deepseekBody.response_format,
-    temperature: deepseekBody.temperature,
-    max_tokens: deepseekBody.max_tokens,
+    model,
+    messages: [
+      {
+        role: "system",
+        content: mode === "refinement"
+          ? QWEN_REFINEMENT_SYSTEM_PROMPT
+          : mode === "selection"
+            ? QWEN_SELECTION_SYSTEM_PROMPT
+            : QWEN_COMPACT_OVERVIEW_SYSTEM_PROMPT,
+      },
+      { role: "user", content: userContent },
+    ],
+    response_format: { type: "json_object" },
+    temperature: 0.1,
+    max_tokens: mode === "overview" ? 3_072 : 1_024,
     enable_thinking: true,
-    thinking_budget: 4_096,
+    thinking_budget: 768,
+  };
+}
+
+export function extractBroadcastContextQwenRefinementResponse(
+  payload: unknown,
+  request: BroadcastContextRequest,
+): BroadcastContextDeepseekParseOutcome {
+  if (!isRecord(payload) || !Array.isArray(payload.choices) || payload.choices.length === 0) {
+    return { ok: false };
+  }
+  const choice: unknown = payload.choices[0];
+  if (!isRecord(choice) || !isRecord(choice.message) || typeof choice.message.content !== "string") {
+    return { ok: false };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(choice.message.content);
+  } catch {
+    return { ok: false };
+  }
+  if (!isRecord(parsed) || typeof parsed.summary !== "string" || !Array.isArray(parsed.leads)) {
+    return { ok: false };
+  }
+
+  const rawLeads: BroadcastContextDiscoveredLeadReference[] = [];
+  for (const [index, value] of parsed.leads.slice(0, 3).entries()) {
+    if (
+      !isRecord(value) ||
+      typeof value.s !== "string" ||
+      typeof value.e !== "string" ||
+      typeof value.c !== "string" ||
+      !isValidDiscoveredLeadCategory(value.c) ||
+      typeof value.p !== "number" ||
+      !Number.isFinite(value.p) ||
+      value.p < 0.75 ||
+      value.p > 1 ||
+      typeof value.event !== "string" ||
+      typeof value.cue !== "string"
+    ) {
+      continue;
+    }
+    rawLeads.push({
+      leadId: `refine-${value.s}-${value.e}-${index + 1}`,
+      startChapterId: value.s,
+      endChapterId: value.e,
+      category: value.c,
+      confidence: value.p,
+      eventSummaryKo: value.event,
+      whyThisMomentKo: "사건과 스트리머 반응이 함께 확인되는 정밀 후보입니다.",
+      evidenceCueKo: value.cue,
+      uncertaintiesKo: ["최종 영상·음성 재검증 필요"],
+    });
+  }
+  const discoveredLeads: BroadcastContextDiscoveredLead[] = [];
+  for (const lead of rawLeads) {
+    try {
+      discoveredLeads.push(...normalizeDiscoveredLeads([lead], request.chapters));
+    } catch {
+      // A generated chapter ID outside the observed window is discarded.
+    }
+  }
+  return {
+    ok: true,
+    result: {
+      schemaVersion: BROADCAST_CONTEXT_SCHEMA_VERSION,
+      broadcastSummaryKo: parsed.summary,
+      recurringThemesKo: [],
+      annotations: request.candidates.map((candidate) => ({
+        candidateId: candidate.candidateId,
+        category: "uncertain" as const,
+        clipDecision: "reject" as const,
+        confidence: 0,
+        rejectionReasons: ["uncertain-evidence" as const],
+        contextSummaryKo: "정밀 라우팅에서는 기존 후보를 다시 판정하지 않습니다.",
+        whyThisMomentKo: "개요 단계 판정을 유지합니다.",
+        relatedCandidateIds: [],
+        uncertaintiesKo: ["정밀 라우팅 대상 아님"],
+      })),
+      semanticChaptersSupported: false,
+      semanticChapters: [],
+      discoveredLeadsSupported: true,
+      discoveredLeads,
+      coverage: calculateCoverage(request.chapters, request.sourceDurationMs),
+    },
+  };
+}
+
+export function extractBroadcastContextQwenOverviewResponse(
+  payload: unknown,
+  request: BroadcastContextRequest,
+): BroadcastContextDeepseekParseOutcome {
+  if (!isRecord(payload) || !Array.isArray(payload.choices) || payload.choices.length === 0) {
+    return { ok: false };
+  }
+  const choice: unknown = payload.choices[0];
+  if (!isRecord(choice) || !isRecord(choice.message) || typeof choice.message.content !== "string") {
+    return { ok: false };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(choice.message.content);
+  } catch {
+    return { ok: false };
+  }
+  if (!isRecord(parsed) || typeof parsed.summary !== "string") return { ok: false };
+  const broadcastSummaryKo = parsed.summary;
+  const themes = isStringArray(parsed.themes) ? parsed.themes.slice(0, 3) : [];
+  const rawCandidates = Array.isArray(parsed.candidates) ? parsed.candidates : [];
+  const verdicts = new Map<string, BroadcastContextCandidateAnnotation>();
+  const requestedIds = new Set(request.candidates.map((candidate) => candidate.candidateId));
+  for (const value of rawCandidates) {
+    if (
+      !isRecord(value) ||
+      typeof value.id !== "string" ||
+      !requestedIds.has(value.id) ||
+      verdicts.has(value.id) ||
+      typeof value.d !== "string" ||
+      !isValidClipDecision(value.d) ||
+      typeof value.c !== "string" ||
+      !isValidCategory(value.c) ||
+      typeof value.p !== "number" ||
+      !Number.isFinite(value.p) ||
+      value.p < 0 ||
+      value.p > 1 ||
+      typeof value.reason !== "string"
+    ) {
+      continue;
+    }
+    const rejectionReasons: readonly BroadcastContextRejectionReason[] =
+      value.d !== "reject"
+        ? []
+        : value.c === "music-or-intermission"
+          ? ["music-or-song"]
+          : value.c === "uncertain"
+            ? ["uncertain-evidence"]
+            : ["no-distinct-event"];
+    verdicts.set(value.id, {
+      candidateId: value.id,
+      category: value.c,
+      clipDecision: value.d,
+      confidence: value.p,
+      rejectionReasons,
+      contextSummaryKo: value.reason,
+      whyThisMomentKo: value.reason,
+      relatedCandidateIds: [],
+      uncertaintiesKo: [],
+    });
+  }
+  const annotations = request.candidates.map((candidate) => {
+    const verdict = verdicts.get(candidate.candidateId) ?? {
+      candidateId: candidate.candidateId,
+      category: "uncertain" as const,
+      clipDecision: "reject" as const,
+      confidence: 0,
+      rejectionReasons: ["uncertain-evidence" as const],
+      contextSummaryKo: "AI 응답에서 이 후보 판정을 확인하지 못했습니다.",
+      whyThisMomentKo: "검증되지 않은 후보는 자동 선택하지 않습니다.",
+      relatedCandidateIds: [],
+      uncertaintiesKo: ["후보 판정 응답 누락"],
+    };
+    if (
+      verdict.clipDecision !== "reject" &&
+      isRoutineGameplayEvidence(broadcastSummaryKo, [
+        candidate.transcriptKo,
+        candidate.eventSummaryKo,
+        candidate.reactionSummaryKo,
+        verdict.contextSummaryKo,
+      ])
+    ) {
+      return {
+        ...verdict,
+        category: "not-clip-worthy" as const,
+        clipDecision: "reject" as const,
+        confidence: Math.max(verdict.confidence, 0.9),
+        rejectionReasons: ["no-distinct-event" as const],
+        contextSummaryKo:
+          "전체 맥락에서 흔한 게임 진행으로 확인되어 편집 후보에서 제외했습니다.",
+        whyThisMomentKo:
+          "큰 반응이나 극적인 자기 묘사만으로는 독립적인 클립 사건이 되지 않습니다.",
+      };
+    }
+    return verdict;
+  });
+
+  const rawLeads: BroadcastContextDiscoveredLeadReference[] = [];
+  if (Array.isArray(parsed.leads)) {
+    for (const [index, value] of parsed.leads.slice(0, 6).entries()) {
+      if (
+        !isRecord(value) ||
+        typeof value.s !== "string" ||
+        typeof value.e !== "string" ||
+        typeof value.c !== "string" ||
+        !isValidDiscoveredLeadCategory(value.c) ||
+        typeof value.p !== "number" ||
+        !Number.isFinite(value.p) ||
+        value.p < 0.75 ||
+        value.p > 1 ||
+        typeof value.event !== "string" ||
+        typeof value.cue !== "string"
+      ) {
+        continue;
+      }
+      if (
+        isRoutineGameplayEvidence(broadcastSummaryKo, [value.event, value.cue])
+      ) {
+        continue;
+      }
+      rawLeads.push({
+        leadId: `overview-${value.s}-${value.e}-${index + 1}`,
+        startChapterId: value.s,
+        endChapterId: value.e,
+        category: value.c,
+        confidence: value.p,
+        eventSummaryKo: value.event,
+        whyThisMomentKo: "방송 전체 맥락에서 다시 확인할 가치가 있는 사건입니다.",
+        evidenceCueKo: value.cue,
+        uncertaintiesKo: ["최종 영상·음성 재검증 필요"],
+      });
+    }
+  }
+  const discoveredLeads: BroadcastContextDiscoveredLead[] = [];
+  for (const lead of rawLeads) {
+    try {
+      discoveredLeads.push(...normalizeDiscoveredLeads([lead], request.chapters));
+    } catch {
+      // Generated references outside observed chapters fail closed.
+    }
+  }
+  return {
+    ok: true,
+    result: {
+      schemaVersion: BROADCAST_CONTEXT_SCHEMA_VERSION,
+      broadcastSummaryKo,
+      recurringThemesKo: themes,
+      annotations,
+      semanticChaptersSupported: false,
+      semanticChapters: [],
+      discoveredLeadsSupported: true,
+      discoveredLeads,
+      coverage: calculateCoverage(request.chapters, request.sourceDurationMs),
+    },
+  };
+}
+
+export function extractBroadcastContextQwenSelectionResponse(
+  payload: unknown,
+  request: BroadcastContextRequest,
+): BroadcastContextDeepseekParseOutcome {
+  if (!isRecord(payload) || !Array.isArray(payload.choices) || payload.choices.length === 0) {
+    return { ok: false };
+  }
+  const choice: unknown = payload.choices[0];
+  if (!isRecord(choice) || !isRecord(choice.message) || typeof choice.message.content !== "string") {
+    return { ok: false };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(choice.message.content);
+  } catch {
+    return { ok: false };
+  }
+  if (!isRecord(parsed) || typeof parsed.summary !== "string" || !Array.isArray(parsed.selected)) {
+    return { ok: false };
+  }
+  const candidateIds = new Set(request.candidates.map((candidate) => candidate.candidateId));
+  const selected = new Map<string, { readonly confidence: number; readonly reason: string }>();
+  for (const value of parsed.selected.slice(0, 8)) {
+    if (
+      !isRecord(value) ||
+      typeof value.id !== "string" ||
+      !candidateIds.has(value.id) ||
+      selected.has(value.id) ||
+      typeof value.p !== "number" ||
+      !Number.isFinite(value.p) ||
+      value.p < 0.88 ||
+      value.p > 1 ||
+      typeof value.reason !== "string"
+    ) {
+      continue;
+    }
+    selected.set(value.id, { confidence: value.p, reason: value.reason });
+  }
+  return {
+    ok: true,
+    result: {
+      schemaVersion: BROADCAST_CONTEXT_SCHEMA_VERSION,
+      broadcastSummaryKo: parsed.summary,
+      recurringThemesKo: [],
+      annotations: request.candidates.map((candidate) => {
+        const verdict = selected.get(candidate.candidateId);
+        return verdict === undefined
+          ? {
+              candidateId: candidate.candidateId,
+              category: "not-clip-worthy" as const,
+              clipDecision: "reject" as const,
+              confidence: 0.82,
+              rejectionReasons: ["duplicate-episode" as const],
+              contextSummaryKo: "다른 후보와 비교해 대표 장면에서 제외했습니다.",
+              whyThisMomentKo: "중복되거나 사건·반응의 완결성이 상대적으로 낮습니다.",
+              relatedCandidateIds: [],
+              uncertaintiesKo: [],
+            }
+          : {
+              candidateId: candidate.candidateId,
+              category: "reaction" as const,
+              clipDecision: "select" as const,
+              confidence: verdict.confidence,
+              rejectionReasons: [],
+              contextSummaryKo: verdict.reason,
+              whyThisMomentKo: verdict.reason,
+              relatedCandidateIds: [],
+              uncertaintiesKo: ["최종 영상·음성 재검증 필요"],
+            };
+      }),
+      semanticChaptersSupported: false,
+      semanticChapters: [],
+      discoveredLeadsSupported: false,
+      discoveredLeads: [],
+      coverage: calculateCoverage(request.chapters, request.sourceDurationMs),
+    },
   };
 }
 
@@ -253,9 +688,36 @@ function isValidDiscoveredLeadCategory(
   ].includes(value);
 }
 
+const GAME_BROADCAST_TERMS =
+  /(?:게임|game|마인크래프트|minecraft|마크\s|롤\s|리그\s*오브\s*레전드|발로란트|오버워치|로블록스)/iu;
+const ROUTINE_GAMEPLAY_TERMS =
+  /(?:추락|낙사|사망|죽었|죽음|길치|길을?\s*(?:잃|찾)|좌표|자원|채굴|파밍|제작|조합|건축|이동|전투|몬스터|동굴|물에\s*빠|떠내려|생존|인벤토리|기지|베이스|침대|재료|아이템\s*정리)/iu;
+const DISTINCTIVE_GAMEPLAY_EXCEPTIONS =
+  /(?:정확(?:히|한)?\s*사과|제가\s*잘못|실수로\s*구독|세계\s*(?:최초|기록)|신기록|우승|결승|희귀\s*업적|예상\s*밖\s*버그|치명적\s*버그|시청자와\s*(?:충돌|논쟁)|채팅과\s*(?:충돌|논쟁)|다른\s*스트리머와\s*(?:충돌|논쟁)|장기\s*설정\s*회수)/iu;
+
+/**
+ * Language models tend to promote ordinary gameplay when the streamer frames
+ * it dramatically. This precision-first gate keeps such moments on the score
+ * timeline but prevents them from adding editor-review cards without separate
+ * evidence of a rare, consequential, or social event.
+ */
+function isRoutineGameplayEvidence(
+  broadcastSummaryKo: string,
+  evidenceParts: readonly string[],
+): boolean {
+  const evidence = evidenceParts.join(" ");
+  const wholeText = `${broadcastSummaryKo} ${evidence}`;
+  return (
+    GAME_BROADCAST_TERMS.test(wholeText) &&
+    ROUTINE_GAMEPLAY_TERMS.test(evidence) &&
+    !DISTINCTIVE_GAMEPLAY_EXCEPTIONS.test(evidence)
+  );
+}
+
 export function extractBroadcastContextDeepseekResponse(
   payload: unknown,
-  request: BroadcastContextRequest
+  request: BroadcastContextRequest,
+  options: BroadcastContextParseOptions = {},
 ): BroadcastContextDeepseekParseOutcome {
   if (!isRecord(payload) || !Array.isArray(payload.choices) || payload.choices.length === 0) {
     return { ok: false };
@@ -273,23 +735,36 @@ export function extractBroadcastContextDeepseekResponse(
     return { ok: false };
   }
 
-  if (
-    !isRecord(parsed) ||
-    typeof parsed.broadcastSummaryKo !== "string" ||
-    !isStringArray(parsed.recurringThemesKo) ||
-    !Array.isArray(parsed.annotations)
-  ) {
+  if (!isRecord(parsed) || typeof parsed.broadcastSummaryKo !== "string") {
+    return { ok: false };
+  }
+  const recurringThemesKo = isStringArray(parsed.recurringThemesKo)
+    ? parsed.recurringThemesKo
+    : options.recoverMalformedItems === true
+      ? []
+      : null;
+  const rawAnnotations = Array.isArray(parsed.annotations)
+    ? parsed.annotations
+    : options.recoverMalformedItems === true
+      ? []
+      : null;
+  if (recurringThemesKo === null || rawAnnotations === null) {
     return { ok: false };
   }
 
-  const annotations = [];
+  const annotations: BroadcastContextCandidateAnnotation[] = [];
   const requestedCandidateIds = new Set(
     request.candidates.map((candidate) => candidate.candidateId),
   );
   const seenCandidateIds = new Set<string>();
-  for (const ann of parsed.annotations) {
-    if (
-      !isRecord(ann) ||
+  for (const ann of rawAnnotations) {
+    if (!isRecord(ann)) {
+      if (options.recoverMalformedItems === true) {
+        continue;
+      }
+      return { ok: false };
+    }
+    const isInvalidAnnotation =
       typeof ann.candidateId !== "string" ||
       !requestedCandidateIds.has(ann.candidateId) ||
       seenCandidateIds.has(ann.candidateId) ||
@@ -308,25 +783,47 @@ export function extractBroadcastContextDeepseekResponse(
       typeof ann.contextSummaryKo !== "string" ||
       typeof ann.whyThisMomentKo !== "string" ||
       !isStringArray(ann.relatedCandidateIds) ||
-      !isStringArray(ann.uncertaintiesKo)
-    ) {
+      !isStringArray(ann.uncertaintiesKo);
+    if (isInvalidAnnotation) {
+      if (options.recoverMalformedItems === true) {
+        continue;
+      }
       return { ok: false };
     }
-    seenCandidateIds.add(ann.candidateId);
+    const candidateId = ann.candidateId as string;
+    seenCandidateIds.add(candidateId);
     annotations.push({
-      candidateId: ann.candidateId,
-      category: ann.category,
-      clipDecision: ann.clipDecision,
-      confidence: ann.confidence,
-      rejectionReasons: ann.rejectionReasons,
-      contextSummaryKo: ann.contextSummaryKo,
-      whyThisMomentKo: ann.whyThisMomentKo,
-      relatedCandidateIds: ann.relatedCandidateIds,
-      uncertaintiesKo: ann.uncertaintiesKo,
+      candidateId,
+      category: ann.category as BroadcastContextCandidateCategory,
+      clipDecision: ann.clipDecision as BroadcastContextClipDecision,
+      confidence: ann.confidence as number,
+      rejectionReasons: ann.rejectionReasons as readonly BroadcastContextRejectionReason[],
+      contextSummaryKo: ann.contextSummaryKo as string,
+      whyThisMomentKo: ann.whyThisMomentKo as string,
+      relatedCandidateIds: ann.relatedCandidateIds as readonly string[],
+      uncertaintiesKo: ann.uncertaintiesKo as readonly string[],
     });
   }
   if (seenCandidateIds.size !== requestedCandidateIds.size) {
-    return { ok: false };
+    if (options.recoverMalformedItems !== true) {
+      return { ok: false };
+    }
+    for (const candidate of request.candidates) {
+      if (seenCandidateIds.has(candidate.candidateId)) {
+        continue;
+      }
+      annotations.push({
+        candidateId: candidate.candidateId,
+        category: "uncertain" as const,
+        clipDecision: "reject" as const,
+        confidence: 0,
+        rejectionReasons: ["uncertain-evidence" as const],
+        contextSummaryKo: "AI 응답에서 이 후보의 판정을 확인하지 못했습니다.",
+        whyThisMomentKo: "검증되지 않은 후보는 자동 선택하지 않습니다.",
+        relatedCandidateIds: [],
+        uncertaintiesKo: ["후보 판정 응답 누락"],
+      });
+    }
   }
 
   const rawSemanticChapters: BroadcastContextSemanticChapterReference[] = [];
@@ -387,6 +884,9 @@ export function extractBroadcastContextDeepseekResponse(
         typeof lead.evidenceCueKo !== "string" ||
         !isStringArray(lead.uncertaintiesKo)
       ) {
+        if (options.recoverMalformedItems === true) {
+          continue;
+        }
         return { ok: false };
       }
       rawDiscoveredLeads.push({
@@ -409,7 +909,18 @@ export function extractBroadcastContextDeepseekResponse(
       request.chapters,
     );
   } catch {
-    return { ok: false };
+    if (options.recoverMalformedItems !== true) {
+      return { ok: false };
+    }
+    const recovered: BroadcastContextDiscoveredLead[] = [];
+    for (const lead of rawDiscoveredLeads) {
+      try {
+        recovered.push(...normalizeDiscoveredLeads([lead], request.chapters));
+      } catch {
+        // Fail closed for only the malformed generated lead.
+      }
+    }
+    discoveredLeads = recovered;
   }
 
   return {
@@ -417,9 +928,9 @@ export function extractBroadcastContextDeepseekResponse(
     result: {
       schemaVersion: BROADCAST_CONTEXT_SCHEMA_VERSION,
       broadcastSummaryKo: parsed.broadcastSummaryKo,
-      recurringThemesKo: parsed.recurringThemesKo,
+      recurringThemesKo,
       annotations,
-      semanticChaptersSupported: true,
+      semanticChaptersSupported: Array.isArray(parsed.semanticChapters),
       semanticChapters,
       discoveredLeadsSupported: Array.isArray(parsed.discoveredLeads),
       discoveredLeads,

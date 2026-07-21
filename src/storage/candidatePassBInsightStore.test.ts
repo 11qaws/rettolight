@@ -16,7 +16,7 @@ const evidence: CandidatePassBEvidence = {
     event: "스트리머가 갑자기 웃음을 터뜨렸어요.",
     why: "반응과 대사 단서가 같은 구간에 있어요.",
     reviewHint: "앞뒤 5초를 함께 확인하세요.",
-    basisLabel: "Gemini 대사 추정 · 빠른 근거 유지",
+    basisLabel: "AI 대사 추정 · 빠른 근거 유지",
   },
   quality: {
     receivedChunkCount: 1,

@@ -73,6 +73,41 @@ wav.write("data", 36, "ascii");
 wav.writeUInt32LE(pcm.byteLength, 40);
 pcm.copy(wav, 44);
 
+const videoFrames = [3, 10, 20, 27].map((relativeSeconds) => {
+  const frame = spawnSync(
+    ffmpegPath,
+    [
+      "-hide_banner",
+      "-loglevel",
+      "error",
+      "-ss",
+      String(offsetSeconds + relativeSeconds),
+      "-i",
+      sourcePath,
+      "-frames:v",
+      "1",
+      "-vf",
+      "scale=640:-2",
+      "-q:v",
+      "5",
+      "-f",
+      "image2pipe",
+      "-vcodec",
+      "mjpeg",
+      "pipe:1",
+    ],
+    { encoding: null, maxBuffer: 1024 * 1024, windowsHide: true },
+  );
+  if (frame.status !== 0 || !Buffer.isBuffer(frame.stdout) || frame.stdout.length === 0) {
+    throw new Error(`ffmpeg frame extraction failed at +${relativeSeconds}s`);
+  }
+  return {
+    timestampMs: relativeSeconds * 1_000,
+    mimeType: "image/jpeg",
+    dataBase64: frame.stdout.toString("base64"),
+  };
+});
+
 const response = await fetch(PROXY_ENDPOINT, {
   method: "POST",
   headers: {
@@ -82,13 +117,16 @@ const response = await fetch(PROXY_ENDPOINT, {
   body: JSON.stringify({
     audioBase64: wav.toString("base64"),
     candidateDurationMs: DURATION_SECONDS * 1_000,
+    videoFrames,
   }),
 });
 
 const payload = await response.json();
 if (!response.ok) {
   const code = payload?.error?.code ?? "UNKNOWN_PROXY_ERROR";
-  throw new Error(`Proxy smoke failed with HTTP ${response.status}: ${code}`);
+  throw new Error(
+    `Proxy smoke failed with HTTP ${response.status}: ${code}; stop=${response.headers.get("X-Qwen-Stop")}, length=${response.headers.get("X-Qwen-Text-Length")}, content=${response.headers.get("X-Qwen-Content-Type")}, json=${response.headers.get("X-Qwen-Json")}, keys=${response.headers.get("X-Qwen-Keys")}`,
+  );
 }
 
 const text = payload?.candidates?.[0]?.content?.parts?.[0]?.text;

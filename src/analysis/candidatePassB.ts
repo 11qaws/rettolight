@@ -102,8 +102,8 @@ export type CandidatePassBFallbackReason =
   | "low-quality-transcript";
 
 export type CandidatePassBBasisLabel =
-  | "Gemini 대사 단서 · 재생 확인 필요"
-  | "Gemini 대사 추정 · 빠른 근거 유지"
+  | "AI 대사 단서 · 재생 확인 필요"
+  | "AI 대사 추정 · 빠른 근거 유지"
   | "또렷한 대사 없음 · 빠른 근거 유지";
 
 export interface CandidatePassBOverlay {
@@ -485,8 +485,8 @@ function groundedOverlay(
   meanConfidence: number | null,
 ): CandidatePassBOverlay {
   const event = `${cues
-    .map((cue) => `${phaseLabel(cue.phase)} Gemini 대사에서 ${quoteCue(cue.text)}로 인식됐어요.`)
-    .join(" ")} 품질 신호를 통과했어도 Gemini 대사는 틀릴 수 있고, 이 시간 관계만으로 화면 사건의 종류나 발화와 반응 사이의 원인을 확정하지 않아요.`;
+    .map((cue) => `${phaseLabel(cue.phase)} AI 대사에서 ${quoteCue(cue.text)}로 인식됐어요.`)
+    .join(" ")} 품질 신호를 통과했어도 AI 대사는 틀릴 수 있고, 이 시간 관계만으로 화면 사건의 종류나 발화와 반응 사이의 원인을 확정하지 않아요.`;
   const hasBefore = cues.some((cue) => cue.phase === "before-peak");
   const hasNear = cues.some((cue) => cue.phase === "near-peak");
   const hasAfter = cues.some((cue) => cue.phase === "after-peak");
@@ -503,25 +503,25 @@ function groundedOverlay(
       ? "대사 여부를 보조하는 신호는 있었지만 모델 신뢰 점수는 제공되지 않았어요."
       : meanConfidence < 0.65
         ? "통과한 전사도 신뢰도가 높지 않을 수 있어요."
-        : "Gemini 대사는 고유명사나 방송 은어를 틀릴 수 있어요.";
+        : "AI 대사는 고유명사나 방송 은어를 틀릴 수 있어요.";
   return {
     event,
-    why: `${positionSummary}에 품질 신호와 시간 위치를 통과한 Gemini 대사 단서가 있어, 빠른 분석이 잡은 반응의 맥락을 재생으로 확인하기 쉬운 후보예요. 이 대사가 정확하거나 사건의 원인이라는 뜻은 아니에요.`,
+    why: `${positionSummary}에 품질 신호와 시간 위치를 통과한 AI 대사 단서가 있어, 빠른 분석이 잡은 반응의 맥락을 재생으로 확인하기 쉬운 후보예요. 이 대사가 정확하거나 사건의 원인이라는 뜻은 아니에요.`,
     reviewHint: `${confidenceNotice} 따옴표 속 대사와 실제 화면 사건·스트리머 반응의 관계를 재생해 확인해 주세요.`,
-    basisLabel: "Gemini 대사 단서 · 재생 확인 필요",
+    basisLabel: "AI 대사 단서 · 재생 확인 필요",
   };
 }
 
 function provisionalOverlay(cues: readonly CandidatePassBCue[]): CandidatePassBOverlay {
   const cueSummary = cues
-    .map((cue) => `${phaseLabel(cue.phase)} Gemini 대사에서 ${quoteCue(cue.text)}로 추정됐어요.`)
+    .map((cue) => `${phaseLabel(cue.phase)} AI 대사에서 ${quoteCue(cue.text)}로 추정됐어요.`)
     .join(" ");
   return {
     event: `${cueSummary} 이 결과에는 독립적인 대사 품질 신호가 없어 사건 설명에는 반영하지 않았어요.`,
-    why: "Gemini 대사 추정은 후보를 재생할 위치만 돕고, 기존 빠른 분석의 사건·원인 설명을 바꾸지 않아요.",
+    why: "AI 대사 추정은 후보를 재생할 위치만 돕고, 기존 빠른 분석의 사건·원인 설명을 바꾸지 않아요.",
     reviewHint:
-      "독립적인 품질 신호가 없는 Gemini 대사 추정은 배경음이나 효과음을 말로 잘못 들었을 수 있어요. 따옴표 속 문장을 사실로 쓰기 전에 해당 위치를 재생해 확인해 주세요.",
-    basisLabel: "Gemini 대사 추정 · 빠른 근거 유지",
+      "독립적인 품질 신호가 없는 AI 대사 추정은 배경음이나 효과음을 말로 잘못 들었을 수 있어요. 따옴표 속 문장을 사실로 쓰기 전에 해당 위치를 재생해 확인해 주세요.",
+    basisLabel: "AI 대사 추정 · 빠른 근거 유지",
   };
 }
 
