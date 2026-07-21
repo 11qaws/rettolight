@@ -394,6 +394,23 @@ describe("fuseReactionHighlightCandidates", () => {
     expect(candidates[0]?.evidence.visual).toBeDefined();
   });
 
+  it("uses unrelated chat as context only when audio anchors already exist", () => {
+    const candidates = fuseReactionHighlightCandidates(
+      {
+        audioCandidates: [audioCandidate("audio-anchor", 60_000, 8)],
+        chatCandidates: [
+          chatCandidate("chat-confirmation", 61_000, 6),
+          chatCandidate("chat-only", 200_000, 7),
+        ],
+      },
+      { sourceDurationMs: 260_000 },
+    );
+
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]?.signalKinds).toEqual(["audio", "chat"]);
+    expect(candidates[0]?.evidence.chat?.messageCount).toBe(20);
+  });
+
   it("copies only allowlisted audio evidence and leaves click rejection to the audio core", () => {
     const base = audioCandidate(
       "core-approved-short-burst",

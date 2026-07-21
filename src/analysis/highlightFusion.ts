@@ -734,22 +734,27 @@ function createReactionAnchorDrafts(
     });
   }
 
-  for (const chat of chatCandidates) {
-    if (usedChatIndexes.has(chat.rankedIndex)) {
-      continue;
+  // Audio is the primary reaction anchor. Chat remains valuable context when it
+  // overlaps an audio reaction, but an unrelated chat burst must not inflate the
+  // number of clips for a source that already has usable audio anchors.
+  if (audioCandidates.length === 0) {
+    for (const chat of chatCandidates) {
+      if (usedChatIndexes.has(chat.rankedIndex)) {
+        continue;
+      }
+      const window = reactionWindow(chat.peakMs, durationMs, windowMs);
+      drafts.push({
+        peakMs: chat.peakMs,
+        ...window,
+        anchorStartMs: chat.startMs,
+        anchorEndMs: chat.endMs,
+        score: chat.normalizedScore,
+        sourceKey: chat.sortKey,
+        signalKinds: ["chat"],
+        chat,
+        exploration: false,
+      });
     }
-    const window = reactionWindow(chat.peakMs, durationMs, windowMs);
-    drafts.push({
-      peakMs: chat.peakMs,
-      ...window,
-      anchorStartMs: chat.startMs,
-      anchorEndMs: chat.endMs,
-      score: chat.normalizedScore,
-      sourceKey: chat.sortKey,
-      signalKinds: ["chat"],
-      chat,
-      exploration: false,
-    });
   }
 
   return drafts;

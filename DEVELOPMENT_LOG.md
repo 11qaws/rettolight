@@ -1,5 +1,11 @@
 # Development Log
 
+## 2026-07-21 `0.3.19` audio-first candidate count and bounded Gemini analysis
+
+- Audio reaction anchors are now authoritative when available. Nearby chat still strengthens the same candidate, while unrelated chat bursts no longer create extra standalone candidates and inflate the daily result count.
+- Gemini Pass B keeps two candidate requests in flight at once. This preserves parallel analysis while avoiding a burst of simultaneous requests that can trigger quota/rate-limit failures.
+- Verification: added regression coverage for audio-plus-unrelated-chat fusion; full check and production build remain required before release.
+
 ## 2026-07-21 `0.3.18` restore dialogue leads, score landscape, and impact thumbnails
 
 - Restored the previous quiet-but-novel dialogue lead so the known `2026 07 17 - 음식 토크[KzAW3yow80Q].mp4` sample returns three audio candidates again. The added filters remain limited to steady song/MV plateaus and non-distinctive opening/ending edges.

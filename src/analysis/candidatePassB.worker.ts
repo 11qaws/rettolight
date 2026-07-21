@@ -58,6 +58,9 @@ type AnalyzeRequest = Extract<
 const SOURCE_CACHE_BYTES = 8 * 1024 * 1024;
 const CANDIDATE_DECODE_RATIO_CEILING = 0.45;
 const CANDIDATE_TRANSCRIBE_RATIO = 0.5;
+// Keep candidate interpretation parallel, but bounded so a full day's worth of
+// candidates does not trigger a burst of Gemini requests and quota failures.
+const MAX_PARALLEL_GEMINI_REQUESTS = 2;
 const PROGRESS_MIN_INTERVAL_MS = 150;
 const PROGRESS_MIN_RATIO_STEP = 0.01;
 
@@ -66,7 +69,7 @@ interface ActiveTask {
   cancelled: boolean;
   input: Input<BlobSource> | null;
   inputWasDisposed: boolean;
-  /** Every candidate may be in flight at the same time during Pass B. */
+  /** Candidate requests are kept in a small bounded pool during Pass B. */
   readonly fetchAbortControllers: Set<AbortController>;
 }
 
@@ -823,6 +826,12 @@ async function runTask(request: AnalyzeRequest, task: ActiveTask): Promise<void>
       const target = request.targets[index];
       if (target === undefined) {
         continue;
+      }
+      while (inFlight.size >= MAX_PARALLEL_GEMINI_REQUESTS) {
+        if (task.cancelled) {
+          return;
+        }
+        await Promise.race([...inFlight]);
       }
       const candidateOrdinal = index + 1;
       let candidatePcm: Float32Array | null = null;

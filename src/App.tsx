@@ -234,9 +234,9 @@ interface AudioAnalysisOutcome {
   readonly coverageComplete: boolean;
 }
 
-const APP_VERSION = "0.3.18";
+const APP_VERSION = "0.3.19";
 const PERSISTENCE_SCHEMA_VERSION = "0.3.0";
-const SIGNAL_ENGINE_VERSION = "streamer-reaction-fast-pass-v3-dialogue-music-edge-gates";
+const SIGNAL_ENGINE_VERSION = "streamer-reaction-fast-pass-v4-audio-primary-chat-context";
 const MAX_CHAT_FILE_BYTES = 32 * 1024 * 1024;
 const SIGNAL_GAP_POLICY_ID = DURABLE_SIGNAL_GAP_POLICY_ID;
 
