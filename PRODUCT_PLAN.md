@@ -16,7 +16,21 @@ The default estimate assumes up to 12 candidates, 45–60 seconds of audio each,
 
 A YouTube link is useful for identifying a matching public video, but the official captions list/download API requires authorized access to caption tracks. ExClipper should accept an explicitly supplied `.vtt`, `.srt`, or transcript file as the first reliable script path; it must not pretend that a public URL alone guarantees a readable transcript.
 
-- 문서 상태: ExClipper 개인 편집 어시스턴트·상태/운영 모델을 확정한 초안 `0.3.15`
+### `0.3.26` 편집자 중심 작업공간
+
+분석 결과 화면의 정보 우선순위를 편집자의 실제 결정 순서로 고정한다.
+
+1. 방송 전체에서 후보가 어디에 있는지 타임라인으로 먼저 파악한다.
+2. 타임라인에서 고른 후보 하나만 큰 플레이어와 상세 카드로 확인한다.
+3. 같은 자리에서 재생·다운로드·사용·제외와 시작·끝 조정을 마친다.
+4. 이전·다음 후보로 이동하며 남은 검토 수를 줄인다.
+5. 사용할 후보가 생긴 뒤에만 결과 다운로드 영역을 본다.
+
+반응 종류 재분석, Gemini 재시도, 추천 순서 비교는 결과를 이해하거나 장애를 복구할 때만 필요한 보조 도구다. 따라서 기본 화면에서는 접어 두되 기능을 제거하지 않는다. 모든 상세 후보를 세로로 동시에 펼치지 않으며, 최대화 데스크톱에서는 왼쪽의 고정 미리보기와 오른쪽의 현재 후보 판단 영역을 함께 보여 준다. 원본을 재연결하지 않은 복구 결과도 타임라인 선택과 설명 검토는 가능해야 한다.
+
+후보 포커스는 현재 탭의 표현 상태일 뿐이다. 포커스 이동은 점수·추천 순서·경계·사용/제외·내보내기 순서를 바꾸지 않고 저장 자료를 dirty 상태로 만들지 않는다. 이 상태 전이는 `STATE_LIFECYCLE.md` 23.13을 따른다.
+
+- 문서 상태: ExClipper 개인 편집 어시스턴트·상태/운영 모델을 확정한 초안 `0.3.26`
 - 기준일: 2026-07-20 (Asia/Seoul)
 - 배포 원칙: GitHub Pages에서 빠른 분석·후보 검토·출력을 완주하고, Gemini 정밀 분석은 배포 Secret을 사용하는 전용 중계로 제공함
 - 제품 정체성: 공유 서비스가 아닌 1인용 AI 편집 어시스턴트
@@ -2338,3 +2352,13 @@ YouTube IFrame이 요구하는 Referer를 유지하고 `strict-origin-when-cross
 > 사용자가 권리를 가진 원본과 선택적 채팅 기록을 고르면, AI가 몇 시간 전체를 사용자 컴퓨터에서 계층적으로 훑고 추천 이유가 있는 30~60초 후보를 먼저 만든다. 사람은 원본 전체 대신 그 후보만 승인·제외·경계 수정한다.
 
 단계 1의 완료 조건은 단순 수동 타임코드 기록이 아니라 실제 AI 후보로 검토 시간을 줄였다는 증거다. 채팅은 반응 신호로 1차 데이터 모델에 포함하되, 과거 로그는 import, 앞으로의 공식 실시간 수집은 선택형 로컬 동반 도구로 정직하게 나눈다. 계정·팀·공용 백엔드는 만들지 않는다. 대신 상태 전이, 사람 revision 보호, 단일 writer 탭, checkpoint, 로컬 백업, 배포 롤백으로 한 사람의 긴 편집 작업을 안전하게 지킨다. StreamSaver의 차분한 대시보드 문법을 가져오면서도 첫 화면에는 한 개의 권장 행동만 보여 주어 컴퓨터 초심자가 모델·가중치·코덱을 몰라도 끝까지 완주하게 한다.
+
+## 23. `0.3.25` AI provider 준비 구조
+
+- 후보 정밀 해석의 기본 provider와 실행 manifest는 계속 `gemini / gemini-3.1-pro-preview`다. 기존 배포·저장 결과를 다른 모델 결과로 가장하지 않고, provider를 바꾸기 전까지 후보 분석 결과와 비용·실패 특성도 그대로 유지한다.
+- 후보 해석 대안으로 `qwen / qwen3.5-omni-plus`를 provider catalog에 등록한다. 이 모델은 현재 오디오와 대표 화면을 함께 보내는 계약에 맞는 복합 멀티모달 경로로 선택했다. 아직 production transport는 `prepared`이며, 키와 Workspace ID만 넣었다고 자동 활성화하지 않는다. OpenAI 호환 streaming 응답·구조화 JSON·한국어 샘플에 대한 live smoke를 통과한 뒤 별도 patch에서 `active`로 올린다.
+- 방송 전체 맥락 축약 역할은 `deepseek / deepseek-v4-pro`로 분리하고 기본값을 `disabled`로 둔다. 후보 정밀 해석 provider와 전체 맥락 provider는 서로 다른 역할·키·실패 경계를 가지며 한쪽 실패가 다른 쪽 결과를 지우지 않는다.
+- 전체 맥락 입력은 최대 12시간 방송을 최대 144개의 시간순·비중첩 chapter 요약과 최대 12개의 기존 후보 근거로 축약한 텍스트 전용 `1.0.0` 계약이다. 원본 파일·PCM·영상·채팅 작성자·후보 점수·순위·사람 검토 상태는 포함하지 않는다.
+- 전체 맥락 출력은 기존 candidate ID에 대한 `반응`, `조용한 성취`, `설정과 회수`, `반복 개그`, `맥락 의존`, `불확실` 분류와 설명만 허용한다. 점수·순위·구간·승인 필드가 없으므로 AI가 canonical 후보를 자동 변경할 수 없다.
+- Pages에는 키 입력 UI를 추가하지 않는다. 배포 소유자 키는 계속 Cloudflare Worker Secret으로만 관리하며, readiness manifest에는 공개 모델 metadata와 boolean 상태만 허용하고 키·Workspace ID·endpoint를 넣지 않는다.
+- 공식 계약 기준은 [Alibaba Cloud Qwen-Omni API](https://help.aliyun.com/en/model-studio/qwen-omni)와 [DeepSeek API 시작 문서](https://api-docs.deepseek.com/)다. 별도 공급자를 활성화할 때는 문서 재확인, mock contract, 실제 키 smoke, 비용 상한 확인을 모두 통과해야 한다.

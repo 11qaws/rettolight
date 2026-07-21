@@ -235,9 +235,10 @@ interface AudioAnalysisOutcome {
   readonly coverageComplete: boolean;
 }
 
-const APP_VERSION = "0.3.23";
+const APP_VERSION = "0.3.26";
 const PERSISTENCE_SCHEMA_VERSION = "0.3.0";
-const SIGNAL_ENGINE_VERSION = "streamer-reaction-fast-pass-v4-audio-primary-chat-context";
+const SIGNAL_ENGINE_VERSION =
+  "streamer-reaction-fast-pass-v5-chat-fallback-music-confirmation";
 const MAX_CHAT_FILE_BYTES = 32 * 1024 * 1024;
 const SIGNAL_GAP_POLICY_ID = DURABLE_SIGNAL_GAP_POLICY_ID;
 
@@ -866,8 +867,6 @@ function App() {
   const [copyStatus, setCopyStatus] = useState<"idle" | "copied" | "failed">("idle");
   const [exportError, setExportError] = useState<string | null>(null);
   const [previewCandidateId, setPreviewCandidateId] = useState<string | null>(null);
-  const [inlinePreviewCandidateId, setInlinePreviewCandidateId] = useState<string | null>(null);
-  const [inlinePreviewStartMs, setInlinePreviewStartMs] = useState<number | null>(null);
   const [clipDownloadStatusById, setClipDownloadStatusById] =
     useState<ClipDownloadStatusById>({});
   const [clipDownloadErrorById, setClipDownloadErrorById] =
@@ -907,9 +906,8 @@ function App() {
   const resultStore = useRef<AnalysisResultStore | null>(null);
   const sourcePreviewUrlRef = useRef<string | null>(null);
   const previewVideo = useRef<HTMLVideoElement | null>(null);
-  const inlinePreviewVideo = useRef<HTMLVideoElement | null>(null);
+  const lastWorkspacePreviewCue = useRef<string | null>(null);
   const clipRenderAbortController = useRef<AbortController | null>(null);
-  const lastCandidateCueTrigger = useRef<HTMLButtonElement | null>(null);
   const sourceHeading = useRef<HTMLHeadingElement | null>(null);
   const candidateHeading = useRef<HTMLHeadingElement | null>(null);
   const isMounted = useRef(true);
@@ -960,57 +958,16 @@ function App() {
   );
 
   useEffect(() => {
-    if (selectionResult !== null) {
-      if (
-        openedRecoveredResult !== null &&
-        sourceFile === null &&
-        candidates.length > 0
-      ) {
-        sourceHeading.current?.focus();
-      } else {
-        candidateHeading.current?.focus();
-      }
-    }
-  }, [candidates.length, openedRecoveredResult, selectionResult, sourceFile]);
-
-  useEffect(() => {
-    const candidateId = inlinePreviewCandidateId;
-    const player = inlinePreviewVideo.current;
-    if (candidateId === null || player === null || sourcePreviewUrl === null) {
+    const heading = candidateHeading.current;
+    if (selectionResult === null || heading === null) {
       return;
     }
-    const candidate = candidates.find(({ id }) => id === candidateId);
-    if (candidate === undefined) {
-      return;
-    }
-    const range = effectiveCandidateRange(
-      candidate,
-      boundaryRevisions[candidate.id],
-    );
-    const targetMs = Math.max(
-      range.startMs,
-      Math.min(range.endMs, inlinePreviewStartMs ?? range.startMs),
-    );
-    const seekAndPlay = (): void => {
-      player.currentTime = targetMs / 1_000;
-      player.focus({ preventScroll: true });
-      void player.play().catch(() => {
-        // Browser autoplay policy may require the user to press play.
-      });
-    };
-    if (player.readyState >= 1) {
-      seekAndPlay();
-      return;
-    }
-    player.addEventListener("loadedmetadata", seekAndPlay, { once: true });
-    return () => player.removeEventListener("loadedmetadata", seekAndPlay);
-  }, [
-    boundaryRevisions,
-    candidates,
-    inlinePreviewCandidateId,
-    inlinePreviewStartMs,
-    sourcePreviewUrl,
-  ]);
+    const focusTimer = globalThis.setTimeout(() => {
+      heading.focus({ preventScroll: true });
+      heading.scrollIntoView({ behavior: "auto", block: "start" });
+    }, 0);
+    return () => globalThis.clearTimeout(focusTimer);
+  }, [candidates.length, selectionResult]);
 
   const replaceSourceFile = useCallback((file: File | null): void => {
     if (!isMounted.current) {
@@ -1018,8 +975,6 @@ function App() {
     }
     clipRenderAbortController.current?.abort();
     clipRenderAbortController.current = null;
-    setInlinePreviewCandidateId(null);
-    setInlinePreviewStartMs(null);
     candidateTimelineFramesRef.current = {};
     setCandidateTimelineFramesById({});
     setCandidateTimelineScorePoints([]);
@@ -1297,6 +1252,11 @@ function App() {
     () => projectCandidateOrder(candidates, candidateRankingView),
     [candidateRankingView, candidates],
   );
+  const focusedCandidateId =
+    previewCandidateId !== null &&
+    orderedCandidates.some(({ id }) => id === previewCandidateId)
+      ? previewCandidateId
+      : orderedCandidates[0]?.id ?? null;
   const sourceCheckBusy =
     sourceCheck !== null && ["checking", "committing", "cancelling"].includes(sourceCheck.status);
   const showStatusBar =
@@ -1322,10 +1282,23 @@ function App() {
       boundaryRevision: boundaryRevisions[proposal.id] ?? null,
     }));
   const approvedCount = approvedCandidates.length;
+  const rejectedCount = candidates.filter(
+    ({ reviewState }) => reviewState === "rejected",
+  ).length;
+  const reviewedCount = approvedCount + rejectedCount;
+  const remainingReviewCount = Math.max(0, candidates.length - reviewedCount);
   const previewCandidateNumber =
-    previewCandidateId === null
+    focusedCandidateId === null
       ? 0
-      : orderedCandidates.findIndex(({ id }) => id === previewCandidateId) + 1;
+      : orderedCandidates.findIndex(({ id }) => id === focusedCandidateId) + 1;
+  const previousFocusedCandidate =
+    previewCandidateNumber > 1
+      ? orderedCandidates[previewCandidateNumber - 2] ?? null
+      : null;
+  const nextFocusedCandidate =
+    previewCandidateNumber > 0 && previewCandidateNumber < orderedCandidates.length
+      ? orderedCandidates[previewCandidateNumber] ?? null
+      : null;
   const reviewStarted = candidates.some(({ reviewState }) => reviewState !== "unreviewed");
   const boundaryWorkStarted = Object.values(boundaryRevisions).some(
     ({ revision }) => revision > 0,
@@ -1354,6 +1327,8 @@ function App() {
         : reviewCompleted
           ? 4
           : 3;
+  const showSourceWorkspace =
+    !sourceReady || (!analysisBusy && selectionResult === null);
   const sourceInputLocked =
     analysisBusy || sourceCheckBusy || candidateRefinementBusy;
   const chatInputLocked =
@@ -1373,6 +1348,48 @@ function App() {
         : sourceReady
           ? "다른 영상 고르기"
           : "영상 파일 고르기";
+
+  useEffect(() => {
+    if (
+      previewCandidateId !== null &&
+      orderedCandidates.some(({ id }) => id === previewCandidateId)
+    ) {
+      return;
+    }
+    setPreviewCandidateId(orderedCandidates[0]?.id ?? null);
+  }, [orderedCandidates, previewCandidateId]);
+
+  useEffect(() => {
+    if (focusedCandidateId === null || sourcePreviewUrl === null) {
+      lastWorkspacePreviewCue.current = null;
+      return;
+    }
+    const candidate = orderedCandidates.find(({ id }) => id === focusedCandidateId);
+    const video = previewVideo.current;
+    if (candidate === undefined || video === null) {
+      return;
+    }
+    const range = effectiveCandidateRange(candidate, boundaryRevisions[candidate.id]);
+    const cueKey = `${sourcePreviewUrl}|${candidate.id}|${range.startMs}`;
+    if (lastWorkspacePreviewCue.current === cueKey) {
+      return;
+    }
+    const cueWithoutPlaying = (): void => {
+      try {
+        video.pause();
+        video.currentTime = range.startMs / 1_000;
+        lastWorkspacePreviewCue.current = cueKey;
+      } catch {
+        lastWorkspacePreviewCue.current = null;
+      }
+    };
+    if (video.readyState >= HTMLMediaElement.HAVE_METADATA) {
+      cueWithoutPlaying();
+      return;
+    }
+    video.addEventListener("loadedmetadata", cueWithoutPlaying, { once: true });
+    return () => video.removeEventListener("loadedmetadata", cueWithoutPlaying);
+  }, [boundaryRevisions, focusedCandidateId, orderedCandidates, sourcePreviewUrl]);
 
   useEffect(() => {
     if (!analysisBusy && !candidateRefinementBusy && !unsavedSessionWorkStarted) {
@@ -1421,7 +1438,6 @@ function App() {
     setCandidatePassBModelProgress(null);
     setCandidatePassBCandidateProgress(null);
     setCandidatePassBError(null);
-    lastCandidateCueTrigger.current = null;
   }, []);
 
   const resetCandidateAudioEvent = useCallback((): void => {
@@ -1492,8 +1508,6 @@ function App() {
     setCopyStatus("idle");
     setExportError(null);
     setPreviewCandidateId(null);
-    setInlinePreviewCandidateId(null);
-    setInlinePreviewStartMs(null);
     setClipDownloadStatusById({});
     setClipDownloadErrorById({});
     setClipDownloadProgressById({});
@@ -3676,20 +3690,16 @@ function App() {
     kind: "SET_START_FROM_PLAYER" | "SET_END_FROM_PLAYER",
   ): void => {
     const player =
-      inlinePreviewCandidateId === candidate.id
-        ? inlinePreviewVideo.current
-        : previewCandidateId === candidate.id
-          ? previewVideo.current
-          : null;
+      focusedCandidateId === candidate.id ? previewVideo.current : null;
     if (
       sourcePreviewUrl === null ||
       player === null ||
-      (previewCandidateId !== candidate.id && inlinePreviewCandidateId !== candidate.id)
+      focusedCandidateId !== candidate.id
     ) {
       setBoundaryFeedback({
         candidateId: candidate.id,
         tone: "warning",
-        message: "먼저 이 후보의 ‘이 장면 보기’를 누르고 원하는 위치로 이동해 주세요.",
+        message: "먼저 왼쪽 플레이어에서 이 후보를 재생하고 원하는 위치로 이동해 주세요.",
       });
       return;
     }
@@ -3725,32 +3735,67 @@ function App() {
     }));
   };
 
-  const playCandidate = (candidate: ReviewedCandidate): void => {
-    if (sourcePreviewUrl === null) {
+  const seekWorkspacePlayer = (
+    candidate: ReviewedCandidate,
+    timestampMs: number,
+    shouldPlay: boolean,
+  ): void => {
+    const player = previewVideo.current;
+    if (
+      sourcePreviewUrl === null ||
+      player === null ||
+      !Number.isFinite(timestampMs)
+    ) {
       return;
     }
-    if (inlinePreviewCandidateId === candidate.id) {
-      setInlinePreviewCandidateId(null);
-      setInlinePreviewStartMs(null);
-      return;
-    }
-    setPreviewCandidateId(candidate.id);
-    lastCandidateCueTrigger.current = null;
     const range = effectiveCandidateRange(
       candidate,
       boundaryRevisions[candidate.id],
     );
-    setInlinePreviewStartMs(range.startMs);
-    setInlinePreviewCandidateId(candidate.id);
+    const targetMs = Math.max(
+      range.startMs,
+      Math.min(range.endMs, timestampMs),
+    );
+    lastWorkspacePreviewCue.current = `${sourcePreviewUrl}|${candidate.id}|${range.startMs}`;
+    const seek = (): void => {
+      player.currentTime = targetMs / 1_000;
+      if (shouldPlay) {
+        player.focus({ preventScroll: true });
+        void player.play().catch(() => {
+          // Browser autoplay policy may require the user to press play.
+        });
+      }
+    };
+    if (player.readyState >= 1) {
+      seek();
+      return;
+    }
+    player.addEventListener("loadedmetadata", seek, { once: true });
+  };
+
+  const focusCandidateForReview = (candidate: ReviewedCandidate): void => {
+    setPreviewCandidateId(candidate.id);
+    previewVideo.current?.pause();
+    seekWorkspacePlayer(candidate, candidate.startMs, false);
+  };
+
+  const playCandidate = (candidate: ReviewedCandidate): void => {
+    setPreviewCandidateId(candidate.id);
+    if (sourcePreviewUrl === null) {
+      return;
+    }
+    const range = effectiveCandidateRange(
+      candidate,
+      boundaryRevisions[candidate.id],
+    );
+    seekWorkspacePlayer(candidate, range.startMs, true);
   };
 
   const playCandidateCue = (
     candidate: ReviewedCandidate,
     timestampMs: number,
-    trigger: HTMLButtonElement,
   ): void => {
     setPreviewCandidateId(candidate.id);
-    lastCandidateCueTrigger.current = trigger;
     if (sourcePreviewUrl === null || !Number.isFinite(timestampMs)) {
       return;
     }
@@ -3758,37 +3803,11 @@ function App() {
       candidate,
       boundaryRevisions[candidate.id],
     );
-    setInlinePreviewStartMs(
+    seekWorkspacePlayer(
+      candidate,
       Math.max(range.startMs, Math.min(range.endMs, timestampMs)),
+      true,
     );
-    setInlinePreviewCandidateId(candidate.id);
-  };
-
-  const focusPreviewCandidateEditor = (): void => {
-    const cueTrigger = lastCandidateCueTrigger.current;
-    if (cueTrigger?.isConnected === true && !cueTrigger.disabled) {
-      cueTrigger.focus({ preventScroll: true });
-      cueTrigger.scrollIntoView({
-        behavior: globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches
-          ? "auto"
-          : "smooth",
-        block: "center",
-      });
-      return;
-    }
-    if (previewCandidateId === null || previewCandidateNumber <= 0) {
-      return;
-    }
-    const summary = document.getElementById(
-      candidateElementId("candidate-boundary-summary", previewCandidateId),
-    );
-    summary?.focus({ preventScroll: true });
-    summary?.scrollIntoView({
-      behavior: globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches
-        ? "auto"
-        : "smooth",
-      block: "center",
-    });
   };
 
   const focusSourceSection = (): void => {
@@ -4285,15 +4304,18 @@ function App() {
 
         {showRecoveryPanel && (
         <details
+          key={openedRecoveredResult?.terminal.runId ?? "recovery-catalog"}
           className="rh-panel rh-recovery-panel"
         >
           <summary className="rh-recovery-summary">
             <span>
-              {recoveryCatalog.status === "ready"
+              {openedRecoveredResult !== null
+                ? "다른 저장 결과 보기"
+                : recoveryCatalog.status === "ready"
                 ? `지난 분석 결과 ${recoveryCatalog.audit.results.length}개`
                 : "지난 분석 결과"}
             </span>
-            <span>저장된 기록</span>
+            <span>{openedRecoveredResult !== null ? "현재 결과 유지" : "저장된 기록"}</span>
           </summary>
           <section aria-labelledby="recovery-title">
           <div className="rh-section-heading">
@@ -4376,9 +4398,50 @@ function App() {
         </details>
         )}
 
+        {(analysisBusy || selectionResult !== null || openedRecoveredResult !== null) && (
+          <section className="rh-project-context" aria-label="현재 편집 작업">
+            <div className="rh-project-context-copy">
+              <p className="rh-eyebrow">
+                {selectionResult !== null ? "현재 편집 작업" : "선택한 방송"}
+              </p>
+              <strong>
+                {preflight?.metadata.name ?? "저장된 AI 분석 결과"}
+              </strong>
+              <span>
+                {formatDuration(boundarySourceDurationMs)}
+                {selectionResult !== null
+                  ? ` · 후보 ${candidates.length}개 · ${reviewedCount}개 검토`
+                  : " · 분석 준비 완료"}
+              </span>
+            </div>
+            {selectionResult !== null && (
+              <div className="rh-project-context-actions">
+                {sourcePreviewUrl === null && candidates.length > 0 && (
+                  <button className="btn btn-secondary" type="button" onClick={focusSourceSection}>
+                    원본 다시 연결
+                  </button>
+                )}
+                <button
+                  className="btn btn-secondary"
+                  type="button"
+                  disabled={analysisBusy || candidateRefinementBusy}
+                  onClick={startFreshAnalysis}
+                >
+                  새 영상 분석
+                </button>
+              </div>
+            )}
+          </section>
+        )}
+
         <div className="rh-section-stack">
+          {showSourceWorkspace && (
           <div className="rh-workspace-top">
-          <section aria-labelledby="source-title">
+          <section
+            className="rh-source-section"
+            data-reconnect={openedRecoveredResult !== null}
+            aria-labelledby="source-title"
+          >
             <div className="rh-section-heading">
               <div>
                 <p className="rh-eyebrow">1단계</p>
@@ -4493,8 +4556,9 @@ function App() {
             </section>
           )}
           </div>
+          )}
 
-          {sourceReady && !analysisComplete && (
+          {sourceReady && !analysisComplete && !analysisBusy && (
           <>
           <section className="rh-analysis-cta rh-analysis-cta--quick" aria-labelledby="analysis-title">
             <div>
@@ -4672,12 +4736,16 @@ function App() {
           )}
 
           {selectionResult !== null && (
-            <section className="rh-panel" aria-labelledby="candidate-title">
+            <section className="rh-panel rh-review-workspace" aria-labelledby="candidate-title">
               <div className="rh-results-header">
                 <div>
-                  <p className="rh-eyebrow">자동 분석 페이즈</p>
-                  <h3 id="candidate-title" ref={candidateHeading} tabIndex={-1}>클립 후보 {candidates.length}개</h3>
-                  <p className="rh-help">빠른 탐색이 끝났고, 다음 AI 해석 페이즈가 자동으로 이어집니다.</p>
+                  <p className="rh-eyebrow">3단계 · 후보 검토</p>
+                  <h3 id="candidate-title" ref={candidateHeading} tabIndex={-1}>
+                    AI가 찾은 클립 후보 {candidates.length}개
+                  </h3>
+                  <p className="rh-help">
+                    전체 방송을 다시 보지 말고, 타임라인에서 후보를 골라 한 장면씩 판단하세요.
+                  </p>
                   {selectionResult.audioGapReasonCode !== undefined && selectionResult.audioGapReasonCode !== null && (
                     <p className="rh-notice" data-tone="warning" role="status">
                       {selectionResult.audioGapReasonCode === "NO_AUDIO_TRACK"
@@ -4699,7 +4767,30 @@ function App() {
                       오디오 반응과 화면 맥락으로 찾은 후보를 보존한 ‘채팅 제외 완료’ 결과입니다.
                     </p>
                   )}
+                  {selectionResult.analyzedChatMessageCount === 0 &&
+                    selectionResult.skippedChatMessageCount === 0 &&
+                    selectionResult.outOfRangeChatMessageCount === 0 && (
+                    <p className="rh-help" role="status">
+                      이번 실행은 채팅 파일 없이 방송 오디오와 화면 신호만으로 분석했어요.
+                    </p>
+                  )}
                 </div>
+                {candidates.length > 0 && (
+                  <dl className="rh-review-overview" aria-live="polite">
+                    <div>
+                      <dt>남은 후보</dt>
+                      <dd>{remainingReviewCount}</dd>
+                    </div>
+                    <div>
+                      <dt>사용</dt>
+                      <dd>{approvedCount}</dd>
+                    </div>
+                    <div>
+                      <dt>제외</dt>
+                      <dd>{rejectedCount}</dd>
+                    </div>
+                  </dl>
+                )}
               </div>
 
               <div className="rh-phase-status" role="status" aria-live="polite">
@@ -4729,6 +4820,16 @@ function App() {
                 </div>
               )}
 
+              {candidateReviewFeatureAvailability.hasCandidates && (
+              <details className="rh-review-tools">
+                <summary>
+                  <span>
+                    <strong>AI 보강 분석과 후보 순서</strong>
+                    <small>재시도·반응 종류·추천 순서는 필요할 때만 펼쳐 보세요.</small>
+                  </span>
+                  <span>{candidatePassBDetailAnalysisLabel}</span>
+                </summary>
+                <div className="rh-review-tools-body">
               <div className="rh-phase-panels">
               {candidateReviewFeatureAvailability.showAudioEvent && (
                 <section
@@ -5083,6 +5184,9 @@ function App() {
                     )}
                 </section>
               )}
+                </div>
+              </details>
+              )}
 
               {candidates.length === 0 ? (
                 <div className="rh-empty-state">
@@ -5143,8 +5247,9 @@ function App() {
                             key={candidate.id}
                             type="button"
                             style={{ left: `${position}%` }}
-                            aria-label={`후보 ${index + 1}, ${formatDuration(candidate.peakMs)} 위치 재생`}
-                            disabled={sourcePreviewUrl === null}
+                            data-selected={candidate.id === focusedCandidateId}
+                            data-review-state={candidate.reviewState}
+                            aria-label={`후보 ${index + 1}, ${formatDuration(candidate.peakMs)} 위치 선택${sourcePreviewUrl === null ? "" : " 및 재생"}`}
                             onClick={() => playCandidate(candidate)}
                           >
                             <span aria-hidden="true">O</span>
@@ -5157,7 +5262,9 @@ function App() {
                       <span>{formatDuration(boundarySourceDurationMs)}</span>
                     </div>
                     <p className="rh-timeline-score-hint">
-                      흐릿한 막대는 오디오·채팅·화면 신호의 상대 점수예요. O가 없어도 막대가 있는 구간은 먼저 확인할 잠재 후보입니다.
+                      {selectionResult.analyzedChatMessageCount > 0
+                        ? "흐릿한 막대는 오디오·채팅·화면 신호의 상대 점수예요. O가 없어도 막대가 있는 구간은 먼저 확인할 잠재 후보입니다."
+                        : "흐릿한 막대는 오디오·화면 신호의 상대 점수예요. O가 없어도 막대가 있는 구간은 먼저 확인할 잠재 후보입니다."}
                     </p>
                     <ol className="rh-timeline-cards" aria-label="시간순 클립 후보 요약">
                       {orderedCandidates.map((candidate, index) => {
@@ -5177,9 +5284,10 @@ function App() {
                             <button
                               type="button"
                               className="rh-timeline-card-button"
-                              disabled={sourcePreviewUrl === null}
+                              data-selected={candidate.id === focusedCandidateId}
+                              data-review-state={candidate.reviewState}
                               onClick={() => playCandidate(candidate)}
-                              aria-label={`후보 ${index + 1} ${formatDuration(candidate.peakMs)} 재생`}
+                              aria-label={`후보 ${index + 1} ${formatDuration(candidate.peakMs)} 선택${sourcePreviewUrl === null ? "" : " 및 재생"}`}
                             >
                               <span className="rh-timeline-card-media">
                                 {frame === undefined ? (
@@ -5195,7 +5303,9 @@ function App() {
                                 </span>
                               </span>
                               <span className="rh-timeline-card-copy">
-                                <strong>후보 {index + 1}</strong>
+                                <strong>
+                                  후보 {index + 1} · {candidate.reviewState === "approved" ? "사용" : candidate.reviewState === "rejected" ? "제외" : "검토 전"}
+                                </strong>
                                 <span>{oneLineSummary}</span>
                               </span>
                             </button>
@@ -5204,25 +5314,28 @@ function App() {
                       })}
                     </ol>
                   </section>
-                  {sourcePreviewUrl !== null && (
-                    <div className="rh-preview-panel">
-                      <div>
-                        <p className="rh-eyebrow">후보 장면 직접 확인</p>
-                        <strong>
-                          {previewCandidateId === null
-                            ? "후보의 ‘이 장면 보기’를 눌러 주세요"
-                            : "선택한 후보 위치로 이동했어요"}
-                        </strong>
-                        {previewCandidateNumber > 0 && (
-                          <button
-                            className="btn btn-secondary rh-preview-return"
-                            type="button"
-                            onClick={focusPreviewCandidateEditor}
-                          >
-                            후보 {previewCandidateNumber}에서 보던 곳으로 돌아가기
-                          </button>
+                  <div className="rh-review-editor">
+                    <aside className="rh-preview-panel" aria-label="선택한 후보 미리보기">
+                      <div className="rh-preview-heading">
+                        <div>
+                          <p className="rh-eyebrow">선택한 후보 재생</p>
+                          <strong>
+                            {previewCandidateNumber > 0
+                              ? `후보 ${previewCandidateNumber} / ${orderedCandidates.length}`
+                              : "타임라인에서 후보를 골라 주세요"}
+                          </strong>
+                        </div>
+                        {focusedCandidateId !== null && (
+                          <span className="rh-preview-state">
+                            {candidates.find(({ id }) => id === focusedCandidateId)?.reviewState === "approved"
+                              ? "사용"
+                              : candidates.find(({ id }) => id === focusedCandidateId)?.reviewState === "rejected"
+                                ? "제외"
+                                : "검토 전"}
+                          </span>
                         )}
                       </div>
+                      {sourcePreviewUrl !== null ? (
                       <video
                         ref={previewVideo}
                         className="rh-preview-video"
@@ -5231,7 +5344,7 @@ function App() {
                         preload="metadata"
                         src={sourcePreviewUrl}
                         onTimeUpdate={(event) => {
-                          const activeCandidate = candidates.find(({ id }) => id === previewCandidateId);
+                          const activeCandidate = candidates.find(({ id }) => id === focusedCandidateId);
                           const activeRange =
                             activeCandidate === undefined
                               ? null
@@ -5249,14 +5362,56 @@ function App() {
                       >
                         이 브라우저는 영상 미리보기를 지원하지 않아요.
                       </video>
-                    </div>
-                  )}
+                      ) : (
+                        <div className="rh-preview-unavailable">
+                          <strong>원본을 연결하면 여기서 바로 재생할 수 있어요.</strong>
+                          <p>AI 설명과 시간표 검토는 지금도 가능합니다.</p>
+                          <button className="btn btn-primary" type="button" onClick={focusSourceSection}>
+                            원본 다시 연결
+                          </button>
+                        </div>
+                      )}
+                      <p className="rh-preview-help">
+                        타임라인의 후보를 누르면 해당 구간부터 재생하고 끝점에서 멈춥니다.
+                      </p>
+                    </aside>
+                  <div className="rh-candidate-column">
+                    <nav className="rh-candidate-navigation" aria-label="후보 이동">
+                      <button
+                        className="btn btn-secondary"
+                        type="button"
+                        disabled={previousFocusedCandidate === null}
+                        onClick={() => {
+                          if (previousFocusedCandidate !== null) {
+                            focusCandidateForReview(previousFocusedCandidate);
+                          }
+                        }}
+                      >
+                        이전 후보
+                      </button>
+                      <span>{previewCandidateNumber} / {orderedCandidates.length}</span>
+                      <button
+                        className="btn btn-secondary"
+                        type="button"
+                        disabled={nextFocusedCandidate === null}
+                        onClick={() => {
+                          if (nextFocusedCandidate !== null) {
+                            focusCandidateForReview(nextFocusedCandidate);
+                          }
+                        }}
+                      >
+                        다음 후보
+                      </button>
+                    </nav>
                   <div
                     className="rh-candidate-list"
                     role="list"
-                    aria-label="AI가 찾은 클립 후보들"
+                    aria-label="현재 검토 중인 클립 후보"
                   >
                   {orderedCandidates.map((candidate, index) => {
+                    if (candidate.id !== focusedCandidateId) {
+                      return null;
+                    }
                     const candidatePassBEvidenceFromMap =
                       candidatePassBEvidenceById[candidate.id];
                     const candidatePassBEvidence =
@@ -5392,6 +5547,7 @@ function App() {
                     return (
                     <article
                       className="rh-candidate-card rh-candidate-card--signal"
+                      data-selected="true"
                       data-review-state={candidate.reviewState}
                       role="listitem"
                       aria-labelledby={candidateElementId("candidate-title", candidate.id)}
@@ -5464,7 +5620,7 @@ function App() {
                               <strong>클립으로 먼저 볼 이유</strong>
                               {candidateGeminiInsight.whyGoodClipKo}
                             </p>
-                            <small>영상 화면과 화자 신원은 보지 못한 모델 해석이에요.</small>
+                            <small>대표 화면과 혼합 오디오를 본 AI 해석이에요. 전체 맥락과 화자 신원은 직접 확인해 주세요.</small>
                           </div>
                         )}
                         <details className="rh-candidate-evidence">
@@ -5511,8 +5667,8 @@ function App() {
                                 <span>직접 재생 확인 필요</span>
                               </div>
                               <p>
-                                이 내용은 영상 화면을 보지 않고 후보의 혼합 오디오만 들은 모델 해석이에요.
-                                스트리머의 말·반응이나 실제 사건으로 확정하지 마세요.
+                                이 내용은 후보의 대표 화면과 혼합 오디오를 함께 본 모델 해석이에요.
+                                전체 방송 맥락과 화자 신원은 직접 재생해 확인해 주세요.
                               </p>
                               <dl>
                                 <div>
@@ -5556,11 +5712,10 @@ function App() {
                             type="button"
                             aria-label={`후보 ${index + 1}, ${formatDuration(evidenceReplayTarget.startMs)}부터 ${evidenceReplayTarget.label}`}
                             disabled={sourcePreviewUrl === null}
-                            onClick={(event) =>
+                            onClick={() =>
                               playCandidateCue(
                                 candidate,
                                 evidenceReplayTarget.startMs,
-                                event.currentTarget,
                               )
                             }
                           >
@@ -5600,11 +5755,10 @@ function App() {
                                         type="button"
                                         disabled={cueDisabled}
                                         aria-label={`${formatDuration(cue.sourceStartMs)}부터 ${formatDuration(cue.sourceEndMs)}까지, 혼합 오디오에서 ${cue.kindLabel} ${cue.strengthLabel}${cueInsideCurrentRange ? " 재생해서 확인" : ", 현재 조정한 구간 밖"}`}
-                                        onClick={(event) =>
+                                        onClick={() =>
                                           playCandidateCue(
                                             candidate,
                                             cue.sourceStartMs,
-                                            event.currentTarget,
                                           )
                                         }
                                       >
@@ -5647,11 +5801,10 @@ function App() {
                                         type="button"
                                         disabled={cueDisabled}
                                         aria-label={`${formatDuration(cue.absoluteStartMs)} ${cue.phaseLabel}, Gemini 한국어 대사 추정 “${cue.text}”${cueInsideCurrentRange ? " 재생" : ", 현재 조정한 구간 밖"}`}
-                                        onClick={(event) =>
+                                        onClick={() =>
                                           playCandidateCue(
                                             candidate,
                                             cue.absoluteStartMs,
-                                            event.currentTarget,
                                           )
                                         }
                                       >
@@ -5715,36 +5868,6 @@ function App() {
                           )}
                           </div>
                         </details>
-                        {inlinePreviewCandidateId === candidate.id && sourcePreviewUrl !== null && (
-                          <div className="rh-inline-preview" aria-label={`후보 ${index + 1} 구간 바로 확인`}>
-                            <div className="rh-inline-preview-heading">
-                              <strong>이 후보 구간 바로 확인</strong>
-                              <span>
-                                {formatDuration(effectiveRange.startMs)}–{formatDuration(effectiveRange.endMs)}
-                              </span>
-                            </div>
-                            <video
-                              ref={(element) => {
-                                inlinePreviewVideo.current = element;
-                              }}
-                              className="rh-inline-preview-video"
-                              controls
-                              playsInline
-                              preload="metadata"
-                              src={sourcePreviewUrl}
-                              onTimeUpdate={(event) => {
-                                if (event.currentTarget.currentTime * 1_000 >= effectiveRange.endMs) {
-                                  event.currentTarget.pause();
-                                }
-                              }}
-                            >
-                              브라우저가 이 영상 미리보기를 지원하지 않아요.
-                            </video>
-                            <p className="rh-help">
-                              조정한 시작점부터 재생하며, 끝점에서 자동으로 멈춥니다.
-                            </p>
-                          </div>
-                        )}
                         <details className="rh-boundary-editor">
                           <summary
                             id={candidateElementId(
@@ -5869,9 +5992,7 @@ function App() {
                             disabled={sourcePreviewUrl === null}
                             onClick={() => playCandidate(candidate)}
                           >
-                            {inlinePreviewCandidateId === candidate.id
-                              ? "미리보기 닫기"
-                              : "이 구간 바로 보기"}
+                            {sourcePreviewUrl === null ? "원본 연결 후 재생" : "이 구간 재생"}
                           </button>
                           <button
                             className="btn btn-secondary"
@@ -5934,24 +6055,26 @@ function App() {
                     );
                   })}
                   </div>
+                  </div>
+                  </div>
                 </>
               )}
 
-              <p className="rh-first-result" role="status">
-                <span aria-hidden="true">✓</span>
-                승인 {approvedCount}개 · 제외 {candidates.filter(({ reviewState }) => reviewState === "rejected").length}개
-                {" · 언제든 판단을 바꿀 수 있어요."}
+              <p className="rh-screen-reader-only" role="status" aria-live="polite">
+                {candidates.length}개 중 {reviewedCount}개 검토 · 승인 {approvedCount}개 · 제외 {rejectedCount}개
               </p>
               {unsavedSessionWorkStarted && (
-                <p className="rh-notice" data-tone="warning" role="status">
-                  이 승인·제외 판단, 시작·끝 조정, Gemini 대사·해석, 오디오 반응 종류 단서와 추천 검토
-                  순서는 아직 저장되지 않았어요. 다른 영상이나 결과로 이동하면 확인을 먼저 물어봅니다.
-                  정밀 AI 단서와 검토 순서는 현재 다운로드에도 포함되지 않으니, 필요한 후보를 직접
-                  재생해 확인한 뒤 승인해 주세요.
-                </p>
+                <details className="rh-session-note">
+                  <summary>현재 검토 변경 사항은 아직 저장되지 않았어요</summary>
+                  <p>
+                    승인·제외 판단과 시작·끝 조정은 다른 영상이나 결과로 이동하기 전에 확인합니다.
+                    정밀 AI 단서와 추천 검토 순서는 현재 다운로드에 포함되지 않으므로 필요한 후보를
+                    직접 재생해 확인해 주세요.
+                  </p>
+                </details>
               )}
 
-              {candidates.length > 0 && (
+              {candidates.length > 0 && (approvedCount > 0 || reviewCompleted) && (
                 <section className="rh-export-panel" aria-labelledby="export-title">
                   <div className="rh-export-heading">
                     <div>
@@ -6122,7 +6245,7 @@ function App() {
         </div>
 
         <footer className="rh-footer">
-          ExClipper는 수시간 방송에서 AI가 먼저 여러 클립 후보를 찾는 개인 편집 어시스턴트입니다.
+          ExClipper · v{APP_VERSION}
         </footer>
       </main>
     </div>

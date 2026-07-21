@@ -402,7 +402,9 @@ export function fuseReactionHighlightCandidates(
       windowMs,
       proximityMs,
     );
-    drafts = attachVisualContext(anchors, rankedVisual, proximityMs);
+    drafts = attachVisualContext(anchors, rankedVisual, proximityMs).filter(
+      (draft) => !isUnconfirmedMusicLikeDialogue(draft),
+    );
   }
 
   const accepted: ReactionDraftCandidate[] = [];
@@ -734,30 +736,67 @@ function createReactionAnchorDrafts(
     });
   }
 
-  // Audio is the primary reaction anchor. Chat remains valuable context when it
-  // overlaps an audio reaction, but an unrelated chat burst must not inflate the
-  // number of clips for a source that already has usable audio anchors.
-  if (audioCandidates.length === 0) {
-    for (const chat of chatCandidates) {
-      if (usedChatIndexes.has(chat.rankedIndex)) {
-        continue;
-      }
-      const window = reactionWindow(chat.peakMs, durationMs, windowMs);
-      drafts.push({
-        peakMs: chat.peakMs,
-        ...window,
-        anchorStartMs: chat.startMs,
-        anchorEndMs: chat.endMs,
-        score: chat.normalizedScore,
-        sourceKey: chat.sortKey,
-        signalKinds: ["chat"],
-        chat,
-        exploration: false,
-      });
+  // Keep unused, strong chat bursts as standalone reaction anchors. A chat
+  // spike can be the only available signal for a spoken joke or visual gag;
+  // dropping it whenever audio exists made those clips disappear. The normal
+  // score ordering, overlap suppression, and twelve-candidate cap still prevent
+  // a noisy chat import from expanding the result without bound.
+  for (const chat of chatCandidates) {
+    if (usedChatIndexes.has(chat.rankedIndex)) {
+      continue;
     }
+    const window = reactionWindow(chat.peakMs, durationMs, windowMs);
+    drafts.push({
+      peakMs: chat.peakMs,
+      ...window,
+      anchorStartMs: chat.startMs,
+      anchorEndMs: chat.endMs,
+      score: chat.normalizedScore,
+      sourceKey: chat.sortKey,
+      signalKinds: ["chat"],
+      chat,
+      exploration: false,
+    });
   }
 
   return drafts;
+}
+
+/**
+ * The local dialogue lead is intentionally permissive so quiet speech can be
+ * reviewed. A long, low-loudness, high-band-only lead with no chat or visual
+ * corroboration is much more likely to be an opening/bed song transition than
+ * a streamer reaction. Keep it out of the O-marked candidate list while the
+ * raw audio point remains available to the score rail for manual inspection.
+ */
+function isUnconfirmedMusicLikeDialogue(draft: ReactionDraftCandidate): boolean {
+  if (draft.audio === undefined || draft.chat !== undefined || draft.visual !== undefined) {
+    return false;
+  }
+  const evidence = draft.audio.source.evidence;
+  if (readAudioEventKind(evidence) !== "dialogue-issue-signal") {
+    return false;
+  }
+  const activeWindowCount = readFiniteEvidenceNumber(evidence, "activeWindowCount") ?? 0;
+  const sustainedWindowCount = readFiniteEvidenceNumber(evidence, "sustainedWindowCount") ?? 0;
+  const speechBandEnergyRatio =
+    readFiniteEvidenceNumber(evidence, "speechBandEnergyRatio") ?? 0;
+  const rmsLiftRatio = readFiniteEvidenceNumber(evidence, "rmsLiftRatio") ?? Number.POSITIVE_INFINITY;
+  const robustLoudnessScore =
+    readFiniteEvidenceNumber(evidence, "robustLoudnessScore") ?? Number.POSITIVE_INFINITY;
+  const clickPenalty = readFiniteEvidenceNumber(evidence, "clickPenalty") ?? Number.POSITIVE_INFINITY;
+  const backgroundPenalty = readFiniteEvidenceNumber(evidence, "backgroundPenalty") ?? Number.POSITIVE_INFINITY;
+  const sustainedBand = activeWindowCount >= 3 && sustainedWindowCount >= 3;
+  const quietBandApex = activeWindowCount >= 1 && sustainedWindowCount >= 1;
+  return (
+    (sustainedBand || quietBandApex) &&
+    speechBandEnergyRatio >= 0.55 &&
+    speechBandEnergyRatio <= 0.78 &&
+    rmsLiftRatio <= 1.2 &&
+    robustLoudnessScore <= 0.5 &&
+    clickPenalty <= 0.45 &&
+    backgroundPenalty <= 0.35
+  );
 }
 
 function attachVisualContext(
@@ -1155,8 +1194,8 @@ function compareReactionDrafts(
   const leftConsensus = left.audio !== undefined && left.chat !== undefined ? 1 : 0;
   const rightConsensus = right.audio !== undefined && right.chat !== undefined ? 1 : 0;
   return (
-    right.score - left.score ||
     rightConsensus - leftConsensus ||
+    right.score - left.score ||
     right.signalKinds.length - left.signalKinds.length ||
     left.peakMs - right.peakMs ||
     left.startMs - right.startMs ||

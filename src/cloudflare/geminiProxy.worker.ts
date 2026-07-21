@@ -4,18 +4,19 @@ import {
   extractCandidatePassBGeminiResponse,
 } from "../analysis/candidatePassBGemini";
 import {
-  CANDIDATE_PASS_B_MODEL_ID,
   CANDIDATE_PASS_B_SAMPLE_RATE_HZ,
   MAX_CANDIDATE_PASS_B_TARGET_DURATION_MS,
   MAX_CANDIDATE_PASS_B_VIDEO_FRAME_BASE64_LENGTH,
   MAX_CANDIDATE_PASS_B_VIDEO_FRAMES,
   type CandidatePassBVideoFrame,
 } from "../analysis/candidatePassBWorkerProtocol";
+import {
+  resolveCandidateInsightConnection,
+  type AiProviderEnvironment,
+} from "./aiProviderConfiguration";
 
 const ENDPOINT_PATH = "/v1/candidate-insights";
 const HEALTH_PATH = "/healthz";
-const GEMINI_ENDPOINT =
-  `https://generativelanguage.googleapis.com/v1beta/models/${CANDIDATE_PASS_B_MODEL_ID}:generateContent`;
 const PRODUCTION_ORIGIN = "https://11qaws.github.io";
 const WAV_HEADER_BYTES = 44;
 const PCM_BYTES_PER_SAMPLE = 2;
@@ -34,7 +35,6 @@ const UPSTREAM_TIMEOUT_MS = 90_000;
 const DEFAULT_UPSTREAM_RETRY_DELAYS_MS = Object.freeze([1_000, 2_000]);
 const RATE_LIMIT_KEY = "candidate-insights";
 const JSON_CONTENT_TYPE = "application/json; charset=utf-8";
-const MAX_API_KEY_LENGTH = 512;
 
 interface RateLimitBinding {
   readonly limit: (
@@ -42,8 +42,7 @@ interface RateLimitBinding {
   ) => Promise<{ readonly success: boolean }>;
 }
 
-export interface GeminiProxyEnvironment {
-  readonly GEMINI_API_KEY: string;
+export interface GeminiProxyEnvironment extends AiProviderEnvironment {
   readonly RATE_LIMITER: RateLimitBinding;
   readonly IP_RATE_LIMITER: RateLimitBinding;
 }
@@ -323,16 +322,6 @@ function clientRateLimitKey(request: Request): string {
   return `${RATE_LIMIT_KEY}:${clientIp}`;
 }
 
-function normalizeApiKey(value: unknown): string | null {
-  if (typeof value !== "string" || /[\p{Cc}\p{Cf}]/u.test(value)) {
-    return null;
-  }
-  const normalized = value.trim();
-  return normalized.length > 0 && normalized.length <= MAX_API_KEY_LENGTH
-    ? normalized
-    : null;
-}
-
 async function fetchWithTimeout(
   fetchImplementation: FetchImplementation,
   input: RequestInfo | URL,
@@ -525,9 +514,9 @@ export async function handleGeminiProxyRequest(
     );
   }
 
-  const normalizedApiKey = normalizeApiKey(environment.GEMINI_API_KEY);
+  const providerResolution = resolveCandidateInsightConnection(environment);
   if (
-    normalizedApiKey === null ||
+    !providerResolution.ok ||
     environment.RATE_LIMITER === undefined ||
     environment.IP_RATE_LIMITER === undefined
   ) {
@@ -538,6 +527,15 @@ export async function handleGeminiProxyRequest(
       origin,
     );
   }
+  if (providerResolution.connection.provider !== "gemini") {
+    return jsonResponse(
+      503,
+      "PROVIDER_NOT_ACTIVE",
+      "선택한 후보 분석 공급자는 아직 운영 경로가 활성화되지 않았어요.",
+      origin,
+    );
+  }
+  const providerConnection = providerResolution.connection;
 
   const declaredLength = request.headers.get("Content-Length");
   if (
@@ -679,12 +677,12 @@ export async function handleGeminiProxyRequest(
   try {
     upstreamResponse = await fetchWithTransientRetries(
       fetchImplementation,
-      GEMINI_ENDPOINT,
+      providerConnection.endpoint,
       {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "x-goog-api-key": normalizedApiKey,
+          "x-goog-api-key": providerConnection.apiKey,
         },
         body: upstreamRequestBody,
         cache: "no-store",

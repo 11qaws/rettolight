@@ -7,6 +7,10 @@
   "placement": {
     "region": "gcp:us-east4"
   },
+  "vars": {
+    "CANDIDATE_INSIGHT_PROVIDER": "gemini",
+    "BROADCAST_CONTEXT_PROVIDER": "disabled"
+  },
   "secrets": {
     "required": ["GEMINI_API_KEY"]
   },

@@ -10,7 +10,7 @@
 - Pass B evidence and Gemini insight snapshots are stored by analysis run in a dedicated IndexedDB object store. Recovery filters them to the recovered candidate IDs, and a new run epoch prevents late writes from an older source contaminating the current result.
 - Fixed non-vocal program-edge bursts (opening, ending, and break loops) are rejected by default. An edge segment can still survive when it has a distinctive vocal/dialogue anchor, while the central UI presents the automatic phase and candidate list without promotional copy.
 
-- 문서 버전: `0.3.15`
+- 문서 버전: `0.3.26`
 - 기준일: 2026-07-20 (Asia/Seoul)
 - 대상: GitHub Pages에서 실행되는 1인용 AI 편집 어시스턴트
 - 함께 읽을 문서: `PRODUCT_PLAN.md`, `STATE_LIFECYCLE.md`, `DEVELOPMENT_LOG.md`
@@ -483,3 +483,12 @@ type DiagnosticEvent = {
 - 브라우저 기록 삭제·시크릿 모드·프로필 전환 때 로컬 데이터가 공유되지 않는다는 안내 검증
 
 이 문서의 운영 목표는 서버 운영을 흉내 내는 것이 아니다. 한 사람의 몇 시간짜리 편집 작업을 브라우저가 잃거나 덮어쓰거나 거짓으로 완료 표시하지 않도록 만드는 것이다.
+
+## 14. `0.3.25` provider 설정 운영 경계
+
+- 배포 기본값은 `CANDIDATE_INSIGHT_PROVIDER=gemini`, `BROADCAST_CONTEXT_PROVIDER=disabled`다. 이 값은 `wrangler.jsonc`의 공개 selector이고 비밀값이 아니다.
+- 현재 필요한 production Secret은 계속 `GEMINI_API_KEY` 하나다. `QWEN_API_KEY`, `QWEN_WORKSPACE_ID`, `DEEPSEEK_API_KEY`는 준비 구조에 이름만 예약되어 있으며 지금 배포에 추가하지 않는다.
+- Qwen 후보 해석을 켜는 절차는 (1) Singapore 또는 Beijing Model Studio Workspace와 API key 준비, (2) Worker Secret/비공개 설정 주입, (3) streaming·JSON parser live smoke, (4) 후보 12개 병렬 제한과 비용 상한 검증, (5) provider implementation status를 `active`로 변경, (6) 새 model manifest로 Pages와 Worker를 함께 배포하는 순서다. 중간 상태에서는 fail-closed 한다.
+- DeepSeek 전체 맥락을 켜는 절차는 별도 context endpoint·reducer·session fence·저장 schema가 구현된 뒤에만 시작한다. 키가 존재한다는 이유만으로 현재 후보 분석 endpoint가 DeepSeek를 호출하지 않는다.
+- 운영 점검 출력에는 provider selector, public model ID/revision, configured/active boolean만 허용한다. API key, Workspace ID, 완성 endpoint는 health 응답·브라우저 bundle·로그·fixture에 쓰지 않는다.
+- rollback은 selector를 기본값으로 되돌리고 Pages/Worker model manifest를 함께 되돌린다. 기존 Gemini 결과는 해당 run의 model identity와 함께 보존하며 provider 간 결과를 같은 캐시 항목으로 합치지 않는다.

@@ -309,6 +309,24 @@ describe("geminiProxy.worker", () => {
     expect(await responseErrorCode(missingSecret)).toBe("PROXY_NOT_CONFIGURED");
   });
 
+  it("keeps a prepared provider fail-closed until its transport is activated", async () => {
+    const upstreamFetch = vi.fn();
+    const response = await handleGeminiProxyRequest(
+      createRequest(createCandidateBody()),
+      {
+        ...createEnvironment(),
+        CANDIDATE_INSIGHT_PROVIDER: "qwen",
+        QWEN_API_KEY: "qwen-secret",
+        QWEN_WORKSPACE_ID: "workspace-123",
+      },
+      { fetchImplementation: upstreamFetch },
+    );
+
+    expect(response.status).toBe(503);
+    expect(await responseErrorCode(response)).toBe("PROVIDER_NOT_ACTIVE");
+    expect(upstreamFetch).not.toHaveBeenCalled();
+  });
+
   it.each([
     { label: "client", clientSuccess: false, globalSuccess: true },
     { label: "global", clientSuccess: true, globalSuccess: false },

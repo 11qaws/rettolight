@@ -394,7 +394,7 @@ describe("fuseReactionHighlightCandidates", () => {
     expect(candidates[0]?.evidence.visual).toBeDefined();
   });
 
-  it("uses unrelated chat as context only when audio anchors already exist", () => {
+  it("keeps a strong unrelated chat burst as its own candidate when audio exists", () => {
     const candidates = fuseReactionHighlightCandidates(
       {
         audioCandidates: [audioCandidate("audio-anchor", 60_000, 8)],
@@ -406,9 +406,45 @@ describe("fuseReactionHighlightCandidates", () => {
       { sourceDurationMs: 260_000 },
     );
 
-    expect(candidates).toHaveLength(1);
+    expect(candidates).toHaveLength(2);
     expect(candidates[0]?.signalKinds).toEqual(["audio", "chat"]);
     expect(candidates[0]?.evidence.chat?.messageCount).toBe(20);
+    expect(candidates[1]?.signalKinds).toEqual(["chat"]);
+    expect(candidates[1]?.peakMs).toBe(200_000);
+  });
+
+  it("drops an unconfirmed music-like dialogue lead but keeps corroborated dialogue", () => {
+    const musicLikeDialogue = audioCandidate(
+      "opening-bed",
+      75_000,
+      8,
+      52_500,
+      97_500,
+      {
+        eventKind: "dialogue-issue-signal",
+        activeWindowCount: 4,
+        sustainedWindowCount: 4,
+        speechBandEnergyRatio: 0.63,
+        rmsLiftRatio: 0.9,
+        robustLoudnessScore: -2.2,
+        clickPenalty: 0.13,
+        backgroundPenalty: 0,
+      },
+    );
+    const visualConfirmation = visualCandidate("dialogue-screen", 75_000, 3, 72_000, 78_000);
+
+    expect(
+      fuseReactionHighlightCandidates(
+        { audioCandidates: [musicLikeDialogue] },
+        { sourceDurationMs: 180_000 },
+      ),
+    ).toEqual([]);
+    expect(
+      fuseReactionHighlightCandidates(
+        { audioCandidates: [musicLikeDialogue], visualCandidates: [visualConfirmation] },
+        { sourceDurationMs: 180_000 },
+      ),
+    ).toHaveLength(1);
   });
 
   it("copies only allowlisted audio evidence and leaves click rejection to the audio core", () => {

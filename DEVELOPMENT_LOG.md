@@ -1022,3 +1022,69 @@
 - 후보 정밀 해석 모델을 `gemini-3.1-pro-preview`로 교체했다. Google AI 공식 Gemini 3.1 문서에서 사용하는 API 식별자를 기준으로 endpoint와 실행 manifest를 함께 갱신했다.
 - 기존 오디오+대표 화면 멀티모달 입력, 한국어 구조화 JSON, 화면 샘플링 실패 시 오디오 fallback, 점수·순위·구간·승인 분리는 유지한다.
 - Pro 모델은 기존 Flash-Lite보다 비용과 지연이 커질 수 있으므로 후보당 60초·최대 12개·대표 화면 최대 4장의 경계를 그대로 적용한다.
+
+## 2026-07-21 — `0.3.24` 후보 회귀 조사: 오프닝 음악 제거와 채팅 단독 후보 복원
+
+### 재현한 원인
+
+- 음식 토크 샘플(`2026 07 17 - 음식 토크[KzAW3yow80Q].mp4`, 2시간 15분)을 현재 로컬 오디오 fast pass로 다시 읽었다. 전체 8,115개 1초 창을 빠짐없이 분석했고, 현재 기준은 오프닝 대기 화면의 1:11·1:45·2:34·3:56 부근을 `dialogue-issue-signal`로 만들었다. 화면 캡처를 대조하면 네 구간 모두 같은 오프닝 대기 음악 화면이었다.
+- 이 재현에는 채팅 파일을 입력하지 않았다. 따라서 채팅 후보 억제는 이번 실행의 직접 원인이 아니다. 과거 `7f427e0`(대사 lead 미허용)과 `c8ba9e6`(대사 lead 복원)을 같은 원본에 대조했을 때 오디오 후보가 0개에서 오프닝 음악성 후보 3개로 변했으며, 직접 원인은 `c8ba9e6`에서 대사 신호를 너무 넓게 다시 허용한 회귀로 확인했다.
+- 별도로 `v4-audio-primary-chat-context`의 `createReactionAnchorDrafts()`가 오디오 후보가 하나라도 있으면 사용되지 않은 채팅 후보를 버리는 문제도 확인했다. 이는 채팅 파일을 넣은 실행에서만 나타나는 독립 회귀이며, 두바이초콜릿이 실제로 그 경로였다는 증거는 아직 없다.
+
+### 변경 계약
+
+- 오디오에서만 나온 `dialogue-issue-signal` 중 낮은 음량·높은 대역 비율·낮은 robust loudness가 함께 나타나고 채팅·화면 근거가 없는 신호는 O 후보에서 제외한다. 오디오 원점은 timeline 점수 rail에 그대로 남겨 사용자가 잠재 구간을 볼 수 있다. 같은 신호에 화면 변화나 채팅 반응이 붙으면 정상 후보로 유지한다.
+- 사용되지 않은 강한 채팅 burst는 오디오 후보가 이미 있어도 독립 후보로 복원한다. 후보 상한 12개·45초 창·중복 억제·결정적 정렬은 유지하고, 오디오+채팅 합의 후보를 단독 채팅 후보보다 먼저 정렬한다. 이 경로는 채팅 파일을 실제로 추가한 다음 별도 검증해야 하며, 채팅이 없는 실행에는 영향을 주지 않는다.
+- 후보 의미가 바뀌므로 signal engine identity를 `streamer-reaction-fast-pass-v5-chat-fallback-music-confirmation`으로 올렸다. 기존 v4 저장 결과는 새 엔진 결과로 가장하지 않고, 새 분석에서만 v5를 사용한다.
+
+### 검증
+
+- `highlightFusion.test.ts`에 오디오가 있어도 강한 채팅 단독 후보를 보존하는 회귀와, 오프닝 음악성 dialogue lead는 제거하되 화면으로 확인된 dialogue는 보존하는 회귀를 추가했다.
+- `npm run check`: TypeScript strict, ESLint warning 0, 44개 파일의 588개 Vitest 테스트 통과.
+- 과거 엔진과 현재 엔진을 같은 샘플에 대조해 `dialogue-issue-signal` 재도입이 후보 변화의 원인임을 확인했다. 재현된 오프닝 오디오 후보는 fusion 단계에서 O 후보 0개로 줄고, raw signal은 점수 rail용 입력으로 남는다. 이는 오프닝을 후보로 노출하지 않으면서 잠재 신호를 숨기지 않는 의도된 결과다.
+
+## 2026-07-21 — `0.3.25` AI provider와 방송 전체 맥락 준비 구조
+
+### 구현
+
+- 기존 Gemini Candidate Pass B를 기본·활성 provider로 유지하면서 후보 해석 역할의 provider catalog를 추가했다. Qwen은 현재 오디오+대표 화면 계약에 맞는 `qwen3.5-omni-plus`, 방송 전체 맥락 역할은 `deepseek-v4-pro`로 등록했다.
+- Worker 환경 경계를 `CANDIDATE_INSIGHT_PROVIDER`, `BROADCAST_CONTEXT_PROVIDER`, provider별 credential로 분리했다. Gemini는 기존 endpoint로 정상 연결하고, Qwen은 키·Workspace ID·region을 안전하게 검증해 연결 정보를 만들되 adapter live smoke 전에는 `PROVIDER_NOT_ACTIVE`로 fail-closed 한다. DeepSeek는 기본 `disabled`다.
+- readiness manifest는 model ID/revision과 configured/active boolean만 반환하는 순수 구조로 만들었다. API key, Workspace ID, endpoint는 포함하지 않는 회귀 테스트를 추가했다.
+- 최대 12시간 방송을 최대 144개의 시간순 chapter 요약과 최대 12개 기존 후보의 텍스트 근거로 축약하는 `broadcast-context 1.0.0` 계약을 추가했다. 출력에는 후보별 맥락 설명·분류만 있고 score·rank·boundary·review·approval 필드는 없다.
+- `wrangler.jsonc`에는 공개 selector 기본값만 넣었다. 외부 Secret 변경, Worker 배포, GitHub Pages 배포는 수행하지 않았다.
+
+### 검증
+
+- provider 기본값·Qwen 허용 region/Workspace endpoint·잘못된 설정 fail-closed·DeepSeek disabled 기본값·secret redaction을 단위 테스트로 고정했다.
+- 전체 맥락 계약의 12시간 상한, chapter 비중첩, candidate ID 중복, 텍스트 상한, 결정 필드 부재를 단위 테스트로 고정했다.
+- `npm run check`: TypeScript strict, ESLint warning 0, 46개 파일의 598개 Vitest 테스트 통과.
+- `npm run build`: 129 modules production build 통과. 기존 500kB 초과 lazy chunk 경고 외 신규 오류는 없다.
+- `wrangler deploy --dry-run`: Gemini/disabled selector와 기존 두 rate limiter를 포함한 40.48KiB Worker bundle 확인. 실제 배포는 하지 않았다.
+- production `dist`에서 provider Secret 이름과 `AIza`·`sk-` 형태의 키 패턴이 0건임을 확인했다.
+
+## 2026-07-21 — `0.3.26` 편집자 중심 후보 검토 UI
+
+### 문제와 우선순위 재정의
+
+- Before: 복구 목록, 원본 입력, AI 세부 단계, 추천 순서, 타임라인, 모든 후보 상세 카드, 출력이 한 세로 흐름에서 비슷한 무게로 이어졌다. 후보를 확인하려면 페이지를 오르내려야 했고, 편집자가 지금 판단할 장면이 무엇인지 한눈에 알기 어려웠다.
+- After: 결과의 주 경로를 `타임라인 → 선택 후보 하나 → 재생/판단 → 출력`으로 고정했다. 남은 후보·사용·제외 수를 결과 머리에 표시하고, 타임라인 카드를 가로 탐색하며 현재 후보를 선택한다. 최대화 화면에서는 왼쪽 미리보기와 오른쪽 후보 상세를 나란히 유지하고 이전·다음 후보 이동을 제공한다.
+- 반응 종류 재분석, Gemini 재시도와 추천 순서 비교는 `AI 보강 분석과 후보 순서` 접힘 영역으로 옮겼다. 기능과 상태 계약은 유지하되 일상적인 검토 동선과 시각적으로 경쟁하지 않게 했다.
+- 복원 결과를 열면 복원 목록은 접힌 상태로 다시 마운트하고 후보 검토 제목으로 바로 이동한다. 원본이 없는 결과에서도 타임라인과 설명을 선택할 수 있으며, 재생이 필요하면 바로 위의 압축된 원본 재연결 영역으로 돌아간다.
+- 출력은 사용 후보가 하나 이상이거나 검토를 완료한 뒤에만 나타나며, 저장되지 않은 현재 판단 안내는 접힌 보조 문구로 낮췄다.
+
+### 상태·호환성 경계
+
+- 기존 `previewCandidateId`를 `CandidateReviewFocus` 화면 projection으로 사용한다. 선택은 자동 재생·자동 승인하지 않으며 후보 점수, 순위, 경계, review state와 export를 변경하지 않는다.
+- 후보별 인라인 플레이어를 제거하고 하나의 작업공간 플레이어만 사용한다. 시작·끝 경계 설정은 현재 선택 후보와 이 플레이어의 시각을 기준으로 유지된다.
+- 후보 결과가 처음 열리거나 이전·다음 후보로 이동하면 작업공간 플레이어를 해당 시작점에 정지 상태로 준비한다. 실제 재생과 승인·제외는 계속 사용자의 명시적 입력만으로 일어난다.
+- IndexedDB schema, 분석 결과, Gemini 계약, 후보 검출 엔진과 저장 형식은 변경하지 않았다. 이번 변경은 표시 계층과 현재 탭 포커스에만 한정된다.
+
+### 검증
+
+- `npm run check`: TypeScript strict, ESLint warning 0, 46개 파일의 598개 Vitest 테스트 통과.
+- `npm run build`: 129 modules production build 통과. 기존 lazy clip renderer·audio-event Worker·ORT WASM의 500kB 초과 경고 외 신규 빌드 오류는 없다.
+- 허용된 60초 샘플과 2시간 15분 음식 토크 샘플로 `원본 연결 → 빠른 분석 → 결과 복원 → 후보 이동 → 사용 판단 → 출력 공개`를 확인했다. 최대화 1440×900에서 타임라인과 2열 편집 작업공간이 한 흐름으로 이어졌고 document 가로 overflow는 없었다.
+- 390×844에서도 document 가로 overflow가 없고, 후보 판단 버튼은 화면을 덮는 긴 1열 sticky 영역 대신 카드 안 2×2 정적 영역으로 유지됐다. 복원 결과를 열면 후보 검토 제목이 포커스를 받고 고정 헤더 아래로 이동한다.
+- Google Drive에서 다시 내려받은 `2026 07 17 - 음식 토크[KzAW3yow80Q] (1).mp4`는 499,164,414 bytes, SHA-256 `F8A094E8169EA7635D720EE9D47BAB87E6915E9980EC62E7F71D76B06287AA4E`로 기존 로컬 원본과 byte-for-byte 일치했다. 이후 브라우저 검증 입력은 이 Drive 다운로드 파일을 명시적으로 사용했다.
+- 로컬 `0.3.26` 빠른 분석은 후보 5개(정점 00:21:02, 00:22:45, 00:02:34, 00:03:56, 00:01:45)를 만들었다. localhost preview에서는 production 전용 Gemini 중계에 연결되지 않아 `PROXY_UNAVAILABLE`로 끝났고 빠른 후보는 보존됐다. 새로고침 뒤 저장 기록 1개가 남았고 `이 결과 이어보기`로 후보 5개·시간표·검토 상태가 복원되며, 영상 blob만 의도대로 재연결을 요구했다.
+- 공개 배포판은 아직 `0.3.23`이었다. 같은 Drive 파일에서 동일한 후보 5개를 만들었고 production Gemini는 정상 완료해 칼국수·껍데기 사건 2개와 음악/대기 구간 3개를 명확히 구분했다. 따라서 파일·Gemini 키·production Worker 성공 경로는 확인됐지만, 음악 3개가 O 후보에서 먼저 제거되지 않는 회귀와 `0.3.26` 미배포는 별도 해결이 필요하다.
