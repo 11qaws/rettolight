@@ -8,11 +8,13 @@
     "region": "gcp:us-east4"
   },
   "vars": {
-    "CANDIDATE_INSIGHT_PROVIDER": "gemini",
-    "BROADCAST_CONTEXT_PROVIDER": "disabled"
+    "CANDIDATE_INSIGHT_PROVIDER": "qwen",
+    "BROADCAST_CONTEXT_PROVIDER": "disabled",
+    "QWEN_WORKSPACE_ID": "ws-jw8wb15wd52ln85c",
+    "QWEN_REGION": "singapore"
   },
   "secrets": {
-    "required": ["GEMINI_API_KEY"]
+    "required": ["GEMINI_API_KEY", "QWEN_API_KEY"]
   },
   "ratelimits": [
     {
