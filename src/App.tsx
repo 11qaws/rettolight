@@ -76,6 +76,8 @@ import {
   highlightReasonForSignalKinds,
   type UnifiedHighlightCandidate,
 } from "./analysis/highlightFusion";
+import { calculateTemporalEventDensity } from "./analysis/temporalPointProcess";
+import { selectContextAwareCandidates } from "./analysis/contextAwareCandidateSelection";
 import type { BroadcastContextSemanticChapter } from "./analysis/broadcastContextProtocol";
 import { buildHighlightNarrative } from "./analysis/highlightNarrative";
 import {
@@ -2025,7 +2027,7 @@ function App() {
               sourceDurationMs: preflight.metadata.durationMs,
               selection: {
                 candidateWindowMs: 45_000,
-                maxCandidates: 12,
+                maxCandidates: 96,
                 plannedWindowCount: defaultAudioWindowCount,
               },
               signal: controller.signal,
@@ -2100,7 +2102,7 @@ function App() {
                 sourceDurationMs: preflight.metadata.durationMs,
                 chatOffsetMs: Math.round(chatOffsetSeconds * 1_000),
                 candidateWindowMs: 45_000,
-                maxCandidates: 12,
+                maxCandidates: 96,
                 outOfRangeMode: "exclude",
               },
               signal: controller.signal,
@@ -2129,7 +2131,7 @@ function App() {
       const chatResult = chatOutcome.result;
       machine = applyAnalysisEvent(machine, { type: "CHUNK_RESULT_READY" });
 
-      const fusedCandidates = fuseReactionHighlightCandidates(
+      const rawFusedCandidates = fuseReactionHighlightCandidates(
         {
           audioCandidates: audioOutcome.result?.candidates ?? [],
           chatCandidates: chatResult?.candidates ?? [],
@@ -2138,10 +2140,26 @@ function App() {
         {
           sourceDurationMs: preflight.metadata.durationMs,
           candidateWindowMs: 45_000,
-          maxCandidates: 12,
+          maxCandidates: 96,
           allowUnanchoredVisualExploration: false,
         },
       );
+
+      const densityResult = calculateTemporalEventDensity(
+        rawFusedCandidates.map((c) => c.peakMs),
+        preflight.metadata.durationMs,
+        300_000,
+      );
+
+      const selectionResult = selectContextAwareCandidates(
+        rawFusedCandidates,
+        preflight.metadata.durationMs,
+        densityResult.bins,
+        [],
+        { detailAnalysisBudget: 12, explorationShare: 0.15, qualityLambda: 0.75 },
+      );
+
+      const fusedCandidates = selectionResult.candidates;
       setCandidateTimelineScorePoints(
         buildCandidateTimelineScorePoints([
           {

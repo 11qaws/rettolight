@@ -1,4 +1,3 @@
-import type { LocalAudioReactionCandidate } from "../media/localAudioReactionAnalysisCore";
 import type { TemporalEventDensityBin } from "./temporalPointProcess";
 
 export interface ContextAwareSelectionOptions {
@@ -18,8 +17,17 @@ export interface SelectionDiagnostics {
   readonly blockIndex: number;
 }
 
-export interface ContextAwareSelectionResult {
-  readonly candidates: readonly LocalAudioReactionCandidate[];
+export interface SelectableCandidate {
+  readonly id: string;
+  readonly peakMs: number;
+  readonly startMs: number;
+  readonly endMs: number;
+  readonly score: number;
+  readonly evidence?: unknown;
+}
+
+export interface ContextAwareSelectionResult<TCandidate extends SelectableCandidate = SelectableCandidate> {
+  readonly candidates: readonly TCandidate[];
   readonly diagnostics: readonly SelectionDiagnostics[];
 }
 
@@ -52,26 +60,27 @@ function calculateBlockQuotas(
     }
   }
 
-  // Weight by gamma=0.5
-  const gamma = 0.5;
-  const epsilon = 0.001;
-  const weights = expectedEventsByBlock.map(events => Math.pow(events + epsilon, gamma));
-  
-  let totalWeight = 0;
-  for (const w of weights) totalWeight += w;
+  const totalExpected = expectedEventsByBlock.reduce((a, b) => a + b, 0);
 
-  const quotas = weights.map(w => (totalWeight > 0 ? (detailAnalysisBudget * w) / totalWeight : detailAnalysisBudget / blockCount));
+  // Quota for each block proportional to expected events
+  const quotas = expectedEventsByBlock.map(exp => {
+    if (totalExpected === 0) {
+      return Math.max(1, Math.round(detailAnalysisBudget / blockCount));
+    }
+    const rawQuota = (exp / totalExpected) * detailAnalysisBudget;
+    return Math.max(1, Math.round(rawQuota));
+  });
 
   return { blockMs, expectedEventsByBlock, quotas };
 }
 
-export function selectContextAwareCandidates(
-  reservoir: readonly LocalAudioReactionCandidate[],
+export function selectContextAwareCandidates<TCandidate extends SelectableCandidate>(
+  reservoir: readonly TCandidate[],
   sourceDurationMs: number,
   densityBins: readonly TemporalEventDensityBin[],
   recommendedCandidateIds: readonly string[] = [],
   options: ContextAwareSelectionOptions = {}
-): ContextAwareSelectionResult {
+): ContextAwareSelectionResult<TCandidate> {
   const detailAnalysisBudget = options.detailAnalysisBudget ?? 12;
   const explorationShare = options.explorationShare ?? 0.15;
   const qualityLambda = options.qualityLambda ?? 0.75;
@@ -95,8 +104,8 @@ export function selectContextAwareCandidates(
   }
   const scoreRange = maxScore - minScore || 1;
 
-  interface Draft {
-    candidate: LocalAudioReactionCandidate;
+  interface Draft<T extends SelectableCandidate> {
+    candidate: T;
     normalizedQuality: number;
     workingUtility: number;
     duplicateSimilarity: number;
@@ -105,7 +114,7 @@ export function selectContextAwareCandidates(
     isRecommended: boolean;
   }
 
-  const drafts: Draft[] = reservoir.map(c => {
+  const drafts: Draft<TCandidate>[] = reservoir.map(c => {
     const nq = (c.score - minScore) / scoreRange;
     return {
       candidate: c,
@@ -118,10 +127,10 @@ export function selectContextAwareCandidates(
     };
   });
 
-  const selected: LocalAudioReactionCandidate[] = [];
+  const selected: TCandidate[] = [];
   const diagnostics: SelectionDiagnostics[] = [];
 
-  const updateUtility = (draft: Draft) => {
+  const updateUtility = (draft: Draft<TCandidate>) => {
     // Quality vs Novelty
     const baseUtility = qualityLambda * draft.normalizedQuality + (1 - qualityLambda) * (1 - draft.duplicateSimilarity);
     
@@ -185,7 +194,9 @@ export function selectContextAwareCandidates(
           // temporalSimilarity = exp(-(deltaMs / 90_000)^2)
           sim = Math.exp(-Math.pow(timeDiff / 90_000, 2));
           // If event kind differs, it's a different event, so drop similarity heavily
-          if (winner.candidate.evidence.eventKind !== draft.candidate.evidence.eventKind) {
+          const winnerEventKind = (winner.candidate.evidence as { eventKind?: string } | undefined)?.eventKind;
+          const draftEventKind = (draft.candidate.evidence as { eventKind?: string } | undefined)?.eventKind;
+          if (winnerEventKind && draftEventKind && winnerEventKind !== draftEventKind) {
             sim *= 0.1;
           }
         }
@@ -197,13 +208,10 @@ export function selectContextAwareCandidates(
 
   selectPass(mainBudget, "main");
   
-  // For exploration pass, we can optionally boost drafts that haven't been represented well.
-  // But for now, we just run another pass with the remaining budget, which naturally
-  // picks up different candidates because duplicates have high duplicateSimilarity.
+  // For exploration pass
   selectPass(detailAnalysisBudget, "exploration");
 
-  // If exploration didn't use full budget (drafts empty), we already stopped.
-  // Sort the final selected chronologically to be deterministic for UI
+  // Sort final selected chronologically
   selected.sort((left, right) => left.peakMs - right.peakMs);
 
   return { candidates: selected, diagnostics };
