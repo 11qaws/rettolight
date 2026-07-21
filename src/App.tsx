@@ -282,7 +282,7 @@ interface AudioAnalysisOutcome {
   readonly coverageComplete: boolean;
 }
 
-const APP_VERSION = "0.3.29";
+const APP_VERSION = "0.3.30";
 const PERSISTENCE_SCHEMA_VERSION = "0.3.0";
 const SIGNAL_ENGINE_VERSION =
   "streamer-reaction-fast-pass-v5-chat-fallback-music-confirmation";
@@ -6663,11 +6663,21 @@ function App() {
                               <span>재생 확인 필요</span>
                             </div>
                             <p>{candidateGeminiInsight.eventSummaryKo}</p>
+                            {(candidateGeminiInsight.identifiedParticipants?.length ?? 0) > 0 && (
+                              <p className="rh-identified-participant-line">
+                                <strong>이름 근거</strong>
+                                {candidateGeminiInsight.identifiedParticipants
+                                  ?.map((participant) => participant.displayName)
+                                  .join(" · ")}
+                              </p>
+                            )}
                             <p>
                               <strong>클립으로 먼저 볼 이유</strong>
                               {candidateGeminiInsight.whyGoodClipKo}
                             </p>
-                            <small>대표 화면과 혼합 오디오를 본 AI 해석이에요. 전체 맥락과 화자 신원은 직접 확인해 주세요.</small>
+                            <small>
+                              대표 화면과 혼합 오디오를 본 AI 해석이에요. 출연자 이름은 화면 표시나 실제 호명이 확인된 경우에만 적어요.
+                            </small>
                           </div>
                         )}
                         <details className="rh-candidate-evidence">
@@ -6715,7 +6725,7 @@ function App() {
                               </div>
                               <p>
                                 이 내용은 후보의 대표 화면과 혼합 오디오를 함께 본 모델 해석이에요.
-                                전체 방송 맥락과 화자 신원은 직접 재생해 확인해 주세요.
+                                전체 방송 맥락과 이름 근거는 직접 재생해 확인해 주세요.
                               </p>
                               <dl>
                                 <div>
@@ -6731,6 +6741,27 @@ function App() {
                                   <dd>{candidateGeminiInsight.whyGoodClipKo || "아래 대사 위치와 반응 정점을 직접 재생해 판단해 주세요."}</dd>
                                 </div>
                               </dl>
+                              {(candidateGeminiInsight.identifiedParticipants?.length ?? 0) > 0 && (
+                                <div className="rh-identified-participants">
+                                  <strong>확인 가능한 출연자 이름</strong>
+                                  <ul>
+                                    {candidateGeminiInsight.identifiedParticipants?.map((participant) => (
+                                      <li key={`${participant.displayName}-${participant.evidenceBasis}`}>
+                                        <span>{participant.displayName}</span>
+                                        <small>
+                                          {participant.evidenceBasis === "on-screen-name"
+                                            ? "화면 이름"
+                                            : participant.evidenceBasis === "spoken-name"
+                                              ? "실제 호명"
+                                              : "방송 출연진 기준"}
+                                          {` · ${Math.round(participant.confidence * 100)}% · 후보 +${formatDuration(participant.relativeTimestampMs)}`}
+                                        </small>
+                                        <p>{participant.evidenceKo}</p>
+                                      </li>
+                                    ))}
+                                  </ul>
+                                </div>
+                              )}
                               {candidateGeminiInsight.uncertaintiesKo.length > 0 && (
                                 <div className="rh-gemini-uncertainties">
                                   <strong>AI도 확실히 알 수 없었던 점</strong>

@@ -4,6 +4,7 @@ import {
   MAX_CANDIDATE_PASS_B_VIDEO_FRAMES,
   type CandidatePassBVideoFrame,
   type CandidatePassBInsight,
+  type CandidatePassBParticipantAttribution,
   type CandidatePassBWorkerFailureReason,
 } from "./candidatePassBWorkerProtocol";
 
@@ -16,6 +17,9 @@ export const MAX_CANDIDATE_PASS_B_SEGMENT_TEXT_LENGTH = 240;
 export const MAX_CANDIDATE_PASS_B_INSIGHT_TEXT_LENGTH = 600;
 export const MAX_CANDIDATE_PASS_B_UNCERTAINTIES = 6;
 export const MAX_CANDIDATE_PASS_B_UNCERTAINTY_LENGTH = 300;
+export const MAX_CANDIDATE_PASS_B_IDENTIFIED_PARTICIPANTS = 6;
+export const MAX_CANDIDATE_PASS_B_PARTICIPANT_NAME_LENGTH = 80;
+export const MAX_CANDIDATE_PASS_B_PARTICIPANT_EVIDENCE_LENGTH = 300;
 const MAX_BASE64_WAV_LENGTH = 8 * 1024 * 1024;
 
 export interface CandidatePassBGeminiRelativeSegment {
@@ -129,6 +133,43 @@ const RESPONSE_SCHEMA = Object.freeze({
         description: "오디오만으로 확정할 수 없어 영상 재생 확인이 필요한 점",
       },
     },
+    identifiedParticipants: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          displayName: {
+            type: "string",
+            description: "화면 글자나 실제 호명으로 확인한 출연자 이름",
+          },
+          role: {
+            type: "string",
+            enum: ["streamer", "guest", "unknown"],
+          },
+          evidenceBasis: {
+            type: "string",
+            enum: ["on-screen-name", "spoken-name", "provided-cast-reference"],
+          },
+          evidenceKo: {
+            type: "string",
+            description: "편집자가 재생해서 확인할 수 있는 한국어 이름 근거",
+          },
+          confidence: { type: "number" },
+          relativeTimestampMs: {
+            type: "integer",
+            description: "이름 근거가 나타난 후보 상대 밀리초",
+          },
+        },
+        required: [
+          "displayName",
+          "role",
+          "evidenceBasis",
+          "evidenceKo",
+          "confidence",
+          "relativeTimestampMs",
+        ],
+      },
+    },
   },
   required: [
     "segments",
@@ -136,6 +177,7 @@ const RESPONSE_SCHEMA = Object.freeze({
     "reactionSummaryKo",
     "whyGoodClipKo",
     "uncertaintiesKo",
+    "identifiedParticipants",
   ],
 });
 
@@ -274,7 +316,8 @@ export function buildCandidatePassBPrompt(
 9. 큰 소리, 화려한 화면 전환, 이펙트만으로 좋은 클립이라고 판단하지 마세요. 구체적인 사건과 스트리머의 발화·표정·몸짓·행동 반응이 연결되어야 합니다.
 10. 노래·MV·음악만 있는 구간, 고정 오프닝·엔딩·대기·휴식은 고유한 스트리머 발화 사건이 없다면 whyGoodClipKo에 클립으로 권하기 어렵다고 명확히 적으세요.
 11. 단편적이고 평범한 진행만 보여 사건의 시작·반응·결과가 연결되지 않으면 과장된 장점을 만들지 말고, 부족한 앞뒤 맥락을 uncertaintiesKo에 적으세요.
-12. 스키마 이외의 키나 설명 문장은 출력하지 마세요.`;
+12. identifiedParticipants에는 화면에 이름이 적혀 있거나 실제 발화로 이름이 불린 출연자만 적으세요. 아바타 외형·목소리 느낌만으로 이름을 추측하지 말고, 확인할 수 없으면 빈 배열을 출력하세요. evidenceKo에는 이름을 확인한 글자나 호명 근거를 적으세요. 이번 요청에는 별도 출연진 기준 자료가 없으므로 evidenceBasis에 provided-cast-reference를 사용하지 마세요.
+13. 스키마 이외의 키나 설명 문장은 출력하지 마세요.`;
 }
 
 export function buildCandidatePassBGeminiRequestBody(
@@ -384,22 +427,32 @@ export function parseCandidatePassBGeminiAnalysis(
   value: unknown,
   candidateDurationMs: number,
 ): CandidatePassBGeminiParseOutcome {
+  const legacyResponseKeys = [
+    "segments",
+    "eventSummaryKo",
+    "reactionSummaryKo",
+    "whyGoodClipKo",
+    "uncertaintiesKo",
+  ] as const;
+  const currentResponseKeys = [
+    ...legacyResponseKeys,
+    "identifiedParticipants",
+  ] as const;
   if (
     !Number.isSafeInteger(candidateDurationMs) ||
     candidateDurationMs <= 0 ||
     !isRecord(value) ||
-    !hasExactKeys(value, [
-      "segments",
-      "eventSummaryKo",
-      "reactionSummaryKo",
-      "whyGoodClipKo",
-      "uncertaintiesKo",
-    ]) ||
+    (!hasExactKeys(value, legacyResponseKeys) &&
+      !hasExactKeys(value, currentResponseKeys)) ||
     !Array.isArray(value.segments) ||
     value.segments.length > MAX_CANDIDATE_PASS_B_TRANSCRIPT_SEGMENTS ||
     !Array.isArray(value.uncertaintiesKo) ||
     value.uncertaintiesKo.length < 1 ||
-    value.uncertaintiesKo.length > MAX_CANDIDATE_PASS_B_UNCERTAINTIES
+    value.uncertaintiesKo.length > MAX_CANDIDATE_PASS_B_UNCERTAINTIES ||
+    (value.identifiedParticipants !== undefined &&
+      !Array.isArray(value.identifiedParticipants)) ||
+    (Array.isArray(value.identifiedParticipants) &&
+      value.identifiedParticipants.length > MAX_CANDIDATE_PASS_B_IDENTIFIED_PARTICIPANTS)
   ) {
     return { ok: false };
   }
@@ -474,6 +527,66 @@ export function parseCandidatePassBGeminiAnalysis(
     uncertaintiesKo.push(uncertainty);
   }
 
+  const identifiedParticipants: CandidatePassBParticipantAttribution[] = [];
+  const seenParticipantNames = new Set<string>();
+  const participantValues: readonly unknown[] = Array.isArray(
+    value.identifiedParticipants,
+  )
+    ? value.identifiedParticipants
+    : [];
+  for (const rawParticipant of participantValues) {
+    if (
+      !isRecord(rawParticipant) ||
+      !hasExactKeys(rawParticipant, [
+        "displayName",
+        "role",
+        "evidenceBasis",
+        "evidenceKo",
+        "confidence",
+        "relativeTimestampMs",
+      ]) ||
+      !["streamer", "guest", "unknown"].includes(rawParticipant.role as string) ||
+      !["on-screen-name", "spoken-name", "provided-cast-reference"].includes(
+        rawParticipant.evidenceBasis as string,
+      ) ||
+      typeof rawParticipant.confidence !== "number" ||
+      !Number.isFinite(rawParticipant.confidence) ||
+      rawParticipant.confidence < 0 ||
+      rawParticipant.confidence > 1 ||
+      !Number.isSafeInteger(rawParticipant.relativeTimestampMs) ||
+      (rawParticipant.relativeTimestampMs as number) < 0 ||
+      (rawParticipant.relativeTimestampMs as number) > candidateDurationMs
+    ) {
+      return { ok: false };
+    }
+    const displayName = normalizeText(
+      rawParticipant.displayName,
+      MAX_CANDIDATE_PASS_B_PARTICIPANT_NAME_LENGTH,
+    );
+    const evidenceKo = normalizeKoreanText(
+      rawParticipant.evidenceKo,
+      MAX_CANDIDATE_PASS_B_PARTICIPANT_EVIDENCE_LENGTH,
+    );
+    const normalizedNameKey = displayName?.toLocaleLowerCase("ko-KR") ?? "";
+    if (
+      displayName === null ||
+      evidenceKo === null ||
+      seenParticipantNames.has(normalizedNameKey)
+    ) {
+      return { ok: false };
+    }
+    seenParticipantNames.add(normalizedNameKey);
+    identifiedParticipants.push({
+      displayName,
+      role: rawParticipant.role as CandidatePassBParticipantAttribution["role"],
+      evidenceBasis:
+        rawParticipant.evidenceBasis as CandidatePassBParticipantAttribution["evidenceBasis"],
+      evidenceKo,
+      confidence: rawParticipant.confidence,
+      relativeTimestampMs: rawParticipant.relativeTimestampMs as number,
+    });
+  }
+
   return {
     ok: true,
     analysis: {
@@ -483,6 +596,7 @@ export function parseCandidatePassBGeminiAnalysis(
         reactionSummaryKo,
         whyGoodClipKo,
         uncertaintiesKo,
+        identifiedParticipants,
       },
     },
   };

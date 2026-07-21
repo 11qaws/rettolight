@@ -277,6 +277,107 @@ describe("broadcastContextDeepseek", () => {
       }
     });
 
+    it("rejects malformed semantic chapters instead of reporting paid context as valid", () => {
+      const payload = {
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                broadcastSummaryKo: "방송 전체 요약",
+                recurringThemesKo: [],
+                semanticChapters: [
+                  {
+                    startChapterId: "missing",
+                    endChapterId: "missing",
+                    titleKo: "근거 없는 단락",
+                    summaryKo: "관측하지 않은 범위를 참조한다.",
+                    kind: "main-event",
+                    salience: "primary",
+                    relatedCandidateIds: ["can1"],
+                    uncertaintiesKo: [],
+                  },
+                ],
+                annotations: [
+                  {
+                    candidateId: "can1",
+                    category: "reaction",
+                    clipDecision: "select",
+                    confidence: 0.92,
+                    rejectionReasons: [],
+                    contextSummaryKo: "맥락",
+                    whyThisMomentKo: "이유",
+                    relatedCandidateIds: [],
+                    uncertaintiesKo: [],
+                  },
+                ],
+              }),
+            },
+          },
+        ],
+      };
+
+      expect(extractBroadcastContextDeepseekResponse(payload, dummyRequest).ok).toBe(false);
+    });
+
+    it("recovers valid semantic chapters while discarding malformed paid items", () => {
+      const payload = {
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                broadcastSummaryKo: "방송 전체 요약",
+                recurringThemesKo: [],
+                semanticChapters: [
+                  {
+                    startChapterId: "c1",
+                    endChapterId: "c1",
+                    titleKo: "정상 단락",
+                    summaryKo: "관측된 첫 구간이다.",
+                    kind: "reaction",
+                    salience: "secondary",
+                    relatedCandidateIds: ["can1"],
+                    uncertaintiesKo: [],
+                  },
+                  {
+                    startChapterId: "missing",
+                    endChapterId: "missing",
+                    titleKo: "잘못된 단락",
+                    summaryKo: "관측하지 않은 범위다.",
+                    kind: "main-event",
+                    salience: "primary",
+                    relatedCandidateIds: [],
+                    uncertaintiesKo: [],
+                  },
+                ],
+                annotations: [
+                  {
+                    candidateId: "can1",
+                    category: "reaction",
+                    clipDecision: "select",
+                    confidence: 0.92,
+                    rejectionReasons: [],
+                    contextSummaryKo: "맥락",
+                    whyThisMomentKo: "이유",
+                    relatedCandidateIds: [],
+                    uncertaintiesKo: [],
+                  },
+                ],
+              }),
+            },
+          },
+        ],
+      };
+
+      const parsed = extractBroadcastContextDeepseekResponse(payload, dummyRequest, {
+        recoverMalformedItems: true,
+      });
+      expect(parsed.ok).toBe(true);
+      if (parsed.ok) {
+        expect(parsed.result.semanticChapters).toHaveLength(1);
+        expect(parsed.result.semanticChapters[0]?.titleKo).toBe("정상 단락");
+      }
+    });
+
     it("rejects invalid category", () => {
       const payload = {
         choices: [

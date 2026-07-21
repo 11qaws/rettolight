@@ -1743,6 +1743,11 @@
   font-size: .75rem;
 }
 
+.rh-gemini-quick-summary .rh-identified-participant-line {
+  color: var(--accent);
+  font-weight: 700;
+}
+
 .rh-gemini-quick-summary > div span {
   padding: 2px 7px;
   border: 1px solid var(--rh-warning-border);
@@ -1836,6 +1841,53 @@
   color: var(--text2);
   font-size: .8125rem;
   line-height: 1.5;
+}
+
+.rh-identified-participants {
+  margin-top: 10px;
+  padding: 9px 10px;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border));
+  border-radius: var(--rh-radius-sm);
+  background: color-mix(in srgb, var(--accent) 5%, var(--bg2));
+}
+
+.rh-identified-participants > strong {
+  color: var(--text2);
+  font-size: .75rem;
+}
+
+.rh-identified-participants ul {
+  display: grid;
+  gap: 7px;
+  margin: 7px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.rh-identified-participants li {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 8px;
+}
+
+.rh-identified-participants li > span {
+  color: var(--text1);
+  font-size: .8125rem;
+  font-weight: 800;
+}
+
+.rh-identified-participants li > small {
+  align-self: center;
+  color: var(--text4);
+  font-size: .68rem;
+}
+
+.rh-identified-participants li > p {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--text3);
+  font-size: .75rem;
+  line-height: 1.45;
 }
 
 .rh-gemini-uncertainties {

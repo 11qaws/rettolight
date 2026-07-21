@@ -1,5 +1,14 @@
 # Development Log
 
+## 2026-07-22 `0.3.30` grounded participant attribution and strict context recovery
+
+- Added a bounded `identifiedParticipants` result to the existing candidate audio+frame request. Qwen3.5 Omni Flash or Gemini3.5 Flash may emit up to six names only when an on-screen label or audible name call grounds the attribution; avatar appearance and voice resemblance are explicitly forbidden as name evidence.
+- Persisted participant name, role, evidence basis, Korean evidence, confidence, and candidate-relative verification time in Candidate Pass B insight schema `1.2.0`. Older 1.0/1.1 sessions reopen without migration loss, while legacy provider responses are promoted to an empty participant list.
+- Presented grounded names directly on candidate cards and in the expanded evidence panel without changing candidate score, eligibility, approval, or clip bounds. The feature reuses the existing paid multimodal call and adds no API request.
+- Fixed the full-context parser so malformed semantic chapter shapes or unobserved chapter references no longer become a successful empty chapter result. Strict parsing rejects the response; paid-response recovery keeps only independently valid, chronological chapters.
+- Kept role-based model routing cost-aware: Qwen3.5 Omni Flash handles candidate audio/video and sampled transcription, Qwen3.7 Plus handles compressed broadcast context and the first difficult-candidate judgment, Qwen3.6 Flash remains the low-cost text selection path, Gemini3.5 Flash is the candidate fallback, Gemini3.1 Pro is the optional fallback for at most three difficult adjudications, and DeepSeek V4-Pro remains a text-only emergency context fallback.
+- Re-ran the three local fast-pass samples. Food talk remains exactly three candidates at approximately 01:11, 02:38, and 03:56; the broader subscription and relay reservoirs remain available for the subsequent semantic gate. TypeScript, ESLint, all 65 test files / 686 tests, and the production build pass.
+
 ## 2026-07-22 `0.3.29` Qwen multimodal hierarchy and negative-stream precision
 
 - Switched the deployed candidate audio+frame path to `qwen3.5-omni-flash` and kept `qwen3.7-plus` for compressed whole-broadcast routing. Candidate frames now carry relative timestamp labels, small unreadable text and avatar-frame motion are explicitly uncertain, and the UI uses provider-neutral AI wording.

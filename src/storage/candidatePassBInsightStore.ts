@@ -1,11 +1,12 @@
 import type { CandidatePassBEvidence } from "../analysis/candidatePassB";
 import {
   MAX_CANDIDATE_PASS_B_VIDEO_FRAME_BASE64_LENGTH,
+  type CandidatePassBParticipantAttribution,
   type CandidatePassBVideoFrame,
 } from "../analysis/candidatePassBWorkerProtocol";
 
-export const CANDIDATE_PASS_B_INSIGHT_SCHEMA_VERSION = "1.1.0" as const;
-export type CandidatePassBInsightSchemaVersion = "1.0.0" | "1.1.0";
+export const CANDIDATE_PASS_B_INSIGHT_SCHEMA_VERSION = "1.2.0" as const;
+export type CandidatePassBInsightSchemaVersion = "1.0.0" | "1.1.0" | "1.2.0";
 
 const SUPPORTED_INSIGHT_SCHEMA_VERSIONS = new Set<CandidatePassBInsightSchemaVersion>([
   "1.0.0",
@@ -17,6 +18,7 @@ export interface StoredCandidatePassBInsight {
   readonly reactionSummaryKo: string;
   readonly whyGoodClipKo: string;
   readonly uncertaintiesKo: readonly string[];
+  readonly identifiedParticipants?: readonly CandidatePassBParticipantAttribution[];
 }
 
 export interface CandidatePassBInsightsRecord {
@@ -48,13 +50,39 @@ function isStoredInsight(value: unknown): value is StoredCandidatePassBInsight {
   if (!isRecord(value)) {
     return false;
   }
+  const participants = value.identifiedParticipants;
   return (
     isBoundedString(value.eventSummaryKo, 1_000) &&
     isBoundedString(value.reactionSummaryKo, 1_000) &&
     isBoundedString(value.whyGoodClipKo, 1_000) &&
     Array.isArray(value.uncertaintiesKo) &&
     value.uncertaintiesKo.length <= 8 &&
-    value.uncertaintiesKo.every((item) => isBoundedString(item, 500))
+    value.uncertaintiesKo.every((item) => isBoundedString(item, 500)) &&
+    (participants === undefined ||
+      (Array.isArray(participants) &&
+        participants.length <= 6 &&
+        participants.every(isStoredParticipantAttribution)))
+  );
+}
+
+function isStoredParticipantAttribution(
+  value: unknown,
+): value is CandidatePassBParticipantAttribution {
+  return (
+    isRecord(value) &&
+    isNonEmptyBoundedString(value.displayName, 80) &&
+    ["streamer", "guest", "unknown"].includes(value.role as string) &&
+    ["on-screen-name", "spoken-name", "provided-cast-reference"].includes(
+      value.evidenceBasis as string,
+    ) &&
+    isNonEmptyBoundedString(value.evidenceKo, 300) &&
+    typeof value.confidence === "number" &&
+    Number.isFinite(value.confidence) &&
+    value.confidence >= 0 &&
+    value.confidence <= 1 &&
+    Number.isSafeInteger(value.relativeTimestampMs) &&
+    (value.relativeTimestampMs as number) >= 0 &&
+    (value.relativeTimestampMs as number) <= 60_000
   );
 }
 

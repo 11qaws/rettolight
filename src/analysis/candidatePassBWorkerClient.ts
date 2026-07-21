@@ -27,6 +27,9 @@ import {
 } from "./candidatePassBWorkerProtocol";
 import {
   MAX_CANDIDATE_PASS_B_INSIGHT_TEXT_LENGTH,
+  MAX_CANDIDATE_PASS_B_IDENTIFIED_PARTICIPANTS,
+  MAX_CANDIDATE_PASS_B_PARTICIPANT_EVIDENCE_LENGTH,
+  MAX_CANDIDATE_PASS_B_PARTICIPANT_NAME_LENGTH,
   MAX_CANDIDATE_PASS_B_SEGMENT_TEXT_LENGTH,
   MAX_CANDIDATE_PASS_B_TRANSCRIPT_SEGMENTS,
   MAX_CANDIDATE_PASS_B_TRANSCRIPT_TEXT_LENGTH,
@@ -318,14 +321,16 @@ function isTranscriptSegment(value: unknown): boolean {
 }
 
 function isInsight(value: unknown): boolean {
+  const legacyKeys = [
+    "eventSummaryKo",
+    "reactionSummaryKo",
+    "whyGoodClipKo",
+    "uncertaintiesKo",
+  ] as const;
+  const currentKeys = [...legacyKeys, "identifiedParticipants"] as const;
   if (
     !isRecord(value) ||
-    !hasExactKeys(value, [
-      "eventSummaryKo",
-      "reactionSummaryKo",
-      "whyGoodClipKo",
-      "uncertaintiesKo",
-    ]) ||
+    (!hasExactKeys(value, legacyKeys) && !hasExactKeys(value, currentKeys)) ||
     !Array.isArray(value.uncertaintiesKo) ||
     value.uncertaintiesKo.length < 1 ||
     value.uncertaintiesKo.length > MAX_CANDIDATE_PASS_B_UNCERTAINTIES
@@ -333,6 +338,9 @@ function isInsight(value: unknown): boolean {
     return false;
   }
   const uncertainties: readonly unknown[] = value.uncertaintiesKo;
+  const participants: readonly unknown[] = Array.isArray(value.identifiedParticipants)
+    ? value.identifiedParticipants
+    : [];
   return (
     isBoundedKoreanText(
       value.eventSummaryKo,
@@ -352,7 +360,40 @@ function isInsight(value: unknown): boolean {
         MAX_CANDIDATE_PASS_B_UNCERTAINTY_LENGTH,
       ),
     ) &&
-    new Set(uncertainties).size === uncertainties.length
+    new Set(uncertainties).size === uncertainties.length &&
+    participants.length <= MAX_CANDIDATE_PASS_B_IDENTIFIED_PARTICIPANTS &&
+    participants.every(isParticipantAttribution)
+  );
+}
+
+function isParticipantAttribution(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    hasExactKeys(value, [
+      "displayName",
+      "role",
+      "evidenceBasis",
+      "evidenceKo",
+      "confidence",
+      "relativeTimestampMs",
+    ]) &&
+    hasBoundedCodePointLength(
+      value.displayName,
+      MAX_CANDIDATE_PASS_B_PARTICIPANT_NAME_LENGTH,
+    ) &&
+    ["streamer", "guest", "unknown"].includes(value.role as string) &&
+    ["on-screen-name", "spoken-name", "provided-cast-reference"].includes(
+      value.evidenceBasis as string,
+    ) &&
+    isBoundedKoreanText(
+      value.evidenceKo,
+      MAX_CANDIDATE_PASS_B_PARTICIPANT_EVIDENCE_LENGTH,
+    ) &&
+    isFiniteNumber(value.confidence) &&
+    value.confidence >= 0 &&
+    value.confidence <= 1 &&
+    isNonNegativeSafeInteger(value.relativeTimestampMs) &&
+    value.relativeTimestampMs <= MAX_CANDIDATE_PASS_B_TARGET_DURATION_MS
   );
 }
 

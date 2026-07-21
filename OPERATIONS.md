@@ -10,7 +10,7 @@
 - Pass B evidence and AI insight snapshots are stored by analysis run in a dedicated IndexedDB object store. Recovery filters them to the recovered candidate IDs, and a new run epoch prevents late writes from an older source contaminating the current result.
 - Fixed non-vocal program-edge bursts (opening, ending, and break loops) are rejected by default. An edge segment can still survive when it has a distinctive vocal/dialogue anchor, while the central UI presents the automatic phase and candidate list without promotional copy.
 
-- 문서 버전: `0.3.29`
+- 문서 버전: `0.3.30`
 - 기준일: 2026-07-22 (Asia/Seoul)
 - 대상: GitHub Pages에서 실행되는 1인용 AI 편집 어시스턴트
 - 함께 읽을 문서: `PRODUCT_PLAN.md`, `STATE_LIFECYCLE.md`, `DEVELOPMENT_LOG.md`
@@ -500,3 +500,10 @@ type DiagnosticEvent = {
 - 유료 transcript, context, 의미 후보 재확인 결과는 각각 입력 서명과 model revision으로 저장하고 write/readback 뒤에만 재사용한다. 새로고침 때 같은 서명의 성공 결과가 있으면 호출하지 않으며, 실패·취소 결과는 성공 캐시로 승격하지 않는다.
 - 12시간·후보 12개·어려운 후보 3개 기준 정책 상한은 약 `$0.997`다. 공급자 가격이 바뀌면 `analysisBudgetPolicy` 테스트와 화면 예상비를 함께 갱신하기 전에는 배포하지 않는다.
 - rollback은 provider selector와 Pages/Worker model manifest를 함께 되돌린다. 과거 결과의 provider·model identity를 다른 모델로 다시 쓰거나 공급자 사이 캐시를 공유하지 않는다.
+
+## 16. `0.3.30` 출연자 근거와 문맥 응답 복구
+
+- 후보 지각 모델은 기존 오디오·대표 화면 요청 안에서만 출연자 이름을 추출한다. 화면 이름, 실제 호명, 명시적으로 제공된 출연진 기준 중 하나가 없으면 빈 목록이며, 아바타 외형이나 목소리 유사성은 근거로 허용하지 않는다.
+- 출연자 이름은 근거 종류·한국어 근거·확신도·후보 상대 시각과 함께 Candidate Pass B schema `1.2.0`에 저장한다. 이 정보는 카드 표시 전용이며 점수·선택·승인·클립 경계를 변경하지 않는다.
+- 1.0/1.1 저장 결과와 구형 공급자 응답은 빈 출연자 목록으로 읽는다. 새 모델 revision 결과를 과거 결과로 가장하지 않고, 입력 서명과 revision이 달라지면 별도 실행으로 저장한다.
+- 전체 문맥 응답의 의미 챕터가 잘못된 필드, 존재하지 않는 chapter ID, 겹치는 범위, coverage gap 횡단을 포함하면 엄격 호출은 실패한다. 이미 비용을 낸 복구 경로에서는 각 항목을 독립 검증해 정상이고 시간순인 항목만 남긴다.

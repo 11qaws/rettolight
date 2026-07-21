@@ -842,7 +842,10 @@ export function extractBroadcastContextDeepseekResponse(
         !isStringArray(sc.relatedCandidateIds) ||
         !isStringArray(sc.uncertaintiesKo)
       ) {
-        continue;
+        if (options.recoverMalformedItems === true) {
+          continue;
+        }
+        return { ok: false };
       }
       rawSemanticChapters.push({
         startChapterId: sc.startChapterId,
@@ -858,11 +861,31 @@ export function extractBroadcastContextDeepseekResponse(
   }
 
   const coverage = calculateCoverage(request.chapters, request.sourceDurationMs);
-  let semanticChapters: readonly BroadcastContextSemanticChapter[] = [];
+  let semanticChapters: readonly BroadcastContextSemanticChapter[];
   try {
     semanticChapters = normalizeSemanticChapters(rawSemanticChapters, request.chapters, coverage.gaps);
   } catch {
-    // If normalization fails, just return empty semantic chapters
+    if (options.recoverMalformedItems !== true) {
+      return { ok: false };
+    }
+    const recovered: BroadcastContextSemanticChapter[] = [];
+    for (const semanticChapter of rawSemanticChapters) {
+      try {
+        const normalized = normalizeSemanticChapters(
+          [semanticChapter],
+          request.chapters,
+          coverage.gaps,
+        );
+        const candidate = normalized[0];
+        const previous = recovered.at(-1);
+        if (candidate !== undefined && (previous === undefined || candidate.startMs >= previous.endMs)) {
+          recovered.push(candidate);
+        }
+      } catch {
+        // Fail closed for only the malformed generated semantic chapter.
+      }
+    }
+    semanticChapters = recovered;
   }
 
   const rawDiscoveredLeads: BroadcastContextDiscoveredLeadReference[] = [];

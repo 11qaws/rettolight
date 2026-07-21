@@ -1,5 +1,8 @@
 import {
   MAX_CANDIDATE_PASS_B_RESPONSE_BYTES,
+  MAX_CANDIDATE_PASS_B_IDENTIFIED_PARTICIPANTS,
+  MAX_CANDIDATE_PASS_B_PARTICIPANT_EVIDENCE_LENGTH,
+  MAX_CANDIDATE_PASS_B_PARTICIPANT_NAME_LENGTH,
   buildCandidatePassBPrompt,
   extractCandidatePassBGeminiResponse,
 } from "./candidatePassBGemini";
@@ -45,6 +48,21 @@ function normalizedKorean(value: unknown, maximumLength: number): string | null 
     .trim();
   if (normalized.length === 0 || !/\p{Script=Hangul}/u.test(normalized)) return null;
   return Array.from(normalized).slice(0, maximumLength).join("").trim();
+}
+
+function normalizedName(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const normalized = value
+    .normalize("NFKC")
+    .replace(/[\p{Cc}\p{Cf}]/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim();
+  if (normalized.length === 0) return null;
+  const bounded = Array.from(normalized)
+    .slice(0, MAX_CANDIDATE_PASS_B_PARTICIPANT_NAME_LENGTH)
+    .join("")
+    .trim();
+  return bounded.length > 0 ? bounded : null;
 }
 
 function normalizedQwenJson(text: string, candidateDurationMs: number): string | null {
@@ -109,12 +127,78 @@ function normalizedQwenJson(text: string, candidateDurationMs: number): string |
   if (uncertaintiesKo.length === 0) {
     uncertaintiesKo.push("대표 화면 사이의 움직임은 원본 재생으로 확인해야 합니다.");
   }
+  const identifiedParticipants: Array<{
+    readonly displayName: string;
+    readonly role: "streamer" | "guest" | "unknown";
+    readonly evidenceBasis:
+      | "on-screen-name"
+      | "spoken-name"
+      | "provided-cast-reference";
+    readonly evidenceKo: string;
+    readonly confidence: number;
+    readonly relativeTimestampMs: number;
+  }> = [];
+  const seenParticipantNames = new Set<string>();
+  if (Array.isArray(value.identifiedParticipants)) {
+    for (const raw of value.identifiedParticipants.slice(
+      0,
+      MAX_CANDIDATE_PASS_B_IDENTIFIED_PARTICIPANTS,
+    )) {
+      if (!isRecord(raw)) continue;
+      const displayName = normalizedName(raw.displayName);
+      const evidenceKo = normalizedKorean(
+        raw.evidenceKo,
+        MAX_CANDIDATE_PASS_B_PARTICIPANT_EVIDENCE_LENGTH,
+      );
+      const role = ["streamer", "guest", "unknown"].includes(raw.role as string)
+        ? (raw.role as "streamer" | "guest" | "unknown")
+        : null;
+      const evidenceBasis = [
+        "on-screen-name",
+        "spoken-name",
+        "provided-cast-reference",
+      ].includes(raw.evidenceBasis as string)
+        ? (raw.evidenceBasis as
+            | "on-screen-name"
+            | "spoken-name"
+            | "provided-cast-reference")
+        : null;
+      const confidence = typeof raw.confidence === "number" && Number.isFinite(raw.confidence)
+        ? Math.max(0, Math.min(1, raw.confidence))
+        : null;
+      const timestamp = typeof raw.relativeTimestampMs === "number" && Number.isFinite(raw.relativeTimestampMs)
+        ? Math.round(Math.max(0, Math.min(candidateDurationMs, raw.relativeTimestampMs)))
+        : null;
+      const nameKey = displayName?.toLocaleLowerCase("ko-KR") ?? "";
+      if (
+        displayName === null ||
+        evidenceKo === null ||
+        role === null ||
+        evidenceBasis === null ||
+        confidence === null ||
+        timestamp === null ||
+        seenParticipantNames.has(nameKey)
+      ) {
+        continue;
+      }
+      seenParticipantNames.add(nameKey);
+      identifiedParticipants.push({
+        displayName,
+        role,
+        evidenceBasis,
+        evidenceKo,
+        confidence,
+        relativeTimestampMs: timestamp,
+      });
+    }
+  }
   return JSON.stringify({
     segments: nonOverlapping,
     eventSummaryKo,
     reactionSummaryKo,
     whyGoodClipKo,
     uncertaintiesKo,
+    identifiedParticipants,
   });
 }
 
@@ -159,7 +243,7 @@ export function buildCandidatePassBQwenOmniRequestBody(
   const qwenGroundingRules = frames.length === 0
     ? "\n대표 화면이 제공되지 않았습니다. 화면 내용, 비명의 원인, 표정, 몸짓, 게임 상황을 추측하지 말고 시각 정보가 없다고 uncertaintiesKo에 적으세요."
     : "\n대표 화면에서 실제로 확인되는 것만 서술하세요. 작아서 선명하게 읽히지 않는 글자는 인용하지 말고, 아바타 이미지의 프레임별 차이만으로 몸짓·행동·감정을 단정하지 마세요. 프레임 사이의 움직임과 인과관계는 보이지 않으므로 대사와 화면 양쪽에서 확인되지 않으면 uncertaintiesKo에 남기세요.";
-  const responseShape = `\n\n다음 JSON 형식만 출력하세요:\n{"segments":[{"relativeStartMs":0,"relativeEndMs":1000,"text":"실제 한국어 발화"}],"eventSummaryKo":"화면 장면·사건·반응 200~300자","reactionSummaryKo":"관찰한 반응 과정","whyGoodClipKo":"클립 가치 또는 제외 이유","uncertaintiesKo":[]}`;
+  const responseShape = `\n\n다음 JSON 형식만 출력하세요:\n{"segments":[{"relativeStartMs":0,"relativeEndMs":1000,"text":"실제 한국어 발화"}],"eventSummaryKo":"화면 장면·사건·반응 200~300자","reactionSummaryKo":"관찰한 반응 과정","whyGoodClipKo":"클립 가치 또는 제외 이유","uncertaintiesKo":[],"identifiedParticipants":[{"displayName":"화면이나 호명으로 확인한 이름","role":"streamer","evidenceBasis":"on-screen-name","evidenceKo":"화면 자막에 이름이 표시됨","confidence":0.9,"relativeTimestampMs":5000}]}`;
   return {
     model: CANDIDATE_PASS_B_QWEN_MODEL_ID,
     messages: [{

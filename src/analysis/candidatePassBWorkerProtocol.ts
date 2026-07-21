@@ -3,7 +3,7 @@ export const CANDIDATE_PASS_B_GEMINI_MODEL_ID = "gemini-3.5-flash" as const;
 export const CANDIDATE_PASS_B_GEMINI_MODEL_REVISION = "3.5-flash-07-2026" as const;
 export const CANDIDATE_PASS_B_QWEN_MODEL_ID = "qwen3.5-omni-flash" as const;
 export const CANDIDATE_PASS_B_QWEN_MODEL_REVISION =
-  "qwen3.5-omni-flash-multimodal-2026-07-22" as const;
+  "qwen3.5-omni-flash-multimodal-participants-2026-07-22" as const;
 export const CANDIDATE_PASS_B_MODEL_ID = CANDIDATE_PASS_B_QWEN_MODEL_ID;
 export const CANDIDATE_PASS_B_MODEL_REVISION = CANDIDATE_PASS_B_QWEN_MODEL_REVISION;
 export const CANDIDATE_PASS_B_DTYPE = "remote" as const;
@@ -96,6 +96,23 @@ export interface CandidatePassBInsight {
   readonly reactionSummaryKo: string;
   readonly whyGoodClipKo: string;
   readonly uncertaintiesKo: readonly string[];
+  /** Absent only on sessions saved before insight schema 1.2.0. */
+  readonly identifiedParticipants?: readonly CandidatePassBParticipantAttribution[];
+}
+
+export type CandidatePassBParticipantRole = "streamer" | "guest" | "unknown";
+export type CandidatePassBParticipantEvidenceBasis =
+  | "on-screen-name"
+  | "spoken-name"
+  | "provided-cast-reference";
+
+export interface CandidatePassBParticipantAttribution {
+  readonly displayName: string;
+  readonly role: CandidatePassBParticipantRole;
+  readonly evidenceBasis: CandidatePassBParticipantEvidenceBasis;
+  readonly evidenceKo: string;
+  readonly confidence: number;
+  readonly relativeTimestampMs: number;
 }
 
 export interface CandidatePassBTranscriptResult {

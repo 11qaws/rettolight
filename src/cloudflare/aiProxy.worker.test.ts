@@ -607,7 +607,13 @@ describe("aiProxy.worker", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual(geminiPayload);
+    const responsePayload = await response.json() as typeof geminiPayload;
+    expect(
+      JSON.parse(responsePayload.candidates[0].content.parts[0].text),
+    ).toEqual({
+      ...JSON.parse(analysisText),
+      identifiedParticipants: [],
+    });
     expect(upstreamFetch).toHaveBeenCalledTimes(1);
   });
 
