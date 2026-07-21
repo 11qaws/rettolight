@@ -198,6 +198,7 @@ import {
   CANDIDATE_PASS_B_INSIGHT_SCHEMA_VERSION,
   type CandidatePassBInsightsRecord,
 } from "./storage/candidatePassBInsightStore";
+import type { CandidatePassBVideoFrame } from "./analysis/candidatePassBWorkerProtocol";
 
 type Theme = "light" | "dark";
 type CandidateReviewState = "unreviewed" | "approved" | "rejected";
@@ -234,7 +235,7 @@ interface AudioAnalysisOutcome {
   readonly coverageComplete: boolean;
 }
 
-const APP_VERSION = "0.3.19";
+const APP_VERSION = "0.3.20";
 const PERSISTENCE_SCHEMA_VERSION = "0.3.0";
 const SIGNAL_ENGINE_VERSION = "streamer-reaction-fast-pass-v4-audio-primary-chat-context";
 const MAX_CHAT_FILE_BYTES = 32 * 1024 * 1024;
@@ -245,6 +246,9 @@ type CandidateGeminiInsightById = Readonly<Record<string, CandidateGeminiInsight
 type CandidateTimelineFrame = Awaited<ReturnType<typeof sampleCandidateVideoFrames>>[number];
 type CandidateTimelineFramesById = Readonly<
   Record<string, readonly CandidateTimelineFrame[]>
+>;
+type CandidateTimelineThumbnailById = Readonly<
+  Record<string, CandidatePassBVideoFrame>
 >;
 type CandidateTimelineSignalKind = "audio" | "chat" | "visual" | "fused";
 interface CandidateTimelineScorePoint {
@@ -263,6 +267,17 @@ interface CandidateTimelineScoreSource {
     UnifiedHighlightCandidate,
     "id" | "peakMs" | "startMs" | "endMs" | "score"
   >[];
+}
+
+function firstTimelineFrameById(
+  framesById: CandidateTimelineFramesById,
+): CandidateTimelineThumbnailById {
+  return Object.fromEntries(
+    Object.entries(framesById).flatMap(([candidateId, frames]) => {
+      const frame = frames[0];
+      return frame === undefined ? [] : [[candidateId, frame]];
+    }),
+  );
 }
 
 function buildCandidateTimelineScorePoints(
@@ -811,6 +826,7 @@ function App() {
     useState<readonly CandidateTimelineScorePoint[]>([]);
   const candidatePassBEvidenceRef = useRef<CandidatePassBEvidenceById>({});
   const candidateGeminiInsightRef = useRef<CandidateGeminiInsightById>({});
+  const candidateTimelineFramesRef = useRef<CandidateTimelineFramesById>({});
   const candidatePassBInsightWriteChainRef = useRef<Promise<void>>(Promise.resolve());
   const candidatePassBInsightWriteEpochRef = useRef(0);
   const [candidatePassBModelProgress, setCandidatePassBModelProgress] =
@@ -1000,6 +1016,7 @@ function App() {
     clipRenderAbortController.current = null;
     setInlinePreviewCandidateId(null);
     setInlinePreviewStartMs(null);
+    candidateTimelineFramesRef.current = {};
     setCandidateTimelineFramesById({});
     setCandidateTimelineScorePoints([]);
     setClipDownloadStatusById({});
@@ -2595,6 +2612,9 @@ function App() {
   const queueCandidatePassBInsightPersistence = (
     evidenceById: CandidatePassBEvidenceById,
     insightById: CandidateGeminiInsightById,
+    thumbnailById: CandidateTimelineThumbnailById = firstTimelineFrameById(
+      candidateTimelineFramesRef.current,
+    ),
   ): void => {
     const runId = currentAnalysisRunId;
     const inputSignature =
@@ -2613,6 +2633,7 @@ function App() {
       modelManifestHash: CANDIDATE_PASS_B_MODEL_REVISION,
       evidenceById,
       insightById,
+      ...(Object.keys(thumbnailById).length > 0 ? { thumbnailById } : {}),
       recordedAt: new Date().toISOString(),
     };
     candidatePassBInsightWriteChainRef.current = candidatePassBInsightWriteChainRef.current
@@ -2630,6 +2651,10 @@ function App() {
           );
         }
       });
+  };
+
+  const flushCandidatePassBInsightPersistence = async (): Promise<void> => {
+    await candidatePassBInsightWriteChainRef.current.catch(() => undefined);
   };
 
   const runCandidatePassB = async (): Promise<void> => {
@@ -2708,10 +2733,11 @@ function App() {
               Math.abs(left.timestampMs - relativePeakMs) -
               Math.abs(right.timestampMs - relativePeakMs),
           )[0];
-          setCandidateTimelineFramesById((current) => ({
-            ...current,
+          candidateTimelineFramesRef.current = {
+            ...candidateTimelineFramesRef.current,
             [target.candidateId]: timelineFrame === undefined ? [] : [timelineFrame],
-          }));
+          };
+          setCandidateTimelineFramesById(candidateTimelineFramesRef.current);
         }
       }),
     );
@@ -2719,6 +2745,17 @@ function App() {
       candidatePassBStartPendingRef.current = false;
       setCandidatePassBStartPending(false);
       return;
+    }
+    const sampledThumbnails = firstTimelineFrameById(candidateTimelineFramesRef.current);
+    if (Object.keys(sampledThumbnails).length > 0) {
+      // Commit the visual material as soon as sampling finishes. The AI result
+      // may arrive later (or fail), but the analysis session should still reopen
+      // with the impact frames it already produced.
+      queueCandidatePassBInsightPersistence(
+        candidatePassBEvidenceRef.current,
+        candidateGeminiInsightRef.current,
+        sampledThumbnails,
+      );
     }
     const identity: CandidatePassBWorkerIdentity = {
       sessionId: appSessionId,
@@ -2943,6 +2980,7 @@ function App() {
         },
       });
       const workerResult = await workerPromise;
+      await flushCandidatePassBInsightPersistence();
       if (!isCurrentOperation()) {
         return;
       }
@@ -3000,6 +3038,7 @@ function App() {
       }
       setCandidatePassBError(explainCandidatePassBError(error));
     } finally {
+      await flushCandidatePassBInsightPersistence();
       if (candidatePassBAbortController.current === controller) {
         candidatePassBAbortController.current = null;
       }
@@ -3812,10 +3851,17 @@ function App() {
         recoveredCandidateIds.has(candidateId),
       ),
     ) as CandidateGeminiInsightById;
+    const recoveredTimelineFrames = Object.fromEntries(
+      Object.entries(recoveredPassBInsights?.thumbnailById ?? {})
+        .filter(([candidateId]) => recoveredCandidateIds.has(candidateId))
+        .map(([candidateId, frame]) => [candidateId, [frame]]),
+    ) as CandidateTimelineFramesById;
     candidatePassBEvidenceRef.current = recoveredEvidence;
     candidateGeminiInsightRef.current = recoveredGeminiInsights;
+    candidateTimelineFramesRef.current = recoveredTimelineFrames;
     setCandidatePassBEvidenceById(recoveredEvidence);
     setCandidateGeminiInsightById(recoveredGeminiInsights);
+    setCandidateTimelineFramesById(recoveredTimelineFrames);
     resetCandidateRanking(recoveredCandidates);
     setLastExportFormat(null);
     setCopyStatus("idle");

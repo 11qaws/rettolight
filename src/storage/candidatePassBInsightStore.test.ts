@@ -44,6 +44,13 @@ const record: CandidatePassBInsightsRecord = {
       uncertaintiesKo: [],
     },
   },
+  thumbnailById: {
+    "candidate-a": {
+      timestampMs: 1_500,
+      mimeType: "image/jpeg",
+      dataBase64: "aGVsbG8=",
+    },
+  },
   recordedAt: "2026-07-21T00:00:00.000Z",
 };
 
@@ -65,5 +72,15 @@ describe("Candidate Pass B insight persistence", () => {
     expect(() => assertCandidatePassBInsightsRecord({ ...record, runId: "" })).toThrow(
       TypeError,
     );
+  });
+
+  it("keeps the previous insight schema readable during the session-material migration", () => {
+    expect(() =>
+      assertCandidatePassBInsightsRecord({
+        ...record,
+        schemaVersion: "1.0.0",
+        thumbnailById: undefined,
+      }),
+    ).not.toThrow();
   });
 });

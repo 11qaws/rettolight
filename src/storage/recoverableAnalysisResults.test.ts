@@ -173,6 +173,27 @@ describe("recoverable analysis audit", () => {
     expect(audit.results[0]?.candidatePassBInsights).toEqual(passB);
   });
 
+  it("does not attach a Pass B snapshot from a different input signature", async () => {
+    const store = new InMemoryAnalysisResultStore();
+    const runId = "run-with-stale-pass-b";
+    await putCompletedBundle(store, runId);
+    await store.putCandidatePassBInsights({
+      kind: "candidatePassBInsights",
+      runId,
+      schemaVersion: CANDIDATE_PASS_B_INSIGHT_SCHEMA_VERSION,
+      inputSignature: `sha256:${"f".repeat(64)}`,
+      modelManifestHash: "gemini-3.1-pro-preview",
+      evidenceById: {},
+      insightById: {},
+      recordedAt: RECORDED_AT,
+    });
+
+    const audit = await auditRecoverableAnalysisResults(store);
+
+    expect(audit.results[0]?.candidatePassBInsights).toBeNull();
+    expect(audit.results[0]?.finalResult.runId).toBe(runId);
+  });
+
   it.each([
     ["completed", false],
     ["completedWithGaps", true],

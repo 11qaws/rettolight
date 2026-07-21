@@ -1,6 +1,16 @@
 import type { CandidatePassBEvidence } from "../analysis/candidatePassB";
+import {
+  MAX_CANDIDATE_PASS_B_VIDEO_FRAME_BASE64_LENGTH,
+  type CandidatePassBVideoFrame,
+} from "../analysis/candidatePassBWorkerProtocol";
 
-export const CANDIDATE_PASS_B_INSIGHT_SCHEMA_VERSION = "1.0.0" as const;
+export const CANDIDATE_PASS_B_INSIGHT_SCHEMA_VERSION = "1.1.0" as const;
+export type CandidatePassBInsightSchemaVersion = "1.0.0" | "1.1.0";
+
+const SUPPORTED_INSIGHT_SCHEMA_VERSIONS = new Set<CandidatePassBInsightSchemaVersion>([
+  "1.0.0",
+  CANDIDATE_PASS_B_INSIGHT_SCHEMA_VERSION,
+]);
 
 export interface StoredCandidatePassBInsight {
   readonly eventSummaryKo: string;
@@ -12,11 +22,13 @@ export interface StoredCandidatePassBInsight {
 export interface CandidatePassBInsightsRecord {
   readonly kind: "candidatePassBInsights";
   readonly runId: string;
-  readonly schemaVersion: typeof CANDIDATE_PASS_B_INSIGHT_SCHEMA_VERSION;
+  readonly schemaVersion: CandidatePassBInsightSchemaVersion;
   readonly inputSignature: string;
   readonly modelManifestHash: string;
   readonly evidenceById: Readonly<Record<string, CandidatePassBEvidence>>;
   readonly insightById: Readonly<Record<string, StoredCandidatePassBInsight>>;
+  /** One impact thumbnail per candidate, kept with the analysis-session snapshot. */
+  readonly thumbnailById?: Readonly<Record<string, CandidatePassBVideoFrame>>;
   readonly recordedAt: string;
 }
 
@@ -71,13 +83,33 @@ function isEvidence(value: unknown): value is CandidatePassBEvidence {
   );
 }
 
+function isCandidateVideoFrame(value: unknown): value is CandidatePassBVideoFrame {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return (
+    typeof value.timestampMs === "number" &&
+    Number.isSafeInteger(value.timestampMs) &&
+    value.timestampMs >= 0 &&
+    value.timestampMs <= 60_000 &&
+    value.mimeType === "image/jpeg" &&
+    typeof value.dataBase64 === "string" &&
+    value.dataBase64.length > 0 &&
+    value.dataBase64.length <= MAX_CANDIDATE_PASS_B_VIDEO_FRAME_BASE64_LENGTH &&
+    /^[A-Za-z0-9+/]+={0,2}$/u.test(value.dataBase64)
+  );
+}
+
 export function assertCandidatePassBInsightsRecord(
   value: unknown,
 ): asserts value is CandidatePassBInsightsRecord {
   if (
     !isRecord(value) ||
     value.kind !== "candidatePassBInsights" ||
-    value.schemaVersion !== CANDIDATE_PASS_B_INSIGHT_SCHEMA_VERSION ||
+    typeof value.schemaVersion !== "string" ||
+    !SUPPORTED_INSIGHT_SCHEMA_VERSIONS.has(
+      value.schemaVersion as CandidatePassBInsightSchemaVersion,
+    ) ||
     !isNonEmptyBoundedString(value.runId, 180) ||
     !isNonEmptyBoundedString(value.inputSignature, 512) ||
     !isNonEmptyBoundedString(value.modelManifestHash, 256) ||
@@ -96,6 +128,16 @@ export function assertCandidatePassBInsightsRecord(
   for (const insight of Object.values(value.insightById)) {
     if (!isStoredInsight(insight)) {
       throw new TypeError("Invalid Candidate Pass B insight entry.");
+    }
+  }
+  if (value.thumbnailById !== undefined) {
+    if (!isRecord(value.thumbnailById)) {
+      throw new TypeError("Invalid Candidate Pass B thumbnail map.");
+    }
+    for (const frame of Object.values(value.thumbnailById)) {
+      if (!isCandidateVideoFrame(frame)) {
+        throw new TypeError("Invalid Candidate Pass B thumbnail entry.");
+      }
     }
   }
 }

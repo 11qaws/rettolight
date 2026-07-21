@@ -58,6 +58,17 @@ function recoveryBundleMatches(
   );
 }
 
+function insightsMatchTerminal(
+  terminal: RecoverableAnalysisResult["terminal"],
+  insights: CandidatePassBInsightsRecord | null,
+): boolean {
+  return (
+    insights === null ||
+    (insights.runId === terminal.runId &&
+      insights.inputSignature === terminal.inputSignature)
+  );
+}
+
 function resolveLimit(limit: number | undefined): number {
   const resolved = limit ?? 5;
   if (!Number.isSafeInteger(resolved) || resolved <= 0 || resolved > 50) {
@@ -105,7 +116,14 @@ export async function auditRecoverableAnalysisResults(
         skippedCompletedResultCount += 1;
         continue;
       }
-      results.push({ terminal, manifest, finalResult, candidatePassBInsights });
+      results.push({
+        terminal,
+        manifest,
+        finalResult,
+        candidatePassBInsights: insightsMatchTerminal(terminal, candidatePassBInsights)
+          ? candidatePassBInsights
+          : null,
+      });
     } catch {
       skippedCompletedResultCount += 1;
     }

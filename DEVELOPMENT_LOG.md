@@ -1,5 +1,12 @@
 # Development Log
 
+## 2026-07-21 `0.3.20` analysis-session material persistence
+
+- Treat each analysis `runId` as one durable analysis session bundle. Candidate Pass B snapshots now also retain one impact thumbnail per candidate, so a recovered session can show its visual material after refresh without re-running Gemini.
+- Thumbnail persistence is written as soon as Pass B frame sampling completes and is flushed before the Pass B run reaches a terminal UI state. Existing `1.0.0` insight records remain readable.
+- Recovery ignores a Pass B snapshot whose input signature does not match its analysis session, preventing stale AI overlays from attaching to a valid result.
+- Verification: storage and recovery regression coverage added; full check and production build remain required before release.
+
 ## 2026-07-21 `0.3.19` audio-first candidate count and bounded Gemini analysis
 
 - Audio reaction anchors are now authoritative when available. Nearby chat still strengthens the same candidate, while unrelated chat bursts no longer create extra standalone candidates and inflate the daily result count.
