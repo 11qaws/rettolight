@@ -312,6 +312,108 @@ describe("runCandidatePassBWorker", () => {
     expect(worker.terminateCount).toBe(1);
   });
 
+  it("accepts interleaved progress and results from parallel candidate requests", async () => {
+    const worker = new FakeWorker();
+    const onCandidateProgress = vi.fn();
+    const onPartialResult = vi.fn();
+    const onCandidateGap = vi.fn();
+    const promise = startWith(worker, {
+      onCandidateProgress,
+      onPartialResult,
+      onCandidateGap,
+    });
+
+    emit(worker, "parallel-model-ready", {
+      type: "candidate-pass-b-model-progress",
+      progress: {
+        stage: "ready",
+        ratio: 1,
+        loadedBytes: null,
+        totalBytes: null,
+      },
+    });
+    emit(worker, "candidate-1-decoding", {
+      type: "candidate-pass-b-candidate-progress",
+      progress: {
+        candidateId: "candidate-1",
+        candidateOrdinal: 1,
+        targetCount: 2,
+        stage: "decoding",
+        ratio: 0.2,
+      },
+    });
+    emit(worker, "candidate-2-decoding", {
+      type: "candidate-pass-b-candidate-progress",
+      progress: {
+        candidateId: "candidate-2",
+        candidateOrdinal: 2,
+        targetCount: 2,
+        stage: "decoding",
+        ratio: 0.2,
+      },
+    });
+    emit(worker, "candidate-2-transcribing", {
+      type: "candidate-pass-b-candidate-progress",
+      progress: {
+        candidateId: "candidate-2",
+        candidateOrdinal: 2,
+        targetCount: 2,
+        stage: "transcribing",
+        ratio: 0.5,
+      },
+    });
+    emit(worker, "candidate-2-complete", {
+      type: "candidate-pass-b-candidate-progress",
+      progress: {
+        candidateId: "candidate-2",
+        candidateOrdinal: 2,
+        targetCount: 2,
+        stage: "complete",
+        ratio: 1,
+      },
+    });
+    const secondTranscript = transcriptFor(targets[1] as CandidatePassBTarget);
+    emit(worker, "candidate-2-result", {
+      type: "candidate-pass-b-partial-result",
+      result: secondTranscript,
+    });
+    emit(worker, "candidate-1-gap-progress", {
+      type: "candidate-pass-b-candidate-progress",
+      progress: {
+        candidateId: "candidate-1",
+        candidateOrdinal: 1,
+        targetCount: 2,
+        stage: "gap",
+        ratio: 1,
+      },
+    });
+    const firstGap = {
+      candidateId: "candidate-1",
+      sourceStartMs: 10_000,
+      sourceEndMs: 50_000,
+      reasonCode: "TRANSCRIPTION_FAILED" as const,
+      message: "이 후보 구간을 정밀 분석하는 중 문제가 생겼어요.",
+    };
+    emit(worker, "candidate-1-gap", {
+      type: "candidate-pass-b-candidate-gap",
+      gap: firstGap,
+    });
+    emit(worker, "parallel-completed", {
+      type: "candidate-pass-b-completed",
+      summary: { requestedCount: 2, completedCount: 1, gapCount: 1 },
+    });
+
+    await expect(promise).resolves.toEqual({
+      results: [secondTranscript],
+      gaps: [firstGap],
+      summary: { requestedCount: 2, completedCount: 1, gapCount: 1 },
+    });
+    expect(onCandidateProgress).toHaveBeenCalledTimes(5);
+    expect(onPartialResult).toHaveBeenCalledWith(secondTranscript);
+    expect(onCandidateGap).toHaveBeenCalledWith(firstGap);
+    expect(worker.terminateCount).toBe(1);
+  });
+
   it("rejects a correctly shaped event from a stale Pass B run", async () => {
     const worker = new FakeWorker();
     const promise = startWith(worker);

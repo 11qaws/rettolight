@@ -944,11 +944,8 @@ export function runCandidatePassBWorker(
       progress: CandidatePassBCandidateProgress,
     ): void => {
       const targetEntry = targetsById.get(progress.candidateId);
-      const nextTarget = normalized.targets[terminalCandidateIds.size];
       if (
         targetEntry === undefined ||
-        nextTarget === undefined ||
-        nextTarget.candidateId !== progress.candidateId ||
         progress.candidateOrdinal !== targetEntry.candidateOrdinal ||
         progress.targetCount !== normalized.targets.length ||
         terminalCandidateIds.has(progress.candidateId)
@@ -976,10 +973,10 @@ export function runCandidatePassBWorker(
     };
 
     const handlePartialResult = (result: CandidatePassBTranscriptResult): void => {
-      const expectedTarget = normalized.targets[terminalCandidateIds.size];
+      const targetEntry = targetsById.get(result.candidateId);
       if (
-        expectedTarget === undefined ||
-        !matchesTargetRange(expectedTarget, result) ||
+        targetEntry === undefined ||
+        !matchesTargetRange(targetEntry.target, result) ||
         result.model.device !== options.device ||
         terminalCandidateIds.has(result.candidateId) ||
         !hasValidSegmentTimeline(result)
@@ -993,10 +990,10 @@ export function runCandidatePassBWorker(
     };
 
     const handleCandidateGap = (gap: CandidatePassBCandidateGap): void => {
-      const expectedTarget = normalized.targets[terminalCandidateIds.size];
+      const targetEntry = targetsById.get(gap.candidateId);
       if (
-        expectedTarget === undefined ||
-        !matchesTargetRange(expectedTarget, gap) ||
+        targetEntry === undefined ||
+        !matchesTargetRange(targetEntry.target, gap) ||
         terminalCandidateIds.has(gap.candidateId)
       ) {
         rejectMalformedMessage();

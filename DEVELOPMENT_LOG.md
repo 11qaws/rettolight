@@ -1,5 +1,11 @@
 # Development Log
 
+## 2026-07-21 `0.3.22` parallel Gemini event ordering fix
+
+- Pass B now validates progress, transcript results, and candidate gaps by candidate ID instead of assuming terminal events arrive in candidate-list order. This fixes the failure that occurred when the bounded parallel requests returned candidate 2 before candidate 1.
+- Added a regression test that interleaves two candidates' progress and delivers a transcript before the earlier candidate's gap.
+- Verification: full typecheck, ESLint, Vitest suite, and production build required before release.
+
 ## 2026-07-21 `0.3.21` Gemini failure reason visibility
 
 - Gemini Pass B failures now retain the existing redacted provider reason code in the user-facing message (`PROXY_BAD_REQUEST`, `PROXY_RATE_LIMITED`, and similar), without exposing provider response text or secrets. This makes a failed analysis diagnosable instead of showing only a generic failure label.
