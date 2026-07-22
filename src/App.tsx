@@ -79,6 +79,7 @@ import {
   createBroadcastTranscriptChapters,
   mergeBroadcastTranscriptChapters,
 } from "./analysis/broadcastTranscriptChapters";
+import { compactBroadcastContextChapters } from "./analysis/broadcastContextChapterCompaction";
 import { requestBroadcastContextDeepseek } from "./analysis/broadcastContextDeepseekClient";
 import {
   parsePersistedBroadcastContextResult,
@@ -334,7 +335,7 @@ interface AudioAnalysisOutcome {
   readonly coverageComplete: boolean;
 }
 
-const APP_VERSION = "0.3.42";
+const APP_VERSION = "0.3.43";
 const PERSISTENCE_SCHEMA_VERSION = "0.3.0";
 const SIGNAL_ENGINE_VERSION =
   "streamer-reaction-fast-pass-v5-chat-fallback-music-confirmation";
@@ -396,6 +397,28 @@ function createTranscriptExplorationCells(
     state,
     stage: null,
   }));
+}
+
+function createChapterExplorationCells(
+  chapters: readonly BroadcastContextChapterInput[],
+): readonly BroadcastTranscriptExplorationCell[] {
+  return chapters.map((chapter) => ({
+    chunkId: `chapter:${chapter.chapterId}`,
+    sourceStartMs: chapter.startMs,
+    sourceEndMs: chapter.endMs,
+    kind: "uniform",
+    state: "complete",
+    stage: null,
+  }));
+}
+
+function timelineSignalLabel(kind: CandidateTimelineSignalKind): string {
+  return {
+    audio: "목소리·소리 변화",
+    chat: "채팅 반응",
+    visual: "화면 변화",
+    fused: "복합 신호",
+  }[kind];
 }
 
 function firstTimelineFrameById(
@@ -924,7 +947,9 @@ function semanticLeadCategoryLabel(
 
 type TimelineInspectionTarget =
   | { readonly kind: "chapter"; readonly id: string }
-  | { readonly kind: "lead"; readonly id: string };
+  | { readonly kind: "lead"; readonly id: string }
+  | { readonly kind: "exploration"; readonly id: string }
+  | { readonly kind: "signal"; readonly id: string };
 
 function App() {
   const [theme, setTheme] = useState<Theme>(initialTheme);
@@ -1027,6 +1052,8 @@ function App() {
     useState<CandidatePassBModelProgress | null>(null);
   const [candidatePassBCandidateProgress, setCandidatePassBCandidateProgress] =
     useState<CandidatePassBCandidateProgress | null>(null);
+  const [candidatePassBActiveCandidateIds, setCandidatePassBActiveCandidateIds] =
+    useState<readonly string[]>([]);
   const [candidatePassBError, setCandidatePassBError] = useState<string | null>(null);
   const [candidatePassBStartPending, setCandidatePassBStartPending] = useState(false);
   const [candidateAudioEventRun, setCandidateAudioEventRun] =
@@ -1056,6 +1083,8 @@ function App() {
   const [copyStatus, setCopyStatus] = useState<"idle" | "copied" | "failed">("idle");
   const [exportError, setExportError] = useState<string | null>(null);
   const [previewCandidateId, setPreviewCandidateId] = useState<string | null>(null);
+  const [previewPreparedCandidateId, setPreviewPreparedCandidateId] =
+    useState<string | null>(null);
   const [clipDownloadStatusById, setClipDownloadStatusById] =
     useState<ClipDownloadStatusById>({});
   const [clipDownloadErrorById, setClipDownloadErrorById] =
@@ -1104,6 +1133,9 @@ function App() {
   const resultStore = useRef<AnalysisResultStore | null>(null);
   const sourcePreviewUrlRef = useRef<string | null>(null);
   const previewVideo = useRef<HTMLVideoElement | null>(null);
+  const previewRequestedCandidateIdRef = useRef<string | null>(null);
+  const previewPreparedCandidateIdRef = useRef<string | null>(null);
+  const previewPlayAfterPrepareRef = useRef<string | null>(null);
   const lastWorkspacePreviewCue = useRef<string | null>(null);
   const clipRenderAbortController = useRef<AbortController | null>(null);
   const sourceHeading = useRef<HTMLHeadingElement | null>(null);
@@ -1303,7 +1335,9 @@ function App() {
         : candidatePassBRun.status === "loadingModel"
           ? "AI 연결을 준비하고 있어요."
           : candidatePassBRun.status === "transcribing"
-            ? `후보 ${candidatePassBCurrentOrdinal}/${candidatePassBSummary?.totalCandidateCount ?? candidates.length}의 짧은 오디오와 대표 화면에서 한국어 대사·사건 단서를 확인하고 있어요.`
+            ? candidatePassBActiveCandidateIds.length > 1
+              ? `후보 ${candidatePassBActiveCandidateIds.length}개를 동시에 검토하고 있어요. 대표 화면이 준비되는 후보부터 바로 AI 해석을 이어갑니다.`
+              : `후보 ${candidatePassBCurrentOrdinal}/${candidatePassBSummary?.totalCandidateCount ?? candidates.length}의 짧은 오디오와 대표 화면에서 한국어 대사·사건 단서를 확인하고 있어요.`
             : candidatePassBRun.status === "finalizing"
               ? "AI 답변과 후보 시간을 마지막으로 확인하고 있어요."
             : candidatePassBRun.status === "cancelling"
@@ -1561,15 +1595,58 @@ function App() {
           ({ leadId }) => leadId === timelineInspectionTarget.id,
         ) ?? null
       : null;
+  const inspectedTimelineExploration =
+    timelineInspectionTarget?.kind === "exploration"
+      ? broadcastTranscriptExplorationCells.find(
+          ({ chunkId }) => chunkId === timelineInspectionTarget.id,
+        ) ?? null
+      : null;
+  const inspectedTimelineExplorationChapters =
+    inspectedTimelineExploration === null
+      ? []
+      : broadcastTranscriptChapters.filter(
+          (chapter) =>
+            chapter.startMs < inspectedTimelineExploration.sourceEndMs &&
+            chapter.endMs > inspectedTimelineExploration.sourceStartMs,
+        );
+  const inspectedTimelineSignal =
+    timelineInspectionTarget?.kind === "signal"
+      ? candidateTimelineScorePoints.find(
+          (point) =>
+            `${point.signalKind}:${point.id}` === timelineInspectionTarget.id,
+        ) ?? null
+      : null;
   const timelinePlayheadMs =
     inspectedTimelineChapter !== null
       ? (inspectedTimelineChapter.startMs + inspectedTimelineChapter.endMs) / 2
       : inspectedTimelineLead !== null
         ? (inspectedTimelineLead.startMs + inspectedTimelineLead.endMs) / 2
+        : inspectedTimelineExploration !== null
+          ? (inspectedTimelineExploration.sourceStartMs +
+              inspectedTimelineExploration.sourceEndMs) /
+            2
+          : inspectedTimelineSignal !== null
+            ? inspectedTimelineSignal.peakMs
         : orderedCandidates.find(({ id }) => id === focusedCandidateId)?.peakMs ?? null;
   const broadcastTranscriptExploredCount = broadcastTranscriptExplorationCells.filter(
     ({ state }) => state === "complete" || state === "gap",
   ).length;
+  const liveExplorationFindings = useMemo(
+    () =>
+      broadcastTranscriptExplorationCells
+        .filter(({ state }) => state === "complete")
+        .flatMap((cell) => {
+          const chapters = broadcastTranscriptChapters.filter(
+            (chapter) =>
+              chapter.startMs < cell.sourceEndMs &&
+              chapter.endMs > cell.sourceStartMs,
+          );
+          if (chapters.length === 0) return [];
+          return [{ cell, summaryKo: chapters.map(({ summaryKo }) => summaryKo).join(" ") }];
+        })
+        .slice(-4),
+    [broadcastTranscriptChapters, broadcastTranscriptExplorationCells],
+  );
   const broadcastContextTimelinePresentation = useMemo(
     () =>
       buildBroadcastContextTimelinePresentation({
@@ -1643,6 +1720,10 @@ function App() {
       candidates,
       youtubeCaptionTrack,
     ],
+  );
+  const boundedBroadcastContextChapters = useMemo(
+    () => compactBroadcastContextChapters(broadcastTranscriptChapters),
+    [broadcastTranscriptChapters],
   );
   const explicitMusicOnlyCandidateIds = useMemo(
     () =>
@@ -2014,6 +2095,10 @@ function App() {
   useEffect(() => {
     if (focusedCandidateId === null || sourcePreviewUrl === null) {
       lastWorkspacePreviewCue.current = null;
+      previewRequestedCandidateIdRef.current = null;
+      previewPreparedCandidateIdRef.current = null;
+      previewPlayAfterPrepareRef.current = null;
+      setPreviewPreparedCandidateId(null);
       return;
     }
     const candidate = orderedCandidates.find(({ id }) => id === focusedCandidateId);
@@ -2026,11 +2111,29 @@ function App() {
     if (lastWorkspacePreviewCue.current === cueKey) {
       return;
     }
+    previewRequestedCandidateIdRef.current = candidate.id;
+    previewPreparedCandidateIdRef.current = null;
+    previewPlayAfterPrepareRef.current = null;
+    setPreviewPreparedCandidateId(null);
+    const markPrepared = (): void => {
+      if (previewRequestedCandidateIdRef.current !== candidate.id) return;
+      previewPreparedCandidateIdRef.current = candidate.id;
+      setPreviewPreparedCandidateId(candidate.id);
+    };
     const cueWithoutPlaying = (): void => {
       try {
         video.pause();
         video.currentTime = range.startMs / 1_000;
         lastWorkspacePreviewCue.current = cueKey;
+        if (
+          Math.abs(video.currentTime - range.startMs / 1_000) < 0.25 &&
+          video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA
+        ) {
+          markPrepared();
+        } else {
+          video.addEventListener("seeked", markPrepared, { once: true });
+          video.addEventListener("canplay", markPrepared, { once: true });
+        }
       } catch {
         lastWorkspacePreviewCue.current = null;
       }
@@ -2091,6 +2194,7 @@ function App() {
     setCandidatePassBStartPending(false);
     setCandidatePassBModelProgress(null);
     setCandidatePassBCandidateProgress(null);
+    setCandidatePassBActiveCandidateIds([]);
     setCandidatePassBError(null);
   }, []);
 
@@ -3458,56 +3562,6 @@ function App() {
       string,
       Awaited<ReturnType<typeof sampleCandidateVideoFrames>>
     >();
-    const MAX_PARALLEL_FRAME_SAMPLERS = 2;
-    for (
-      let batchStart = 0;
-      batchStart < targets.length;
-      batchStart += MAX_PARALLEL_FRAME_SAMPLERS
-    ) {
-      await Promise.all(
-        targets
-          .slice(batchStart, batchStart + MAX_PARALLEL_FRAME_SAMPLERS)
-          .map(async (target) => {
-            const frames = await sampleCandidateVideoFrames(
-              sourceFile,
-              target.decodeStartMs,
-              target.decodeEndMs,
-              { signal: controller.signal, focusMs: target.reactionPeakMs },
-            );
-            videoFramesByCandidateId.set(target.candidateId, frames);
-            if (!controller.signal.aborted && isMounted.current) {
-              const relativePeakMs = target.reactionPeakMs - target.decodeStartMs;
-              const timelineFrame = [...frames].sort(
-                (left, right) =>
-                  Math.abs(left.timestampMs - relativePeakMs) -
-                  Math.abs(right.timestampMs - relativePeakMs),
-              )[0];
-              candidateTimelineFramesRef.current = {
-                ...candidateTimelineFramesRef.current,
-                [target.candidateId]:
-                  timelineFrame === undefined ? [] : [timelineFrame],
-              };
-              setCandidateTimelineFramesById(candidateTimelineFramesRef.current);
-            }
-          }),
-      );
-    }
-    if (controller.signal.aborted) {
-      candidatePassBStartPendingRef.current = false;
-      setCandidatePassBStartPending(false);
-      return;
-    }
-    const sampledThumbnails = firstTimelineFrameById(candidateTimelineFramesRef.current);
-    if (Object.keys(sampledThumbnails).length > 0) {
-      // Commit the visual material as soon as sampling finishes. The AI result
-      // may arrive later (or fail), but the analysis session should still reopen
-      // with the impact frames it already produced.
-      queueCandidatePassBInsightPersistence(
-        candidatePassBEvidenceRef.current,
-        candidateGeminiInsightRef.current,
-        sampledThumbnails,
-      );
-    }
     const identity: CandidatePassBWorkerIdentity = {
       sessionId: appSessionId,
       writerEpoch,
@@ -3546,6 +3600,7 @@ function App() {
     setCandidatePassBRun(machine);
     setCandidatePassBModelProgress(null);
     setCandidatePassBCandidateProgress(null);
+    setCandidatePassBActiveCandidateIds([]);
     setCandidatePassBError(null);
     if (!applyCandidatePassBEvent({ type: "START_REQUESTED" })) {
       setCandidatePassBError("AI 후보 분석을 시작하지 못했어요. 다시 시도해 주세요.");
@@ -3582,17 +3637,53 @@ function App() {
     };
 
     try {
-      const workerPromise = runCandidatePassBWorker(sourceFile, {
+      const workerResults = await mapWithConcurrency(
+        targets,
+        2,
+        async (target, targetIndex) => {
+          setCandidatePassBActiveCandidateIds((current) =>
+            current.includes(target.candidateId)
+              ? current
+              : [...current, target.candidateId],
+          );
+          try {
+            const frames = await sampleCandidateVideoFrames(
+              sourceFile,
+              target.decodeStartMs,
+              target.decodeEndMs,
+              { signal: controller.signal, focusMs: target.reactionPeakMs },
+            );
+            videoFramesByCandidateId.set(target.candidateId, frames);
+            if (!controller.signal.aborted && isMounted.current) {
+              const relativePeakMs = target.reactionPeakMs - target.decodeStartMs;
+              const timelineFrame = [...frames].sort(
+                (left, right) =>
+                  Math.abs(left.timestampMs - relativePeakMs) -
+                  Math.abs(right.timestampMs - relativePeakMs),
+              )[0];
+              candidateTimelineFramesRef.current = {
+                ...candidateTimelineFramesRef.current,
+                [target.candidateId]:
+                  timelineFrame === undefined ? [] : [timelineFrame],
+              };
+              setCandidateTimelineFramesById(candidateTimelineFramesRef.current);
+              queueCandidatePassBInsightPersistence(
+                candidatePassBEvidenceRef.current,
+                candidateGeminiInsightRef.current,
+                firstTimelineFrameById(candidateTimelineFramesRef.current),
+              );
+            }
+            return await runCandidatePassBWorker(sourceFile, {
         identity,
         sourceDurationMs,
         device: runtimeDevice,
-        targets: targets.map((target) => ({
+        targets: [{
           candidateId: target.candidateId,
           startMs: target.decodeStartMs,
           endMs: target.decodeEndMs,
           videoFrames: videoFramesByCandidateId.get(target.candidateId) ?? [],
           ...(castRosterId === null ? {} : { castRosterId }),
-        })),
+        }],
         signal: controller.signal,
         onModelProgress: (progress) => {
           if (!isCurrentOperation()) {
@@ -3609,7 +3700,11 @@ function App() {
         },
         onCandidateProgress: (progress) => {
           if (isCurrentOperation()) {
-            setCandidatePassBCandidateProgress(progress);
+            setCandidatePassBCandidateProgress({
+              ...progress,
+              candidateOrdinal: targetIndex + 1,
+              targetCount: targets.length,
+            });
           }
         },
         onPartialResult: (result: CandidatePassBTranscriptResult) => {
@@ -3745,17 +3840,31 @@ function App() {
           }
         },
       });
-      const workerResult = await workerPromise;
+          } finally {
+            setCandidatePassBActiveCandidateIds((current) =>
+              current.filter((candidateId) => candidateId !== target.candidateId),
+            );
+          }
+        },
+      );
       await flushCandidatePassBInsightPersistence();
       if (!isCurrentOperation()) {
         return;
       }
+      const workerSummary = workerResults.reduce(
+        (summary, result) => ({
+          requestedCount: summary.requestedCount + result.summary.requestedCount,
+          completedCount: summary.completedCount + result.summary.completedCount,
+          gapCount: summary.gapCount + result.summary.gapCount,
+        }),
+        { requestedCount: 0, completedCount: 0, gapCount: 0 },
+      );
       if (
         !applyCurrentWorkerEvent({
           type: "RUN_COMPLETED",
-          requestedCount: workerResult.summary.requestedCount,
-          resultCount: workerResult.summary.completedCount,
-          gapCount: workerResult.summary.gapCount,
+          requestedCount: workerSummary.requestedCount,
+          resultCount: workerSummary.completedCount,
+          gapCount: workerSummary.gapCount,
         })
       ) {
         throw new CandidatePassBWorkerError(
@@ -3805,6 +3914,9 @@ function App() {
       setCandidatePassBError(explainCandidatePassBError(error));
     } finally {
       await flushCandidatePassBInsightPersistence();
+      if (isMounted.current) {
+        setCandidatePassBActiveCandidateIds([]);
+      }
       if (candidatePassBAbortController.current === controller) {
         candidatePassBAbortController.current = null;
       }
@@ -4504,14 +4616,33 @@ function App() {
       range.startMs,
       Math.min(range.endMs, timestampMs),
     );
+    previewRequestedCandidateIdRef.current = candidate.id;
+    previewPreparedCandidateIdRef.current = null;
+    previewPlayAfterPrepareRef.current = shouldPlay ? candidate.id : null;
+    setPreviewPreparedCandidateId(null);
     lastWorkspacePreviewCue.current = `${sourcePreviewUrl}|${candidate.id}|${range.startMs}`;
-    const seek = (): void => {
-      player.currentTime = targetMs / 1_000;
-      if (shouldPlay) {
+    const markPrepared = (): void => {
+      if (previewRequestedCandidateIdRef.current !== candidate.id) return;
+      previewPreparedCandidateIdRef.current = candidate.id;
+      setPreviewPreparedCandidateId(candidate.id);
+      if (previewPlayAfterPrepareRef.current === candidate.id) {
+        previewPlayAfterPrepareRef.current = null;
         player.focus({ preventScroll: true });
         void player.play().catch(() => {
-          // Browser autoplay policy may require the user to press play.
+          // A direct play control remains available if browser policy blocks it.
         });
+      }
+    };
+    const seek = (): void => {
+      player.pause();
+      player.addEventListener("seeked", markPrepared, { once: true });
+      player.addEventListener("canplay", markPrepared, { once: true });
+      player.currentTime = targetMs / 1_000;
+      if (
+        Math.abs(player.currentTime - targetMs / 1_000) < 0.25 &&
+        player.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA
+      ) {
+        markPrepared();
       }
     };
     if (player.readyState >= 1) {
@@ -4522,12 +4653,18 @@ function App() {
   };
 
   const focusCandidateForReview = (candidate: ReviewedCandidate): void => {
+    previewRequestedCandidateIdRef.current = candidate.id;
+    previewPreparedCandidateIdRef.current = null;
+    previewPlayAfterPrepareRef.current = null;
+    setPreviewPreparedCandidateId(null);
     setPreviewCandidateId(candidate.id);
     previewVideo.current?.pause();
     seekWorkspacePlayer(candidate, candidate.startMs, false);
   };
 
   const playCandidate = (candidate: ReviewedCandidate): void => {
+    previewRequestedCandidateIdRef.current = candidate.id;
+    previewPlayAfterPrepareRef.current = candidate.id;
     setPreviewCandidateId(candidate.id);
     if (sourcePreviewUrl === null) {
       return;
@@ -5153,7 +5290,7 @@ function App() {
       runId === null ||
       inputSignature === null ||
       boundarySourceDurationMs <= 0 ||
-      broadcastTranscriptChapters.length === 0 ||
+      boundedBroadcastContextChapters.length === 0 ||
       !["completed", "completedWithGaps"].includes(broadcastTranscriptStatus)
     ) {
       return;
@@ -5172,7 +5309,7 @@ function App() {
 
     const contextInput = {
       sourceDurationMs: boundarySourceDurationMs,
-      chapters: broadcastTranscriptChapters,
+      chapters: boundedBroadcastContextChapters,
       candidates: broadcastContextCandidateInputs,
       ...(sourceCastRosterId === null ? {} : { castRosterId: sourceCastRosterId }),
     };
@@ -5260,7 +5397,7 @@ function App() {
       }
 
       const discoverySlices = createParallelBroadcastTopicalDiscoverySlices(
-        broadcastTranscriptChapters,
+        boundedBroadcastContextChapters,
       );
       const [overviewResult, discoveryResults] = await Promise.all([
         requestBroadcastContextDeepseek(contextInput, {
@@ -5409,8 +5546,8 @@ function App() {
   }, [
     analysisRun?.inputSignature,
     boundarySourceDurationMs,
+    boundedBroadcastContextChapters,
     broadcastContextCandidateInputs,
-    broadcastTranscriptChapters,
     broadcastTranscriptStatus,
     candidates,
     currentAnalysisRunId,
@@ -5832,7 +5969,9 @@ function App() {
             // The persisted complete chapter map remains usable offline.
           }
         if (!controller.signal.aborted && isMounted.current) {
-          setBroadcastTranscriptExplorationCells([]);
+          setBroadcastTranscriptExplorationCells(
+            createChapterExplorationCells(matchedSaved.chapters),
+          );
           setBroadcastTranscriptChapters(matchedSaved.chapters);
           setBroadcastTranscriptStatus("completed");
         }
@@ -5890,7 +6029,9 @@ function App() {
               YOUTUBE_CAPTION_MODEL_REVISION,
             );
             if (!controller.signal.aborted && isMounted.current) {
-              setBroadcastTranscriptExplorationCells([]);
+              setBroadcastTranscriptExplorationCells(
+                createChapterExplorationCells(reopened.chapters),
+              );
               setBroadcastTranscriptChapters(reopened.chapters);
               setBroadcastTranscriptStatus("completed");
             }
@@ -6043,6 +6184,13 @@ function App() {
       );
       if (!controller.signal.aborted && isMounted.current) {
         setBroadcastTranscriptChapters(reopened.chapters);
+        if (reopened.chapters.length === 0) {
+          setBroadcastTranscriptStatus("failed");
+          setBroadcastTranscriptError(
+            "방송 대사 근거를 한 구간도 확보하지 못했어요. 음성 인식 연결이나 원본 음성을 확인한 뒤 다시 시도해 주세요.",
+          );
+          return;
+        }
         setBroadcastTranscriptStatus(
           reopened.gapChunkIds.length > 0 || !reopened.completeAudioCoverage
             ? "completedWithGaps"
@@ -6879,7 +7027,16 @@ function App() {
                   {liveAnalysisPhaseSteps.map((step) => (
                     <li key={step.number} data-state={step.state}>
                       <span aria-hidden="true">{step.number}</span>
-                      <small>{step.label}</small>
+                      <strong>{step.label}</strong>
+                      <small>
+                        {step.state === "complete"
+                          ? "완료"
+                          : step.state === "active"
+                            ? "진행 중"
+                            : step.state === "error"
+                              ? "확인 필요"
+                              : "다음 단계"}
+                      </small>
                     </li>
                   ))}
                 </ol>
@@ -7394,6 +7551,10 @@ function App() {
                 </div>
               ) : (
                 <>
+                  <div
+                    className="rh-timeline-review-layout"
+                    data-review-ready={contextualCandidatePublicationReady}
+                  >
                   <section
                     className="rh-candidate-timeline"
                     data-state={
@@ -7457,6 +7618,39 @@ function App() {
                         {broadcastContextTimelinePresentation.noticeText}
                       </p>
                     )}
+                    {!contextualCandidatePublicationReady &&
+                      liveExplorationFindings.length > 0 && (
+                        <section
+                          className="rh-live-exploration-findings"
+                          aria-label="실시간으로 확인된 방송 구간 단서"
+                        >
+                          <header>
+                            <strong>지금까지 드러난 구간 단서</strong>
+                            <span>최종 주제가 아니라 저장이 끝난 실제 대사·상황 근거예요.</span>
+                          </header>
+                          <div>
+                            {liveExplorationFindings.map(({ cell, summaryKo }) => (
+                              <button
+                                type="button"
+                                key={cell.chunkId}
+                                data-selected={
+                                  timelineInspectionTarget?.kind === "exploration" &&
+                                  timelineInspectionTarget.id === cell.chunkId
+                                }
+                                onClick={() =>
+                                  setTimelineInspectionTarget({
+                                    kind: "exploration",
+                                    id: cell.chunkId,
+                                  })
+                                }
+                              >
+                                <time>{formatDuration(cell.sourceStartMs)}</time>
+                                <span>{summaryKo}</span>
+                              </button>
+                            ))}
+                          </div>
+                        </section>
+                      )}
                     <div className="rh-timeline-track" aria-label="방송 안 후보 위치">
                       <div className="rh-timeline-row-labels" aria-hidden="true">
                         <span data-row="score">잠재 신호</span>
@@ -7523,17 +7717,39 @@ function App() {
                               ? Math.max(0.35, Math.min(18, ((point.endMs - point.startMs) / boundarySourceDurationMs) * 100))
                               : 0.35;
                           return (
-                            <span
+                            <button
+                              type="button"
                               className="rh-timeline-score-glow"
                               key={`${point.signalKind}-${point.id}`}
+                              data-kind={point.signalKind}
+                              data-selected={
+                                timelineInspectionTarget?.kind === "signal" &&
+                                timelineInspectionTarget.id ===
+                                  `${point.signalKind}:${point.id}`
+                              }
                               style={{
                                 left: `${position}%`,
                                 width: `${width}%`,
                                 height: `${8 + point.strength * 30}px`,
-                                opacity: 0.12 + point.strength * 0.3,
                               }}
-                              title={`${point.signalKind} score ${Math.round(point.strength * 100)} · ${formatDuration(point.peakMs)}`}
-                            />
+                              title={`${timelineSignalLabel(point.signalKind)} 상대값 ${Math.round(point.strength * 100)} · ${formatDuration(point.peakMs)}`}
+                              aria-label={`${timelineSignalLabel(point.signalKind)} 잠재 신호, 상대값 ${Math.round(point.strength * 100)}, ${formatDuration(point.peakMs)} 부근. 자세히 보기`}
+                              aria-pressed={
+                                timelineInspectionTarget?.kind === "signal" &&
+                                timelineInspectionTarget.id ===
+                                  `${point.signalKind}:${point.id}`
+                              }
+                              onClick={() =>
+                                setTimelineInspectionTarget({
+                                  kind: "signal",
+                                  id: `${point.signalKind}:${point.id}`,
+                                })
+                              }
+                            >
+                              <span aria-hidden="true">
+                                {Math.round(point.strength * 100)}
+                              </span>
+                            </button>
                           );
                         })}
                       </div>
@@ -7568,10 +7784,16 @@ function App() {
                                 )
                               : 0;
                           return (
-                            <span
+                            <button
+                              type="button"
+                              className="rh-timeline-exploration-cell"
                               key={cell.chunkId}
                               data-state={cell.state}
                               data-kind={cell.kind}
+                              data-selected={
+                                timelineInspectionTarget?.kind === "exploration" &&
+                                timelineInspectionTarget.id === cell.chunkId
+                              }
                               style={{ left: `${left}%`, width: `${width}%` }}
                               title={`${formatDuration(cell.sourceStartMs)}–${formatDuration(cell.sourceEndMs)} · ${
                                 cell.state === "active"
@@ -7584,6 +7806,17 @@ function App() {
                                       ? "근거 공백"
                                       : "탐색 대기"
                               }`}
+                              aria-label={`${formatDuration(cell.sourceStartMs)}부터 ${formatDuration(cell.sourceEndMs)}까지 맥락 탐색 ${cell.state === "complete" ? "완료" : cell.state === "active" ? "진행 중" : cell.state === "gap" ? "근거 공백" : "대기"}. 구간 분석 보기`}
+                              aria-pressed={
+                                timelineInspectionTarget?.kind === "exploration" &&
+                                timelineInspectionTarget.id === cell.chunkId
+                              }
+                              onClick={() =>
+                                setTimelineInspectionTarget({
+                                  kind: "exploration",
+                                  id: cell.chunkId,
+                                })
+                              }
                             />
                           );
                         })}
@@ -7717,8 +7950,8 @@ function App() {
                             data-review-state={candidate.reviewState}
                             data-origin={candidate.evidence.semantic === undefined ? "signal" : "semantic"}
                             data-ai-projection={candidateAiProjectionById[candidate.id] ?? "insufficient-evidence"}
-                            aria-label={`후보 ${index + 1}, ${formatDuration(candidate.peakMs)} 위치 선택${sourcePreviewUrl === null ? "" : " 및 재생"}`}
-                            onClick={() => playCandidate(candidate)}
+                            aria-label={`후보 ${index + 1}, ${formatDuration(candidate.peakMs)} 위치를 검토창에 준비`}
+                            onClick={() => focusCandidateForReview(candidate)}
                           >
                             <span aria-hidden="true">{index + 1}</span>
                           </button>
@@ -7824,16 +8057,104 @@ function App() {
                             </div>
                           </dl>
                         </>
+                      ) : inspectedTimelineExploration !== null ? (
+                        <>
+                          <header>
+                            <div>
+                              <span className="rh-timeline-inspector-kind" data-family="exploration">
+                                탐색 단서
+                              </span>
+                              <strong>
+                                {inspectedTimelineExploration.state === "complete"
+                                  ? "이 구간의 대사·상황 근거를 확보했어요"
+                                  : inspectedTimelineExploration.state === "active"
+                                    ? "이 구간을 지금 분석하고 있어요"
+                                    : inspectedTimelineExploration.state === "gap"
+                                      ? "이 구간의 근거를 확보하지 못했어요"
+                                      : "이 구간은 탐색 대기 중이에요"}
+                              </strong>
+                            </div>
+                            <time>
+                              {formatDuration(inspectedTimelineExploration.sourceStartMs)}–
+                              {formatDuration(inspectedTimelineExploration.sourceEndMs)}
+                            </time>
+                          </header>
+                          {inspectedTimelineExplorationChapters.length > 0 ? (
+                            <div className="rh-timeline-transcript-evidence">
+                              {inspectedTimelineExplorationChapters.map((chapter) => (
+                                <p key={chapter.chapterId}>{chapter.summaryKo}</p>
+                              ))}
+                            </div>
+                          ) : (
+                            <p>
+                              {inspectedTimelineExploration.state === "gap"
+                                ? "전사 또는 화면 근거가 없어 사건이 없다고 판단할 수는 없습니다."
+                                : "분석 결과가 저장되면 실제 대사 요약이 이곳에 나타납니다."}
+                            </p>
+                          )}
+                          <dl>
+                            <div>
+                              <dt>자료 상태</dt>
+                              <dd>{inspectedTimelineExploration.state}</dd>
+                            </div>
+                            <div>
+                              <dt>저장 근거</dt>
+                              <dd>{inspectedTimelineExplorationChapters.length}개 chapter</dd>
+                            </div>
+                            <div>
+                              <dt>판정 단계</dt>
+                              <dd>최종 주제 확정 전 탐색 근거</dd>
+                            </div>
+                          </dl>
+                        </>
+                      ) : inspectedTimelineSignal !== null ? (
+                        <>
+                          <header>
+                            <div>
+                              <span
+                                className="rh-timeline-inspector-kind"
+                                data-signal={inspectedTimelineSignal.signalKind}
+                              >
+                                잠재 신호
+                              </span>
+                              <strong>{timelineSignalLabel(inspectedTimelineSignal.signalKind)}</strong>
+                            </div>
+                            <time>{formatDuration(inspectedTimelineSignal.peakMs)} 부근</time>
+                          </header>
+                          <p>
+                            빠른 탐색에서 같은 종류의 신호 중 상대적으로
+                            {` ${Math.round(inspectedTimelineSignal.strength * 100)}점`} 높이로 나타난
+                            구간입니다. 클립 확률이나 AI 승인 점수가 아니며, 전체 맥락과 실제 사건을
+                            확인하기 위한 탐색 힌트입니다.
+                          </p>
+                          <dl>
+                            <div>
+                              <dt>신호 종류</dt>
+                              <dd>{timelineSignalLabel(inspectedTimelineSignal.signalKind)}</dd>
+                            </div>
+                            <div>
+                              <dt>상대 높이</dt>
+                              <dd>{Math.round(inspectedTimelineSignal.strength * 100)} / 100</dd>
+                            </div>
+                            <div>
+                              <dt>관찰 범위</dt>
+                              <dd>
+                                {formatDuration(inspectedTimelineSignal.startMs)}–
+                                {formatDuration(inspectedTimelineSignal.endMs)}
+                              </dd>
+                            </div>
+                          </dl>
+                        </>
                       ) : (
                         <div className="rh-timeline-inspector-empty">
-                          <strong>주제 띠나 의미 단서를 선택하면 분석 내용이 여기에 열립니다.</strong>
-                          <span>색은 순서가 아니라 사건의 의미를 나타내며, 모든 범위는 위 시간 눈금과 같은 축을 사용합니다.</span>
+                          <strong>잠재 신호·탐색 셀·주제 띠·의미 단서를 누르면 근거가 열립니다.</strong>
+                          <span>탐색 중에는 저장이 끝난 구간의 실제 대사 단서를 먼저 확인할 수 있어요.</span>
                         </div>
                       )}
                     </section>
                     <p className="rh-timeline-score-hint">
                       {!contextualCandidatePublicationReady
-                        ? "흐릿한 높이는 초기 반응 신호일 뿐 아직 클립 후보가 아닙니다. 탐색 셀과 주제 맥락을 종합한 뒤 최종 후보 원을 공개합니다."
+                        ? "잠재 신호는 빠른 탐색의 방송 내부 상대값일 뿐 아직 클립 후보가 아닙니다. 막대나 탐색 셀을 눌러 근거를 확인하고, 전체 맥락 뒤 최종 후보를 공개합니다."
                         : selectionResult.analyzedChatMessageCount > 0
                         ? "흐릿한 막대는 오디오·채팅·화면 신호의 상대 점수예요. 번호가 없어도 막대가 있는 구간은 먼저 확인할 잠재 후보입니다."
                         : "흐릿한 막대는 오디오·화면 신호의 상대 점수예요. 번호가 없어도 막대가 있는 구간은 먼저 확인할 잠재 후보입니다."}
@@ -7848,7 +8169,7 @@ function App() {
                       <span data-legend="flow-transition">보라 · 흐름·전환</span>
                       <span data-legend="general-context">회색 · 일반 맥락</span>
                       <span data-legend="lead">마름모 · 전체 맥락 의미 후보</span>
-                      <span data-legend="score">흐린 높이 · 잠재 점수</span>
+                      <span data-legend="score">높이 막대 · 종류별 상대 신호(확률 아님)</span>
                       {timelineContextCoverageGaps.length > 0 && (
                         <span data-legend="gap">빗금 · AI 근거가 없는 구간</span>
                       )}
@@ -7874,8 +8195,8 @@ function App() {
                               className="rh-timeline-card-button"
                               data-selected={candidate.id === focusedCandidateId}
                               data-review-state={candidate.reviewState}
-                              onClick={() => playCandidate(candidate)}
-                              aria-label={`후보 ${index + 1} ${formatDuration(candidate.peakMs)} 선택${sourcePreviewUrl === null ? "" : " 및 재생"}`}
+                              onClick={() => focusCandidateForReview(candidate)}
+                              aria-label={`후보 ${index + 1} ${formatDuration(candidate.peakMs)} 위치를 검토창에 준비`}
                             >
                               <span className="rh-timeline-card-media">
                                 {frame === undefined ? (
@@ -7909,6 +8230,7 @@ function App() {
                     )}
                   </section>
                   {contextualCandidatePublicationReady && (
+                  <>
                   <div className="rh-review-editor">
                     <nav className="rh-candidate-navigation" aria-label="후보 이동">
                       <button
@@ -7958,32 +8280,57 @@ function App() {
                         )}
                       </div>
                       {sourcePreviewUrl !== null ? (
-                      <video
-                        ref={previewVideo}
-                        className="rh-preview-video"
-                        controls
-                        playsInline
-                        preload="metadata"
-                        src={sourcePreviewUrl}
-                        onTimeUpdate={(event) => {
-                          const activeCandidate = candidates.find(({ id }) => id === focusedCandidateId);
-                          const activeRange =
-                            activeCandidate === undefined
-                              ? null
-                              : effectiveCandidateRange(
-                                  activeCandidate,
-                                  boundaryRevisions[activeCandidate.id],
-                                );
-                          if (
-                            activeRange !== null &&
-                            event.currentTarget.currentTime * 1_000 >= activeRange.endMs
-                          ) {
-                            event.currentTarget.pause();
-                          }
-                        }}
+                      <div
+                        className="rh-preview-media"
+                        data-ready={
+                          focusedCandidateId !== null &&
+                          previewPreparedCandidateId === focusedCandidateId
+                        }
                       >
-                        이 브라우저는 영상 미리보기를 지원하지 않아요.
-                      </video>
+                        <video
+                          ref={previewVideo}
+                          className="rh-preview-video"
+                          controls
+                          playsInline
+                          preload="metadata"
+                          src={sourcePreviewUrl}
+                          onPlay={(event) => {
+                            if (
+                              previewRequestedCandidateIdRef.current === null ||
+                              previewPreparedCandidateIdRef.current !==
+                                previewRequestedCandidateIdRef.current
+                            ) {
+                              event.currentTarget.pause();
+                            }
+                          }}
+                          onTimeUpdate={(event) => {
+                            const activeCandidate = candidates.find(({ id }) => id === focusedCandidateId);
+                            const activeRange =
+                              activeCandidate === undefined
+                                ? null
+                                : effectiveCandidateRange(
+                                    activeCandidate,
+                                    boundaryRevisions[activeCandidate.id],
+                                  );
+                            if (
+                              activeRange !== null &&
+                              event.currentTarget.currentTime * 1_000 >= activeRange.endMs
+                            ) {
+                              event.currentTarget.pause();
+                            }
+                          }}
+                        >
+                          이 브라우저는 영상 미리보기를 지원하지 않아요.
+                        </video>
+                        {focusedCandidateId !== null &&
+                          previewPreparedCandidateId !== focusedCandidateId && (
+                            <div className="rh-preview-preparing" role="status">
+                              <span aria-hidden="true" />
+                              <strong>검토 화면 준비 중</strong>
+                              <small>소리를 재생하지 않고 후보 시작점에 맞추고 있어요.</small>
+                            </div>
+                          )}
+                      </div>
                       ) : (
                         <div className="rh-preview-unavailable">
                           <strong>원본을 연결하면 여기서 바로 재생할 수 있어요.</strong>
@@ -7994,9 +8341,10 @@ function App() {
                         </div>
                       )}
                       <p className="rh-preview-help">
-                        타임라인의 후보를 누르면 해당 구간부터 재생하고 끝점에서 멈춥니다.
+                        후보를 누르면 이 창에 일시정지 상태로 준비합니다. 준비 완료 뒤 재생을 눌러 확인하세요.
                       </p>
                     </aside>
+                  </div>
                   <div className="rh-candidate-column">
                   <div
                     className="rh-candidate-list"
@@ -8723,8 +9071,9 @@ function App() {
                   })}
                   </div>
                   </div>
-                  </div>
+                  </>
                   )}
+                  </div>
                 </>
               )}
 

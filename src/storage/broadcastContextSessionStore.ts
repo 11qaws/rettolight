@@ -1,9 +1,12 @@
 import {
   createBroadcastContextRequest,
+  MAX_BROADCAST_CONTEXT_CHAPTERS,
+  MAX_BROADCAST_CONTEXT_SOURCE_DURATION_MS,
   type BroadcastContextChapterInput,
 } from "../analysis/broadcastContextProtocol";
 
 export const BROADCAST_CONTEXT_SESSION_SCHEMA_VERSION = "1.2.0" as const;
+const MAX_STORED_BROADCAST_CONTEXT_CHAPTERS = 4_096;
 
 export interface BroadcastContextSessionRecord {
   readonly kind: "broadcastContextSession";
@@ -69,8 +72,11 @@ export function assertBroadcastContextSessionRecord(
     !boundedString(value.inputSignature) ||
     !Number.isSafeInteger(value.sourceDurationMs) ||
     (value.sourceDurationMs as number) <= 0 ||
+    (value.sourceDurationMs as number) >
+      MAX_BROADCAST_CONTEXT_SOURCE_DURATION_MS ||
     typeof value.completeAudioCoverage !== "boolean" ||
     !Array.isArray(value.chapters) ||
+    value.chapters.length > MAX_STORED_BROADCAST_CONTEXT_CHAPTERS ||
     !Array.isArray(value.gapChunkIds) ||
     !value.gapChunkIds.every((item) => boundedString(item, 256)) ||
     new Set(value.gapChunkIds).size !== value.gapChunkIds.length ||
@@ -113,11 +119,43 @@ export function assertBroadcastContextSessionRecord(
       throw new TypeError("Broadcast refinement candidates JSON is invalid.");
     }
   }
-  createBroadcastContextRequest({
-    sourceDurationMs: value.sourceDurationMs as number,
-    chapters: value.chapters as readonly BroadcastContextChapterInput[],
-    candidates: [],
-  });
+  const chapters = value.chapters as readonly BroadcastContextChapterInput[];
+  if (chapters.length === 0) {
+    if (value.completeAudioCoverage || value.gapChunkIds.length === 0) {
+      throw new TypeError(
+        "An empty broadcast transcript map must preserve its evidence gaps.",
+      );
+    }
+    return;
+  }
+  const chapterIds = new Set<string>();
+  let previousChapterEndMs = 0;
+  for (const chapter of chapters) {
+    if (
+      chapterIds.has(chapter.chapterId) ||
+      chapter.startMs < previousChapterEndMs
+    ) {
+      throw new TypeError(
+        "Stored broadcast transcript chapters must be unique and ordered.",
+      );
+    }
+    chapterIds.add(chapter.chapterId);
+    previousChapterEndMs = chapter.endMs;
+  }
+  for (
+    let startIndex = 0;
+    startIndex < chapters.length;
+    startIndex += MAX_BROADCAST_CONTEXT_CHAPTERS
+  ) {
+    createBroadcastContextRequest({
+      sourceDurationMs: value.sourceDurationMs as number,
+      chapters: chapters.slice(
+        startIndex,
+        startIndex + MAX_BROADCAST_CONTEXT_CHAPTERS,
+      ),
+      candidates: [],
+    });
+  }
 }
 
 export function cloneBroadcastContextSessionRecord(

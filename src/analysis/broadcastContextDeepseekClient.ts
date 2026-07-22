@@ -3,6 +3,7 @@ import {
   type BroadcastContextRequestInput,
   type BroadcastContextResult,
 } from "./broadcastContextProtocol";
+import { compactBroadcastContextChapters } from "./broadcastContextChapterCompaction";
 import {
   extractBroadcastContextDeepseekResponse,
   MAX_BROADCAST_CONTEXT_DEEPSEEK_RESPONSE_BYTES,
@@ -37,13 +38,24 @@ export class BroadcastContextDeepseekClientError extends Error {
   }
 }
 
+function createBoundedBroadcastContextInput(
+  input: BroadcastContextRequestInput,
+): BroadcastContextRequestInput {
+  return {
+    ...input,
+    chapters: compactBroadcastContextChapters(input.chapters),
+  };
+}
+
 export function parseBroadcastContextProxyResult(
   payload: unknown,
   input: BroadcastContextRequestInput,
 ): BroadcastContextResult | null {
   let request;
   try {
-    request = createBroadcastContextRequest(input);
+    request = createBroadcastContextRequest(
+      createBoundedBroadcastContextInput(input),
+    );
   } catch {
     return null;
   }
@@ -64,7 +76,9 @@ export async function requestBroadcastContextDeepseek(
 ): Promise<BroadcastContextResult> {
   let request;
   try {
-    request = createBroadcastContextRequest(input);
+    request = createBroadcastContextRequest(
+      createBoundedBroadcastContextInput(input),
+    );
   } catch {
     throw new BroadcastContextDeepseekClientError(
       "INVALID_INPUT",
@@ -139,12 +153,15 @@ export async function requestBroadcastContextDeepseek(
     );
   }
 
-  const parsed = parseBroadcastContextProxyResult(payload, input);
-  if (parsed === null) {
+  const parsed = extractBroadcastContextDeepseekResponse(
+    { choices: [{ message: { content: JSON.stringify(payload) } }] },
+    request,
+  );
+  if (!parsed.ok) {
     throw new BroadcastContextDeepseekClientError(
       "PROXY_INVALID_RESPONSE",
       "방송 전체 맥락 분석 응답 형식을 확인하지 못했어요.",
     );
   }
-  return parsed;
+  return parsed.result;
 }

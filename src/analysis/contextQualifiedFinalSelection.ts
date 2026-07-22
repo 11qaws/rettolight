@@ -50,6 +50,16 @@ export interface ContextQualifiedFinalSelection<
   >;
 }
 
+export function isContextExcludedProgramMaterial(
+  annotation: BroadcastContextCandidateAnnotation,
+): boolean {
+  return (
+    annotation.category === "music-or-intermission" ||
+    annotation.rejectionReasons.includes("music-or-song") ||
+    annotation.rejectionReasons.includes("opening-ending-or-break")
+  );
+}
+
 /**
  * Applies the whole-broadcast semantic verdict after candidate perception.
  * Missing context is review-only; it can never silently become an approved clip.
@@ -86,6 +96,12 @@ export function finalizeContextQualifiedCandidates<
       reviewCandidates.push(candidate);
       missingContextCandidateIds.push(candidate.id);
       projectionById[candidate.id] = "insufficient-evidence";
+      continue;
+    }
+    if (isContextExcludedProgramMaterial(annotation)) {
+      eligibilityById[candidate.id] = "ineligible";
+      rejectedCandidateIds.push(candidate.id);
+      projectionById[candidate.id] = "deprioritized";
       continue;
     }
     if (annotation.clipDecision === "select") {

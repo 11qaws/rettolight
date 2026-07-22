@@ -75,6 +75,41 @@ describe("broadcastContextSessionStore", () => {
     ).toThrow(TypeError);
   });
 
+  it("preserves an empty transcript map when every sampled chunk is an explicit gap", () => {
+    expect(() =>
+      assertBroadcastContextSessionRecord({
+        ...record,
+        completeAudioCoverage: false,
+        chapters: [],
+        gapChunkIds: ["chunk-001", "chunk-002"],
+      }),
+    ).not.toThrow();
+    expect(() =>
+      assertBroadcastContextSessionRecord({
+        ...record,
+        chapters: [],
+      }),
+    ).toThrow(TypeError);
+  });
+
+  it("stores a detailed chapter map larger than the 144-item transport projection", () => {
+    const chapters = Array.from({ length: 145 }, (_, index) => ({
+      chapterId: `transcript-${index + 1}`,
+      startMs: index * 1_000,
+      endMs: (index + 1) * 1_000,
+      evidenceMode: "complete-transcript" as const,
+      evidenceCoverageRatio: 1,
+      summaryKo: `${index + 1}번째 방송 구간`,
+    }));
+    expect(() =>
+      assertBroadcastContextSessionRecord({
+        ...record,
+        sourceDurationMs: 145_000,
+        chapters,
+      }),
+    ).not.toThrow();
+  });
+
   it("rejects raw provider-shaped fields and invalid chapter ranges", () => {
     expect(() =>
       assertBroadcastContextSessionRecord({ ...record, rawTranscript: "secret" }),

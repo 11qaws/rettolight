@@ -101,6 +101,52 @@ describe("requestBroadcastContextDeepseek", () => {
     expect(JSON.parse(typeof body === "string" ? body : "null")).toEqual(input);
   });
 
+  it("compacts oversized saved chapter maps at the final request boundary", async () => {
+    const chapters = Array.from({ length: 145 }, (_, index) => ({
+      chapterId: `saved-${index + 1}`,
+      startMs: index * 1_000,
+      endMs: (index + 1) * 1_000,
+      evidenceMode: "complete-transcript" as const,
+      evidenceCoverageRatio: 1,
+      summaryKo: `${index + 1}번째 저장 구간`,
+    }));
+    let receivedBody: Record<string, unknown> | undefined;
+    const response = await requestBroadcastContextDeepseek(
+      { ...input, sourceDurationMs: 145_000, chapters },
+      {
+        fetchImplementation: (_request, init) => {
+          if (typeof init?.body !== "string") {
+            throw new TypeError("Expected a serialized context request.");
+          }
+          receivedBody = JSON.parse(init.body) as Record<string, unknown>;
+          const sentChapters = receivedBody.chapters as typeof chapters;
+          const boundedResult = {
+            ...result,
+            semanticChapters: [
+              {
+                ...result.semanticChapters[0],
+                startChapterId: sentChapters[0]?.chapterId,
+                endChapterId: sentChapters.at(-1)?.chapterId,
+                startMs: 0,
+                endMs: 145_000,
+              },
+            ],
+            coverage: {
+              ...result.coverage,
+              coveredMs: 145_000,
+            },
+          };
+          return Promise.resolve(
+            new Response(JSON.stringify(boundedResult), { status: 200 }),
+          );
+        },
+      },
+    );
+
+    expect(receivedBody?.chapters).toHaveLength(144);
+    expect(response.semanticChapters[0]?.endMs).toBe(145_000);
+  });
+
   it("rejects malformed successful responses", async () => {
     await expect(
       requestBroadcastContextDeepseek(input, {

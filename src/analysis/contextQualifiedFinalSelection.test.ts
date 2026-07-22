@@ -92,6 +92,26 @@ describe("finalizeContextQualifiedCandidates", () => {
     });
   });
 
+  it("forces unreviewed MV and break material out even if a model selected it", () => {
+    const mv = {
+      ...candidate("recorded-mv", 10_000),
+      reviewState: "unreviewed" as const,
+    };
+    const misleadingSelection: BroadcastContextCandidateAnnotation = {
+      ...annotation(mv.id, "select"),
+      category: "music-or-intermission",
+    };
+
+    const result = finalizeContextQualifiedCandidates(
+      [mv],
+      [misleadingSelection],
+    );
+
+    expect(result.selectedCandidates).toEqual([]);
+    expect(result.rejectedCandidateIds).toEqual([mv.id]);
+    expect(result.projectionById[mv.id]).toBe("deprioritized");
+  });
+
   it("spends detail budget by editor priority without deleting the ledger", () => {
     const ledger = [
       { id: "approved-music", reviewState: "approved" as const },

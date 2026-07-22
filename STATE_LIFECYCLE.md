@@ -1,10 +1,20 @@
 # ExClipper 상태·생애주기 명세
 
-- 문서 버전: 0.3.42
-- 기준 제품 계획: PRODUCT_PLAN.md 0.3.42
+- 문서 버전: 0.3.43
+- 기준 제품 계획: PRODUCT_PLAN.md 0.3.43
 - 기준일: 2026-07-23 (Asia/Seoul)
 - 적용 범위: GitHub Pages에서 실행되는 개인 편집 어시스턴트와 선택형 CHZZK 동반 수집기
 - 문서 지위: 구현 전 상태 모델의 기준 문서
+
+## `0.3.43` 맥락 입력·탐색 공개·검토 재생 상태
+
+- `broadcastTranscriptChapters`는 비용을 지불해 저장한 원본 evidence map이다. 전체 맥락 transport는 이를 삭제하거나 덮어쓰지 않고 `boundedContextChapters` projection을 만들어 1~144개만 보낸다. projection은 source-time 순서, 첫 start, 마지막 end, 실제 coverage 비율과 대표 근거를 보존한다.
+- 전사 셀의 lifecycle은 `queued -> active -> complete | gap`이다. `complete`가 commit/readback을 통과한 즉시 같은 source range의 `exploration` inspector를 열 수 있다. 이 상태의 문장은 `탐색 단서`이며 `semantic chapter`가 아니다.
+- 최종 주제 lifecycle은 `context running -> context result committed -> reveal projection`이다. 모델 응답 전에는 semantic title을 만들지 않는다. 최종 주제 reveal animation은 저장 결과의 presentation일 뿐 별도 AI 실행이나 streaming 상태가 아니다.
+- timeline inspection target은 `exploration | signal | chapter | lead` 중 하나다. 선택은 canonical 후보, 분석 run, 저장 evidence를 변경하지 않는 presentation event다.
+- 후보 검토 재생은 `unavailable | preparing | ready-paused | playing | error`로 분리한다. marker·카드 선택은 `preparing`으로 전이하고 player를 pause한 뒤 seek한다. 현재 후보 ID와 seek target이 일치하는 `seeked/canplay` 뒤에만 `ready-paused`가 된다. `playing`은 준비 완료 후의 명시적 사용자 재생 이벤트로만 진입한다.
+- 전체 맥락 판정이 음악/MV/오프닝/엔딩/휴식 exclusion을 반환하면 미승인 후보는 final publication과 자동 상세 queue에서 제외한다. 이미 승인된 후보의 membership·경계·다운로드 가능 상태는 AI가 변경하지 않는다.
+- 후보 세부 분석은 후보별 `frame-preparing -> remote-review -> terminal` 파이프라인이다. 여러 후보가 bounded pool에서 겹쳐 실행될 수 있으므로 하나의 `activeCandidateId`는 presentation convenience일 뿐 전체 동시 실행 수를 나타내지 않는다. 완료 event는 후보 ID와 operation fence로 개별 정산하고 최종 run은 모든 target이 terminal일 때만 완료한다.
 
 ## `0.3.42` 분석 준비 작업대 projection
 
@@ -52,6 +62,7 @@
 
 - 방송 전사 transport 상한은 실운영 성공을 확인한 90초이며, 최대 12시간의 균등·사건 표본을 모두 표현하는 Worker 상한은 240개다. 청크 수 증가는 duration 과금 총량을 바꾸지 않으며 ASR budget은 `$0.42`로 유지한다.
 - transcript partial result가 현재 source/run identity를 통과하면 해당 source range를 chapter checkpoint로 즉시 write/readback한다. 아직 오지 않았거나 실패한 청크는 gap ID로 함께 저장한다. 새로고침·재연결은 sampling window에서 저장 chapter 범위를 빼고 uncovered range만 새 90초 청크로 만든다.
+- 모든 청크가 gap이면 `chapters=[]`와 전체 `gapChunkIds`를 유효한 실패 체크포인트로 저장한다. 저장 계층은 이를 전송 요청으로 오해해 1~144개 규칙을 적용하지 않으며, UI는 무한 `맥락 판단 대기` 대신 대사 근거 0구간 실패와 재시도를 명시한다. 144개 제한은 whole-context API로 투영하는 마지막 경계에만 적용한다.
 - `0.3.34`의 호환 가능한 210초 Qwen chapter는 원래 model identity와 source fence를 보존해 재사용한다. 겹치지 않는 uncovered range만 새 revision으로 채우며, 과거 chapter를 새 모델 결과로 relabel하지 않는다.
 - 후보의 `castRosterId`는 서버가 알고 있는 `chzzk-video-13996057-v1` 하나만 허용하며, source filename이 replay `13996057` 또는 검토된 `교환학생/합격생/장학생` 제목과 맞을 때만 target에 붙인다. 임의 텍스트 roster와 다른 방송의 자동 명단 상속은 Worker 경계를 넘지 못한다. `provided-cast-reference`는 등록 이름, 같은 프레임의 서로 다른 특징 2개 이상, confidence 0.88 이상을 모두 만족해야 한다.
 - 출연자 projection은 카드 표시 증거만 소유한다. 점수, 후보 생성·삭제, 경계, 승인·제외, 전체 맥락 판정을 변경하는 전이는 없다. 화면이 없으면 등록 출연진 식별도 audio-only 안전 projection에서 제거한다.
