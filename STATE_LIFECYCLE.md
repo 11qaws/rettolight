@@ -1,10 +1,19 @@
 # ExClipper 상태·생애주기 명세
 
-- 문서 버전: 0.3.41
-- 기준 제품 계획: PRODUCT_PLAN.md 0.3.41
-- 기준일: 2026-07-22 (Asia/Seoul)
+- 문서 버전: 0.3.42
+- 기준 제품 계획: PRODUCT_PLAN.md 0.3.42
+- 기준일: 2026-07-23 (Asia/Seoul)
 - 적용 범위: GitHub Pages에서 실행되는 개인 편집 어시스턴트와 선택형 CHZZK 동반 수집기
 - 문서 지위: 구현 전 상태 모델의 기준 문서
+
+## `0.3.42` 분석 준비 작업대 projection
+
+- 분석 준비 작업대의 진입 조건은 기존과 동일하게 `sourceCheck.status === completed`, `sourceCheck.resultKind !== blocked`, 유효한 `preflight`, 현재 탭에 연결된 `sourceFile`을 모두 만족하는 `sourceReady`다. 표시 개편은 source check의 저장·commit 순서나 분석 operation identity를 바꾸지 않는다.
+- 왼쪽 원본 pane과 오른쪽 분석 설계 pane은 하나의 `sourceReady` 상태를 서로 다른 목적으로 투영한다. 이전의 별도 검사 결과 summary를 함께 중복 표시하지 않으며, 원본 교체는 기존 source 전환 lifecycle을 그대로 시작한다.
+- 분석 전 시간축의 30분 눈금은 `preflight.metadata.durationMs`에서만 계산한다. 이는 후보, 주제, AI 점수의 증거가 아니며 candidate ledger나 context session에 저장하지 않는다. 분석이 시작되면 기존 progress·context·candidate presentation이 source-time 축을 소유한다.
+- CHZZK 채팅은 계속 선택형 독립 입력이다. 채팅이 없어도 `sourceReady`와 분석 시작 가능 여부는 변하지 않으며, 준비된 채팅 메시지 수는 분석에 사용할 수 있는 신호의 상태만 설명한다.
+- source check가 blocked이거나 완료되지 않았으면 준비 작업대를 만들지 않는다. blocked 결과를 `AI 분석 준비 완료`로 표시하는 전이는 금지하며, 검사 결과 pane에서 `분석 시작 불가` 또는 저장 중 상태를 정확히 유지한다.
+- 분석 중 취소 동작은 실제 progress panel에만 노출한다. 준비 pane이 사라진 뒤에도 현재 operation을 안전하게 중단할 수 있어야 하며, 취소가 저장된 이전 분석 세션이나 사용자 판단을 삭제하지 않는다.
 
 ## `0.3.41` 분산 탐색·후보 공개·풍부한 맥락 결과
 

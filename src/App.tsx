@@ -90,6 +90,7 @@ import {
   semanticChapterFamilyLabel,
   type BroadcastContextUiStatus,
 } from "./analysis/broadcastContextTimelinePresentation";
+import { buildSourceReadyTimelineTicks } from "./analysis/sourceReadyTimelinePresentation";
 import {
   runBroadcastTranscriptWorker,
 } from "./analysis/broadcastTranscriptWorkerClient";
@@ -333,7 +334,7 @@ interface AudioAnalysisOutcome {
   readonly coverageComplete: boolean;
 }
 
-const APP_VERSION = "0.3.41";
+const APP_VERSION = "0.3.42";
 const PERSISTENCE_SCHEMA_VERSION = "0.3.0";
 const SIGNAL_ENGINE_VERSION =
   "streamer-reaction-fast-pass-v5-chat-fallback-music-confirmation";
@@ -1243,6 +1244,10 @@ function App() {
     sourceCheck.resultKind !== "blocked" &&
     preflight !== null &&
     sourceFile !== null;
+  const sourceReadyTimelineTicks = useMemo(
+    () => buildSourceReadyTimelineTicks(preflight?.metadata.durationMs ?? 0),
+    [preflight?.metadata.durationMs],
+  );
   const analysisComplete =
     openedRecoveredResult !== null ||
     analysisRun?.status === "completed" ||
@@ -6349,22 +6354,31 @@ function App() {
           {showSourceWorkspace && (
           <div className="rh-workspace-top">
           <section
-            className="rh-source-section"
+            className="rh-panel rh-source-section"
             data-reconnect={openedRecoveredResult !== null}
+            data-ready={sourceReady}
             aria-labelledby="source-title"
           >
             <div className="rh-section-heading">
               <div>
-                <p className="rh-eyebrow">1단계</p>
+                <p className="rh-eyebrow">
+                  {sourceReady ? "1단계 · 원본 확인 완료" : "1단계"}
+                </p>
                 <h3 id="source-title" ref={sourceHeading} tabIndex={-1}>
                   {openedRecoveredResult === null
-                    ? "방송 원본을 골라 주세요"
+                    ? sourceReady
+                      ? "선택한 방송 원본"
+                      : "방송 원본을 골라 주세요"
                     : candidates.length === 0
                       ? "이번 결과는 원본 재연결이 필요하지 않아요"
                       : "미리볼 원래 방송 파일을 다시 골라 주세요"}
                 </h3>
               </div>
-              <p className="rh-help">MP4·WebM 권장 · 최대 12시간</p>
+              <p className="rh-help">
+                {sourceReady && preflight !== null
+                  ? `${formatDuration(preflight.metadata.durationMs)} · ${formatBytes(preflight.metadata.sizeBytes)}`
+                  : "MP4·WebM 권장 · 최대 12시간"}
+              </p>
             </div>
 
             <div className="rh-source-stack">
@@ -6387,13 +6401,23 @@ function App() {
                   onDrop={handleSourceDrop}
                 >
                   <div className="rh-drop-zone-copy">
-                    <p className="rh-eyebrow">추천 · 가장 정확함</p>
+                    <p className="rh-eyebrow">
+                      {sourceReady ? "분석할 원본" : "추천 · 가장 정확함"}
+                    </p>
                     <strong>{pendingFileName ?? "영상 파일을 여기에 놓아도 돼요"}</strong>
-                    <p className="rh-help">MP4·WebM 권장 · 최대 12시간 · 선택하면 길이와 분석 가능 여부를 바로 확인해요.</p>
+                    <p className="rh-help">
+                      {sourceReady
+                        ? "이 파일의 전체 시간을 기준으로 분석 지도와 클립 후보를 만들어요."
+                        : "MP4·WebM 권장 · 최대 12시간 · 선택하면 길이와 분석 가능 여부를 바로 확인해요."}
+                    </p>
                     <span className="btn btn-primary rh-drop-zone-button">
                       {sourceFileActionLabel}
                     </span>
-                    <span className="rh-drop-zone-hint">또는 영상 파일을 여기로 끌어놓기</span>
+                    <span className="rh-drop-zone-hint">
+                      {sourceReady
+                        ? "파일을 바꾸면 새 원본 기준으로 다시 확인합니다."
+                        : "또는 영상 파일을 여기로 끌어놓기"}
+                    </span>
                   </div>
                 </label>
                 <input
@@ -6406,6 +6430,27 @@ function App() {
                 />
               </div>
 
+              {sourceReady && preflight !== null && (
+                <dl className="rh-source-facts" aria-label="선택한 원본 정보">
+                  <div>
+                    <dt>전체 길이</dt>
+                    <dd>{formatDuration(preflight.metadata.durationMs)}</dd>
+                  </div>
+                  <div>
+                    <dt>파일 형식</dt>
+                    <dd>
+                      {preflight.metadata.extension?.replace(/^\./u, "").toUpperCase() ??
+                        preflight.metadata.kind.toUpperCase()}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>파일 크기</dt>
+                    <dd>{formatBytes(preflight.metadata.sizeBytes)}</dd>
+                  </div>
+                </dl>
+              )}
+
+              {!sourceReady && (
               <details className="rh-link-details">
                 <summary>영상 파일 없이 YouTube·CHZZK 링크만 있나요?</summary>
                 <p className="rh-help">
@@ -6424,10 +6469,11 @@ function App() {
                 </form>
                 {linkNotice !== null && <p className="rh-notice" role="status">{linkNotice}</p>}
               </details>
+              )}
             </div>
           </section>
 
-          {(sourceCheck !== null || sourceError !== null) && (
+          {!sourceReady && (sourceCheck !== null || sourceError !== null) && (
             <section className="rh-panel rh-source-summary" aria-live="polite" aria-labelledby="source-result-title">
               <div className="rh-section-heading">
                 <div>
@@ -6448,62 +6494,139 @@ function App() {
                   </div>
                   <div className="rh-summary-item">
                     <dt>상태</dt>
-                    <dd>AI 분석 준비 완료</dd>
+                    <dd>
+                      {sourceCheck?.status === "completed"
+                        ? sourceCheck.resultKind === "blocked"
+                          ? "분석 시작 불가"
+                          : "AI 분석 준비 완료"
+                        : "검사 결과 저장 중"}
+                    </dd>
                   </div>
                 </dl>
               )}
               {sourceError !== null && <p className="rh-notice" data-tone="danger" role="alert">{sourceError}</p>}
-              {sourceReady && preflight?.capabilities.preferredRuntimeTier === "signals-only" && (
+            </section>
+          )}
+
+          {sourceReady && preflight !== null && !analysisComplete && !analysisBusy && (
+            <section className="rh-panel rh-analysis-launchpad" aria-labelledby="analysis-title">
+              <div className="rh-launchpad-heading">
+                <div>
+                  <p className="rh-eyebrow">2단계 · 분석 설계</p>
+                  <h3 id="analysis-title">전체 방송 타임라인을 만들 준비가 됐어요</h3>
+                  <p className="rh-help">
+                    처음부터 끝까지 여러 위치를 먼저 살피고, 맥락이 생기는 구간을 넓혀 클립 후보로 정리합니다.
+                  </p>
+                </div>
+                <span className="rh-ready-badge">시작 가능</span>
+              </div>
+
+              <div
+                className="rh-source-range-preview"
+                role="img"
+                aria-label={`분석할 원본 범위 00:00부터 ${formatDuration(preflight.metadata.durationMs)}까지, 30분 단위 눈금`}
+              >
+                <div className="rh-source-range-title">
+                  <span>분석할 방송 범위</span>
+                  <strong>00:00–{formatDuration(preflight.metadata.durationMs)}</strong>
+                </div>
+                <div className="rh-source-range-track" aria-hidden="true">
+                  <span className="rh-source-range-fill" />
+                  {sourceReadyTimelineTicks.map((tick) => (
+                    <span
+                      className="rh-source-range-tick"
+                      data-edge={tick.edge}
+                      data-major={tick.showLabel}
+                      key={tick.timestampMs}
+                      style={{ left: `${tick.positionPercent}%` }}
+                    />
+                  ))}
+                </div>
+                <div className="rh-source-range-labels" aria-hidden="true">
+                  {sourceReadyTimelineTicks
+                    .filter((tick) => tick.showLabel)
+                    .map((tick) => (
+                      <span
+                        data-edge={tick.edge}
+                        key={tick.timestampMs}
+                        style={{ left: `${tick.positionPercent}%` }}
+                      >
+                        {formatDuration(tick.timestampMs)}
+                      </span>
+                    ))}
+                </div>
+              </div>
+
+              <ol className="rh-analysis-route" aria-label="AI 분석 흐름">
+                <li>
+                  <span>1</span>
+                  <div>
+                    <strong>방송 전체 훑기</strong>
+                    <small>여러 시각을 고르게 확인</small>
+                  </div>
+                </li>
+                <li>
+                  <span>2</span>
+                  <div>
+                    <strong>맥락 구간 넓히기</strong>
+                    <small>사건 전후의 대사·화면 연결</small>
+                  </div>
+                </li>
+                <li>
+                  <span>3</span>
+                  <div>
+                    <strong>클립 후보 정리</strong>
+                    <small>30초~1분 장면을 여러 개 제안</small>
+                  </div>
+                </li>
+              </ol>
+
+              <div className="rh-readiness-strip" aria-label="분석에 사용할 신호">
+                <div data-tone={preflight.capabilities.preferredRuntimeTier === "signals-only" ? "limited" : "ready"}>
+                  <span className="rh-readiness-dot" aria-hidden="true" />
+                  <span>화면·오디오</span>
+                  <strong>
+                    {preflight.capabilities.preferredRuntimeTier === "signals-only"
+                      ? "제한 분석"
+                      : "준비됨"}
+                  </strong>
+                </div>
+                <div data-tone={chatImport === null ? "optional" : "ready"}>
+                  <span className="rh-readiness-dot" aria-hidden="true" />
+                  <span>CHZZK 채팅</span>
+                  <strong>
+                    {chatImport === null
+                      ? "선택 사항"
+                      : `${chatImport.messages.length.toLocaleString("ko-KR")}개 준비`}
+                  </strong>
+                </div>
+              </div>
+
+              {preflight.capabilities.preferredRuntimeTier === "signals-only" && (
                 <p className="rh-notice" data-tone="warning">
-                  이 브라우저에서는 오디오·채팅 분석 기능을 쓰지 못할 수 있어요.
-                  그 경우 반응을 찾았다고 과장하지 않고, 제한된 화면 탐색 후보와 빠진 신호를 분명히 표시합니다.
+                  이 브라우저에서는 일부 오디오 분석을 쓰지 못할 수 있어요. 가능한 화면 신호는 유지하고 빠진 근거를 결과에 표시합니다.
                 </p>
               )}
-              {openedRecoveredResult !== null && sourceReady && (
-                <p className="rh-notice" role="status">
-                  영상 내용 샘플·크기·길이가 저장된 기록과 일치해요. 이제 후보 장면을 바로 재생할 수 있습니다.
-                </p>
-              )}
+
+              <div className="rh-launchpad-actions">
+                <button
+                  className="btn btn-primary rh-primary-action"
+                  type="button"
+                  disabled={!sourceReady || analysisBusy || analysisComplete || chatImportStatus === "reading"}
+                  onClick={() => void runSignalAnalysis()}
+                >
+                  {chatImportStatus === "reading"
+                    ? "채팅 읽는 중…"
+                    : "AI로 하이라이트 찾기"}
+                </button>
+                <p>분석이 시작되면 위 시간축에 탐색 범위와 주제가 차례로 나타납니다.</p>
+              </div>
             </section>
           )}
           </div>
           )}
 
           {sourceReady && !analysisComplete && !analysisBusy && (
-          <>
-          <section className="rh-analysis-cta rh-analysis-cta--quick" aria-labelledby="analysis-title">
-            <div>
-              <p className="rh-eyebrow">2단계 · 바로 시작</p>
-              <h3 id="analysis-title">영상 준비 완료 — AI가 먼저 하이라이트를 찾을까요?</h3>
-              <p>
-                지금 바로 분석을 시작할 수 있어요. 채팅 파일은 선택 사항이며, 나중에 추가할 수도 있습니다.
-                AI는 몇 시간짜리 원본을 짧은 조각으로 나눠 여러 개의 30초~1분 후보를 찾아요.
-              </p>
-            </div>
-            <div className="rh-analysis-actions">
-              <button
-                className="btn btn-primary rh-primary-action"
-                type="button"
-                disabled={!sourceReady || analysisBusy || analysisComplete || chatImportStatus === "reading"}
-                onClick={() => void runSignalAnalysis()}
-              >
-                {chatImportStatus === "reading"
-                  ? "채팅 읽는 중…"
-                  : analysisCommitPending
-                    ? "결과 저장 중…"
-                    : analysisCancelPending
-                      ? "안전하게 멈추는 중…"
-                      : analysisBusy
-                        ? "반응 찾는 중…"
-                        : "AI로 하이라이트 찾기"}
-              </button>
-              {analysisCanBeCancelled && (
-                <button className="btn btn-secondary" type="button" onClick={cancelAnalysis}>
-                  안전하게 취소
-                </button>
-              )}
-            </div>
-          </section>
           <section className="rh-panel rh-chat-panel" aria-labelledby="chat-title">
             <div className="rh-chat-row">
               <div className="rh-chat-copy">
@@ -6602,8 +6725,6 @@ function App() {
             )}
             {chatError !== null && <p className="rh-notice" data-tone="danger" role="alert">{chatError}</p>}
           </section>
-
-          </>
           )}
 
           {(analysisProgress !== null || audioAnalysisProgress !== null || analysisError !== null) && (
@@ -6643,6 +6764,11 @@ function App() {
                 )}
                 {analysisError !== null && <p role="alert">{analysisError}</p>}
               </div>
+              {analysisCanBeCancelled && (
+                <button className="btn btn-secondary" type="button" onClick={cancelAnalysis}>
+                  안전하게 취소
+                </button>
+              )}
             </div>
           )}
 

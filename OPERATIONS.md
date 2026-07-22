@@ -1,5 +1,13 @@
 # ExClipper 개인용 운영·배포·복구 계획
 
+## 2026-07-23 release notes
+
+- `0.3.42`: source-ready 첫 화면을 같은 높이의 1:1 준비 작업대로 바꾼다. 왼쪽은 확인된 원본과 길이·형식·크기, 오른쪽은 실제 원본 범위, 분석 경로, 사용 가능한 신호, 기본 분석 시작 동작을 담당한다. 별도 검사 영수증과 화면 아래에 떨어져 있던 CTA는 준비 완료 상태에서 제거한다.
+- 분석 전 source ruler는 30분 경계를 모두 유지하고 긴 방송에서는 라벨만 줄인다. 이 ruler는 원본 길이의 presentation projection이며 후보·주제·점수를 미리 확정하지 않는다. 기존 source check, persistence schema, Candidate Ledger, Worker 계약과 유료 AI 경로는 변경하지 않는다.
+- blocked source 결과는 더 이상 `AI 분석 준비 완료`라고 표시하지 않는다. 진행 중 취소 버튼은 사라지는 준비 CTA에서 실제 progress panel로 옮겨, 분석이 시작된 뒤에도 접근 가능하게 유지한다.
+- 배포 전 maximized desktop에서 두 pane의 높이·폭, 첫 viewport 안의 시작 버튼, 음식 토크 02:15:14 원본의 30분 눈금과 끝 시각, 840px 이하 단일 열, 640px 이하 start/end 라벨, 강제 색상 모드 경계를 확인한다. strict TypeScript, ESLint warning 0, 전체 Vitest, production build와 Wrangler dry-run을 통과한 뒤에만 정적 Pages 배포를 승인한다.
+- 로컬 release gate는 73개 파일 784개 테스트, production build, Wrangler dry-run을 통과했다. 실제 음식 토크 preflight와 2,552px·760px·620px UI 검증도 통과했으며 browser warning/error는 0개였다. 이 상태는 배포 가능한 후보지만 아직 commit·push·Pages deploy 승인을 뜻하지 않는다.
+
 ## 2026-07-22 release notes
 
 - `0.3.41`: context transcript cells execute in a deterministic distributed/adaptive order while saved chapters remain source-ordered. Fast peaks stay as a faint score overview until context, semantic refinement, candidate detail, and topic publication settle. The final timeline uses one 30-minute ruler, meaning-stable chapter colors, selectable chapter/lead inspectors, fixed-height candidate cards, and a 1:1 equal-height review workspace.

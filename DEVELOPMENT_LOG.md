@@ -1,5 +1,15 @@
 # Development Log
 
+## 2026-07-23 `0.3.42` 원본 확인·분석 타임라인 준비 작업대
+
+- 사용자 화면을 기준으로 원본 준비 구간을 다시 추적했다. 기존 화면은 같은 `sourceReady` 상태를 왼쪽의 큰 업로드 카드, 오른쪽의 작은 검사 결과 영수증, 아래의 전체 폭 CTA로 세 번 분리해 보여 줬다. 오른쪽은 정보가 부족하고 좌우 높이가 맞지 않았으며, 편집자가 다음에 보게 될 타임라인과도 시각적으로 이어지지 않았다.
+- 준비 완료 상태를 같은 높이의 1:1 작업대로 합쳤다. 왼쪽 pane은 선택한 원본의 이름·길이·형식·크기와 교체 동작만 담당하고, 오른쪽 pane은 실제 원본 길이의 시간축, `전체 훑기 → 맥락 확장 → 여러 후보 정리` 경로, 화면·오디오/선택형 채팅 준비 상태, 분석 시작 동작을 한 흐름으로 제공한다. 중복 검사 결과 카드와 떨어져 있던 CTA는 준비 완료 상태에서 제거했다.
+- `sourceReadyTimelinePresentation`을 별도 순수 projection으로 추가했다. 모든 30분 경계와 정확한 끝 시각을 보존하되 3시간·6시간·12시간 길이에 따라 글자 라벨만 단계적으로 줄인다. 이 projection은 알려진 원본 길이만 사용하고 후보·주제·잠재 점수를 미리 만들거나 저장하지 않는다.
+- blocked source를 `AI 분석 준비 완료`로 잘못 표시할 수 있던 상태 문구를 `분석 시작 불가`로 교정했다. 준비 CTA가 분석 시작과 함께 사라져 취소 버튼도 접근할 수 없던 경로는 실제 progress panel로 옮겼다. source check, persistence schema, Worker API, Candidate Ledger와 유료 AI 실행 순서는 바꾸지 않았다.
+- 실제 `D:\\opencode\\StreamSaver\\downloads\\2026 07 17 - 음식 토크[KzAW3yow80Q].mp4`를 로컬 앱에 연결했다. preflight가 02:15:14·476 MB·MP4로 완료됐고, 00:00:00부터 02:15:14까지 정확히 6개의 30분/끝 눈금, 화면·오디오 준비, 선택형 채팅, 분석 시작 버튼을 렌더링했다. 최대화 2,552×1,308 화면에서 두 pane은 각각 759×468px로 폭·높이가 일치했고 CTA는 첫 viewport 안에 있었으며 가로 overflow와 warning/error 로그는 0개였다.
+- production CSS를 사용한 반응형 검증에서 760px은 두 pane을 단일 열로 전환하면서 세 단계·전체 시각 라벨을 유지했고, 620px은 분석 단계와 신호 카드를 한 열로 바꾸고 시간 라벨을 시작/끝 두 개로 줄였다. 두 폭 모두 가로 overflow가 없었다. 강제 색상 모드에는 pane·시간축·단계·신호의 명시적 경계와 Highlight 점·선 fallback을 유지한다.
+- 최종 release gate는 strict TypeScript, ESLint warning 0, 73개 테스트 파일 784개 테스트, production Vite build, Wrangler dry-run을 통과했다. main JS는 634.23 kB(183.53 kB gzip), CSS는 102.62 kB(17.73 kB gzip), 변경하지 않은 Worker upload는 213.12 KiB(41.58 KiB gzip)다. 정적 Pages commit·push·deploy는 프로젝트 승인 규칙에 따라 사용자 승인 전에는 실행하지 않는다.
+
 ## 2026-07-22 `0.3.41` 분산 맥락 탐색과 최종 후보 공개 타임라인
 
 - Adobe Premiere의 time ruler·marker detail, vis-timeline의 grouped range/point track, Chrome Performance의 overview→selection→detail, DaVinci Resolve의 overview/detail 분리를 비교한 뒤 `docs/TIMELINE_EDITOR_UX_PLAN_2026-07-22.md`를 먼저 작성·검토했다. 장식용 파랑 선을 제거하고 하나의 source-time 축 위에 시간 눈금, 잠재 신호, 탐색 셀, 의미별 주제 범위, 의미 단서, 최종 후보를 분리했다.
