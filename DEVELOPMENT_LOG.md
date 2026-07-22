@@ -10,6 +10,7 @@
 - roster·protocol·prompt·client·provider·Worker 단위 회귀 105개가 먼저 통과했다. 최종 release gate는 strict TypeScript, ESLint warning 0, 71 test files / 759 tests, production Vite build, Wrangler dry-run을 모두 통과했다. 메인 번들은 615.51 kB (178.01 kB gzip), CSS는 84.99 kB, Worker upload은 204.87 KiB (39.58 KiB gzip)다.
 - 기존 Cloudflare `GEMINI_API_KEY` 값은 준비 검사에서 유효하지 않았다. Google Cloud의 세 번째 `Eurekasong` 프로젝트에서 `사용 가능`으로 표시된 키만 값 노출 없이 `gemini-3.6-flash` 최소 호출 200을 확인했고, 이 키만 Cloudflare Secret으로 교체했다. AI Studio에 보이던 나머지 두 키는 401이어서 사용하지 않았다.
 - 잠시 Gemini를 production primary로 올린 10초 canonical WAV smoke에서 후보 화면·오디오 해석과 방송 대사 전사가 모두 HTTP 200, `gemini-3.6-flash`, fallback `false`, 한국어 출력으로 통과했다. 최종 Worker `82a60039-b605-464a-9dd1-fe640c1f9b0a`는 평상시 기본값을 Qwen/Qwen/Qwen으로 복구했고, 두 Gemini 역할 readiness는 모두 `true`다.
+- 기능 커밋 `abe660d`를 `main`에 push했고 GitHub Pages workflow `29910707853`의 check·build·deploy가 모두 성공했다. 공개 페이지와 `index-DBxHzkcF.js`, `index-CQgw0N11.css`는 HTTP 200을 반환했고, 브라우저에서 `Ex Clipper`, `클립 분석 AI`, `v0.3.38`, 저장된 분석 2개를 렌더링하며 warning/error log 0개를 확인했다.
 
 ## 2026-07-22 `0.3.37` truthful context recovery and coverage-aware timeline
 
