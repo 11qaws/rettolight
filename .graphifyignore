@@ -1,0 +1,6 @@
+# Local media fixtures and one-off repair helpers are not part of the product graph.
+.qa/
+add_handler.py
+fix*.cjs
+fix_*.py
+refactor1.py

@@ -1,6 +1,7 @@
 import type { BroadcastContextTranscriptionChunk } from "./broadcastContextSamplingPlan";
 import {
   BROADCAST_TRANSCRIPT_QWEN_SCHEMA_VERSION,
+  MAX_BROADCAST_TRANSCRIPT_QWEN_DURATION_MS,
   isBroadcastTranscriptModelId,
   type BroadcastTranscriptQwenResult,
 } from "./broadcastTranscriptQwen";
@@ -129,8 +130,11 @@ function inputIssue(
     if (chunk.sourceEndMs > sourceDurationMs) {
       return `${ordinal}번째 대사 구간이 원본 영상 끝을 넘어가요.`;
     }
-    if (chunk.sourceEndMs - chunk.sourceStartMs > 210_000) {
-      return `${ordinal}번째 대사 구간이 3분 30초 안전 길이를 넘었어요.`;
+    if (
+      chunk.sourceEndMs - chunk.sourceStartMs >
+      MAX_BROADCAST_TRANSCRIPT_QWEN_DURATION_MS
+    ) {
+      return `${ordinal}번째 대사 구간이 90초 안전 길이를 넘었어요.`;
     }
     ids.add(chunk.chunkId);
     previousEndMs = chunk.sourceEndMs;

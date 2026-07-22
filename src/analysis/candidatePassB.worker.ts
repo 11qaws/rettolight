@@ -53,6 +53,7 @@ import {
   type CandidatePassBWorkerResponse,
   type CandidatePassBWorkerResponsePayload,
 } from "./candidatePassBWorkerProtocol";
+import { isCandidatePassBCastRosterId } from "./participantRoster";
 
 declare const self: DedicatedWorkerGlobalScope;
 
@@ -232,7 +233,15 @@ function isValidTarget(
   if (
     !isRecord(value) ||
     (!hasExactKeys(value, ["candidateId", "startMs", "endMs"]) &&
-      !hasExactKeys(value, ["candidateId", "startMs", "endMs", "videoFrames"]))
+      !hasExactKeys(value, ["candidateId", "startMs", "endMs", "videoFrames"]) &&
+      !hasExactKeys(value, ["candidateId", "startMs", "endMs", "castRosterId"]) &&
+      !hasExactKeys(value, [
+        "candidateId",
+        "startMs",
+        "endMs",
+        "videoFrames",
+        "castRosterId",
+      ]))
   ) {
     return false;
   }
@@ -251,6 +260,12 @@ function isValidTarget(
     frame.dataBase64.length > 0 &&
     frame.dataBase64.length <= MAX_CANDIDATE_PASS_B_VIDEO_FRAME_BASE64_LENGTH
   )) {
+    return false;
+  }
+  if (
+    "castRosterId" in value &&
+    !isCandidatePassBCastRosterId(value.castRosterId)
+  ) {
     return false;
   }
   return (
@@ -628,6 +643,7 @@ async function analyzeCandidateWithRemoteAi(
         base64Wav,
         target.endMs - target.startMs,
         target.videoFrames ?? [],
+        target.castRosterId ?? null,
       ),
     );
 
@@ -705,6 +721,7 @@ async function analyzeCandidateWithRemoteAi(
     const parsed = extractCandidatePassBGeminiResponse(
       responsePayload,
       target.endMs - target.startMs,
+      target.castRosterId ?? null,
     );
     if (!parsed.ok) {
       throw new ProxyWorkerFailure("PROXY_INVALID_RESPONSE");

@@ -2,10 +2,12 @@ import type { CandidatePassBEvidence } from "../analysis/candidatePassB";
 import {
   CANDIDATE_PASS_B_GEMINI_MODEL_ID,
   CANDIDATE_PASS_B_GEMINI_MODEL_REVISION,
+  CANDIDATE_PASS_B_PREVIOUS_GEMINI_MODEL_REVISION,
   CANDIDATE_PASS_B_LEGACY_GEMINI_MODEL_ID,
   CANDIDATE_PASS_B_LEGACY_GEMINI_MODEL_REVISION,
   CANDIDATE_PASS_B_QWEN_MODEL_ID,
   CANDIDATE_PASS_B_QWEN_MODEL_REVISION,
+  CANDIDATE_PASS_B_PREVIOUS_QWEN_MODEL_REVISION,
   MAX_CANDIDATE_PASS_B_VIDEO_FRAME_BASE64_LENGTH,
   type CandidatePassBParticipantAttribution,
   type CandidatePassBVideoFrame,
@@ -40,7 +42,9 @@ export interface StoredCandidatePassBModelIdentity {
     | typeof CANDIDATE_PASS_B_LEGACY_GEMINI_MODEL_ID;
   readonly revision:
     | typeof CANDIDATE_PASS_B_QWEN_MODEL_REVISION
+    | typeof CANDIDATE_PASS_B_PREVIOUS_QWEN_MODEL_REVISION
     | typeof CANDIDATE_PASS_B_GEMINI_MODEL_REVISION
+    | typeof CANDIDATE_PASS_B_PREVIOUS_GEMINI_MODEL_REVISION
     | typeof CANDIDATE_PASS_B_LEGACY_GEMINI_MODEL_REVISION;
 }
 
@@ -162,9 +166,11 @@ function isStoredModelIdentity(
     isRecord(value) &&
     Object.keys(value).sort().join(",") === "id,revision" &&
     ((value.id === CANDIDATE_PASS_B_QWEN_MODEL_ID &&
-      value.revision === CANDIDATE_PASS_B_QWEN_MODEL_REVISION) ||
+      (value.revision === CANDIDATE_PASS_B_QWEN_MODEL_REVISION ||
+        value.revision === CANDIDATE_PASS_B_PREVIOUS_QWEN_MODEL_REVISION)) ||
       (value.id === CANDIDATE_PASS_B_GEMINI_MODEL_ID &&
-        value.revision === CANDIDATE_PASS_B_GEMINI_MODEL_REVISION) ||
+        (value.revision === CANDIDATE_PASS_B_GEMINI_MODEL_REVISION ||
+          value.revision === CANDIDATE_PASS_B_PREVIOUS_GEMINI_MODEL_REVISION)) ||
       (value.id === CANDIDATE_PASS_B_LEGACY_GEMINI_MODEL_ID &&
         value.revision === CANDIDATE_PASS_B_LEGACY_GEMINI_MODEL_REVISION))
   );

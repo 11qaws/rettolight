@@ -11,6 +11,7 @@ import {
   extractCandidatePassBGeminiResponse,
   parseCandidatePassBGeminiAnalysis,
 } from "./candidatePassBGemini";
+import { DEFAULT_CANDIDATE_PASS_B_CAST_ROSTER_ID } from "./participantRoster";
 
 function validAnalysis() {
   return {
@@ -134,6 +135,57 @@ describe("candidatePassBGemini", () => {
     expect(buildCandidatePassBProxyRequestBody("UklGRg==", 45_000, frames)).toMatchObject({
       videoFrames: frames,
     });
+  });
+
+  it("uses only the server-known closed roster for high-confidence avatar matches", () => {
+    const frames = [
+      { timestampMs: 1_200, mimeType: "image/jpeg" as const, dataBase64: "aGVsbG8=" },
+      { timestampMs: 22_000, mimeType: "image/jpeg" as const, dataBase64: "d29ybGQ=" },
+    ];
+    const request = buildCandidatePassBGeminiRequestBody(
+      "UklGRg==",
+      45_000,
+      frames,
+      DEFAULT_CANDIDATE_PASS_B_CAST_ROSTER_ID,
+    );
+    expect(request.contents[0].parts[0].text).toContain("등록 출연진 기준 자료");
+    expect(request.contents[0].parts[0].text).toContain("아모레또");
+    expect(request.contents[0].parts[0].text).toContain("두 가지 이상");
+    expect(
+      buildCandidatePassBProxyRequestBody(
+        "UklGRg==",
+        45_000,
+        frames,
+        DEFAULT_CANDIDATE_PASS_B_CAST_ROSTER_ID,
+      ),
+    ).toMatchObject({
+      castRosterId: DEFAULT_CANDIDATE_PASS_B_CAST_ROSTER_ID,
+    });
+
+    const analysis = validAnalysis();
+    analysis.identifiedParticipants = [{
+      displayName: "아모레또",
+      role: "unknown",
+      evidenceBasis: "provided-cast-reference",
+      evidenceKo: "긴 은분홍색 머리와 고양이형 귀가 같은 화면에서 함께 확인돼요.",
+      confidence: 0.93,
+      relativeTimestampMs: 1_200,
+    }];
+    const grounded = parseCandidatePassBGeminiAnalysis(
+      analysis,
+      45_000,
+      DEFAULT_CANDIDATE_PASS_B_CAST_ROSTER_ID,
+    );
+    expect(grounded.ok && grounded.analysis.insight.identifiedParticipants).toEqual([
+      expect.objectContaining({
+        displayName: "아모레또",
+        role: "guest",
+        evidenceBasis: "provided-cast-reference",
+        confidence: 0.93,
+      }),
+    ]);
+    const unregistered = parseCandidatePassBGeminiAnalysis(analysis, 45_000);
+    expect(unregistered.ok && unregistered.analysis.insight.identifiedParticipants).toEqual([]);
   });
 
   it("removes invented screen and game claims when no representative frame survived", () => {

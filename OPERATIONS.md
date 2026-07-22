@@ -2,10 +2,15 @@
 
 ## 2026-07-22 release notes
 
+- `0.3.35`: production transcript transport is limited to the live-proven 90-second Qwen Omni envelope. The 12-hour fragmented plan admits at most 240 requests while keeping the same `$0.42` duration budget. Each successful cell is checkpointed immediately; reload and transient failure recovery subtract already-covered source ranges and request only missing ranges, including compatible 210-second cells saved by `0.3.34`.
+- Candidate frame capture opens at most two browser decoders at once, while the existing two-request AI pool remains parallel. A missing frame still downgrades to the audio-only projection rather than inventing screen context.
+- Candidate perception may send only the fixed `chzzk-video-13996057-v1` roster ID, and only for a filename carrying replay `13996057` or the reviewed `교환학생/합격생/장학생` title. The Worker expands six reviewed public VTuber-avatar descriptions server-side. `provided-cast-reference` requires two distinct same-frame traits and confidence `>= 0.88`; arbitrary roster text, unrelated sources, unknown names, low-confidence matches, and voice resemblance fail closed. Identity remains display-only evidence.
+- Routing policy is `1.8.0`; candidate route is `qwen3.5-omni-flash_then_gemini-3.6-flash_bounded-cast-v4`. Rollback readers retain the preceding Qwen/Gemini revisions and v2/v3 route manifests without relabeling paid results.
 - `0.3.34`: candidate audio+frame fallback and opt-in Gemini transcript routing use GA `gemini-3.6-flash`; production remains Qwen-primary. Routing policy is `1.7.0`, while the broadcast-context cache fence intentionally remains `1.6.0`.
-- Before enabling Gemini as primary, refresh the `GEMINI_API_KEY` Worker Secret and require a real candidate request to return model ID `gemini-3.6-flash`, revision `gemini-3.6-flash-grounded-frames-v3-2026-07-22`, and a grounded food-talk description. A binding name in `wrangler secret list` is not sufficient readiness evidence.
+- Before enabling Gemini as primary, refresh the `GEMINI_API_KEY` Worker Secret and require a real candidate request to return model ID `gemini-3.6-flash`, revision `gemini-3.6-flash-grounded-frames-cast-v4-2026-07-22`, and a grounded food-talk description. A binding name in `wrangler secret list` is not sufficient readiness evidence.
 - Rollback and recovery must continue accepting the exact Gemini 3.5 model/revision pair and v2 route manifest. Never rewrite a recovered paid result to the 3.6 identity or invalidate Qwen whole-context results for this candidate-only change.
 - Candidate fallback matrix: `timeout | unavailable | rate-limited | auth | model-unavailable | response-format | invalid-response` may switch provider once; `invalid-argument | rejected` must fail without a second paid request. Long-audio transcription remains single-provider because timeout billing is ambiguous at broadcast scale.
+- Compressed-context tier matrix: `timeout | unavailable | rate-limited | model-unavailable | response-format | invalid-response` may switch once between Qwen 3.7 and 3.6; `auth | invalid-argument | rejected` must stop because the credential or shared contract will fail on the alternate tier too.
 - A successful switch exposes `X-ExClipper-Fallback-Reason`. If both providers fail, expose only the bounded primary/fallback failure classes. Never expose upstream body text, keys, endpoint credentials, audio, frames, or transcript in diagnostics.
 - Context `reject` is an AI priority projection, not deletion. Release smoke must confirm the canonical candidate count and editor review/boundary state remain stable while the paid detail queue excludes unapproved `deprioritized` and explicit-music candidates.
 
@@ -20,8 +25,8 @@
 - Successful candidate responses expose only public model ID, public revision, and whether fallback was used. CORS exposes those three headers; no credential, endpoint, workspace ID, provider body, transcript, or source metadata is included.
 - Candidate result persistence schema is `1.3.0`. Rollback readers must continue accepting 1.0–1.2 records without `modelByCandidateId`; forward readers reject mismatched model/revision pairs.
 - Routing policy `1.3.0` adds compact, grounded topic chapters to the Qwen whole-context response. A new run must not reuse an older context result that reports no topic support under the earlier policy.
-- Candidate frame sampling waits for decoded data on a temporarily attached, invisible media element. If the request still contains zero frames, both client and Worker reduce the result to audio-only evidence and discard provider-authored screen, game, participant, and causal claims.
-- Broadcast transcript preflight reports the exact violated invariant. The 02:15:14.817 food-talk source is a valid 39-chunk plan; if it fails before fetch, investigate the newly reported invariant instead of rotating API keys.
+- Candidate frame sampling waits for decoded data on temporarily attached, invisible media elements and limits the capture pool to two decoders. If the request still contains zero frames, both client and Worker reduce the result to audio-only evidence and discard provider-authored screen, game, participant, and causal claims.
+- Broadcast transcript preflight reports the exact violated invariant. The 02:15:14.817 food-talk source is a valid 91-chunk plan under the verified 90-second transport; if it fails before fetch, investigate the newly reported invariant instead of rotating API keys.
 - Timeline release smoke at a maximized width must verify 30-minute ticks, numbered/staggered candidates, topic bands, semantic-lead markers, the score landscape, and a wider independently scrolling evidence pane.
 
 - Desktop-first workspace: verify the source summary and the primary analysis action are visible in the first viewport at a maximized browser width. At widths below 840px the columns collapse to one column.
@@ -32,7 +37,7 @@
 - Pass B evidence and AI insight snapshots are stored by analysis run in a dedicated IndexedDB object store. Recovery filters them to the recovered candidate IDs, and a new run epoch prevents late writes from an older source contaminating the current result.
 - Fixed non-vocal program-edge bursts (opening, ending, and break loops) are rejected by default. An edge segment can still survive when it has a distinctive vocal/dialogue anchor, while the central UI presents the automatic phase and candidate list without promotional copy.
 
-- 문서 버전: `0.3.34`
+- 문서 버전: `0.3.35`
 - 기준일: 2026-07-22 (Asia/Seoul)
 - 대상: GitHub Pages에서 실행되는 1인용 AI 편집 어시스턴트
 - 함께 읽을 문서: `PRODUCT_PLAN.md`, `STATE_LIFECYCLE.md`, `DEVELOPMENT_LOG.md`
@@ -308,7 +313,7 @@ CI는 정상 경로만 확인하지 않는다. 다음 failure injection이 relea
 - IndexedDB 새 프로젝트 저장과 새로고침 복원이 된다.
 - 모델 manifest 실패 시 앱 전체가 멈추지 않고 명시적 폴백이 나온다.
 - 기본 export JSON을 생성하고 다시 가져올 수 있다.
-- 브라우저 개발자 도구에서 정밀 분석 요청이 고정 `{ audioBase64, candidateDurationMs }` 계약만 사용하는지 확인한다.
+- 브라우저 개발자 도구에서 정밀 분석 요청이 고정 `{ audioBase64, candidateDurationMs, videoFrames?, castRosterId? }` 계약만 사용하고, roster 값이 닫힌 ID인지 확인한다.
 
 ## 8. 롤백과 호환성
 
@@ -517,7 +522,7 @@ type DiagnosticEvent = {
 - 1차 전체 맥락 lead가 넓으면 예산 안에서 1분 전사 칸으로 다시 나누고, parent lead당 최대 3개의 서로 다른 사건을 병렬 Qwen 문맥 호출로 분리한다. 최종 60초는 생성된 근거 대사와 가장 잘 맞는 칸을 선택한다.
 - 전체 방송이 게임이고 근거가 흔한 추락·사망·길 찾기·자원·제작·건축 진행뿐이면 모델의 극적인 점수와 무관하게 카드 승격을 막는다. 정확한 사과, 희귀 성취, 치명적 버그, 사회적 충돌, 장기 설정 회수는 예외다.
 - YouTube Android 플레이어와 timedtext는 고정 host, ID allowlist, 응답 크기 제한, 한국어 트랙 검증을 통과해야 사용한다. 403/429/형식 오류는 한 번의 best-effort 실패로 끝내고 Qwen 전사로 이어간다.
-- `/v1/broadcast-transcript`는 한 요청 210초 이하 WAV와 전체 실행 64개 chunk를 제한한다. 계획기는 12시간 방송을 모든 10분 셀에서 고르게 표본화하고 사건 주변을 보강하되 ASR 예상비를 최대 `$0.42`로 제한한다.
+- `/v1/broadcast-transcript`는 실운영 성공을 확인한 한 요청 90초 이하 WAV와 전체 실행 최대 240개 chunk를 제한한다. 계획기는 12시간 방송을 모든 10분 셀에서 고르게 표본화하고 사건 주변을 보강하되 ASR 예상비를 최대 `$0.42`로 제한한다. 60초·90초는 성공했고 120초·180초는 edge에서 구조화 응답 전 실패했으므로 다시 상향하려면 production probe와 회귀 근거가 필요하다.
 - `/v1/broadcast-context`는 원본 영상 대신 시간순 챕터와 최대 12개 후보의 제한된 근거만 받는다. Qwen 호출에는 `enable_thinking=true`, `thinking_budget=4096`, JSON 응답 형식을 고정하고 최대 90초 upstream 제한과 strict schema 검증을 적용한다.
 - 유료 transcript, context, 의미 후보 재확인 결과는 각각 입력 서명과 model revision으로 저장하고 write/readback 뒤에만 재사용한다. 새로고침 때 같은 서명의 성공 결과가 있으면 호출하지 않으며, 실패·취소 결과는 성공 캐시로 승격하지 않는다.
 - 12시간·후보 12개·어려운 후보 3개 기준 정책 상한은 약 `$0.997`다. 공급자 가격이 바뀌면 `analysisBudgetPolicy` 테스트와 화면 예상비를 함께 갱신하기 전에는 배포하지 않는다.
@@ -525,7 +530,7 @@ type DiagnosticEvent = {
 
 ## 16. `0.3.30` 출연자 근거와 문맥 응답 복구
 
-- 후보 지각 모델은 기존 오디오·대표 화면 요청 안에서만 출연자 이름을 추출한다. 화면 이름, 실제 호명, 명시적으로 제공된 출연진 기준 중 하나가 없으면 빈 목록이며, 아바타 외형이나 목소리 유사성은 근거로 허용하지 않는다.
+- 후보 지각 모델은 기존 오디오·대표 화면 요청 안에서만 출연자 이름을 추출한다. 화면 이름, 실제 호명, 또는 서버가 확장한 닫힌 출연진 기준 중 하나가 없으면 빈 목록이다. 일반적인 아바타·얼굴·목소리 유사성은 금지하며, 등록 기준도 같은 화면의 서로 다른 특징 두 가지 이상과 0.88 이상 확신이 없으면 버린다.
 - 출연자 이름은 근거 종류·한국어 근거·확신도·후보 상대 시각과 함께 Candidate Pass B schema `1.2.0`에 저장한다. 이 정보는 카드 표시 전용이며 점수·선택·승인·클립 경계를 변경하지 않는다.
 - 1.0/1.1 저장 결과와 구형 공급자 응답은 빈 출연자 목록으로 읽는다. 새 모델 revision 결과를 과거 결과로 가장하지 않고, 입력 서명과 revision이 달라지면 별도 실행으로 저장한다.
 - 전체 문맥 응답의 의미 챕터가 잘못된 필드, 존재하지 않는 chapter ID, 겹치는 범위, coverage gap 횡단을 포함하면 엄격 호출은 실패한다. 이미 비용을 낸 복구 경로에서는 각 항목을 독립 검증해 정상이고 시간순인 항목만 남긴다.

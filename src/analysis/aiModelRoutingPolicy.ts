@@ -1,4 +1,10 @@
-export const AI_MODEL_ROUTING_POLICY_VERSION = "1.7.0" as const;
+import {
+  createBroadcastContextSamplingPlan,
+  createBroadcastContextTranscriptionChunks,
+} from "./broadcastContextSamplingPlan";
+import { MAX_BROADCAST_TRANSCRIPT_WORKER_CHUNKS } from "./broadcastTranscriptWorkerProtocol";
+
+export const AI_MODEL_ROUTING_POLICY_VERSION = "1.8.0" as const;
 /** Candidate fallback upgrades must not invalidate already-paid Qwen context results. */
 export const AI_BROADCAST_CONTEXT_ROUTING_REVISION = "1.6.0" as const;
 
@@ -46,8 +52,7 @@ const MAX_SOURCE_DURATION_MS = 12 * 60 * 60_000;
 const MAX_DETAIL_CANDIDATES = 12;
 const MAX_PRO_ADJUDICATION_CANDIDATES = 3;
 const QWEN_VISUAL_VIDEO_LIMIT_MS = 2 * 60 * 60_000;
-const QWEN_ASR_BILLABLE_COVERAGE_MS = 12_000_000;
-const QWEN_ASR_SAFE_CHUNK_MS = 210_000;
+const MAX_EVENT_TRANSCRIPT_REQUEST_HEADROOM = 24;
 
 /**
  * Creates a bounded role-based plan; it does not make paid calls. Qwen Omni
@@ -79,10 +84,20 @@ export function createAiAnalysisRoutingPlan(
     MAX_PRO_ADJUDICATION_CANDIDATES,
   );
   const visualChunks = Math.ceil(sourceDurationMs / QWEN_VISUAL_VIDEO_LIMIT_MS);
-  const transcriptionChunks = Math.ceil(
-    Math.min(sourceDurationMs, QWEN_ASR_BILLABLE_COVERAGE_MS) /
-      QWEN_ASR_SAFE_CHUNK_MS,
+  const baselineTranscriptPlan = createBroadcastContextSamplingPlan(
+    sourceDurationMs,
+    [],
   );
+  const baselineTranscriptChunks = createBroadcastContextTranscriptionChunks(
+    baselineTranscriptPlan.samplingWindows,
+  ).length;
+  const transcriptionChunks =
+    baselineTranscriptPlan.estimatedAudioCoverageRatio === 1
+      ? baselineTranscriptChunks
+      : Math.min(
+          MAX_BROADCAST_TRANSCRIPT_WORKER_CHUNKS,
+          baselineTranscriptChunks + MAX_EVENT_TRANSCRIPT_REQUEST_HEADROOM,
+        );
 
   return {
     policyVersion: AI_MODEL_ROUTING_POLICY_VERSION,

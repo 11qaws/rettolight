@@ -13,6 +13,7 @@ import {
   MAX_CANDIDATE_PASS_B_VIDEO_FRAMES,
   type CandidatePassBVideoFrame,
 } from "./candidatePassBWorkerProtocol";
+import type { CandidatePassBCastRosterId } from "./participantRoster";
 
 const MAX_BASE64_WAV_LENGTH = 8 * 1024 * 1024;
 
@@ -228,6 +229,7 @@ export function buildCandidatePassBQwenOmniRequestBody(
   audioBase64: string,
   candidateDurationMs: number,
   videoFrames: readonly CandidatePassBVideoFrame[] = [],
+  castRosterId: CandidatePassBCastRosterId | null = null,
 ): CandidatePassBQwenOmniRequestBody {
   if (
     typeof audioBase64 !== "string" ||
@@ -270,7 +272,7 @@ export function buildCandidatePassBQwenOmniRequestBody(
         ]),
         {
           type: "text",
-          text: `${buildCandidatePassBPrompt(candidateDurationMs, frames.length)}${qwenGroundingRules}\n한국어 설명에는 불필요한 중국어·일본어 문자를 섞지 말고 자연스러운 한국어만 사용하세요.${responseShape}`,
+          text: `${buildCandidatePassBPrompt(candidateDurationMs, frames.length, castRosterId)}${qwenGroundingRules}\n한국어 설명에는 불필요한 중국어·일본어 문자를 섞지 말고 자연스러운 한국어만 사용하세요.${responseShape}`,
         },
       ],
     }],
@@ -288,6 +290,7 @@ export function buildCandidatePassBQwenOmniRequestBody(
 export function extractCandidatePassBQwenOmniSseResponse(
   value: string,
   candidateDurationMs: number,
+  castRosterId: CandidatePassBCastRosterId | null = null,
 ): Record<string, unknown> | null {
   if (typeof value !== "string" || value.length === 0) return null;
   let text = "";
@@ -324,7 +327,11 @@ export function extractCandidatePassBQwenOmniSseResponse(
       content: { parts: [{ text: normalized }] },
     }],
   };
-  return extractCandidatePassBGeminiResponse(envelope, candidateDurationMs).ok
+  return extractCandidatePassBGeminiResponse(
+    envelope,
+    candidateDurationMs,
+    castRosterId,
+  ).ok
     ? envelope
     : null;
 }

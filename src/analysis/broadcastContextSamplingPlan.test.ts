@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   BROADCAST_CONTEXT_ASR_BUDGET_USD,
+  QWEN_ASR_SAFE_CHUNK_DURATION_MS,
   createBroadcastContextSamplingPlan,
   createBroadcastContextTranscriptionChunks,
+  subtractBroadcastContextCoveredRanges,
 } from "./broadcastContextSamplingPlan";
 
 const HOUR_MS = 60 * 60_000;
@@ -65,9 +67,42 @@ describe("broadcastContextSamplingPlan", () => {
     expect(chunks.length).toBeGreaterThan(1);
     expect(chunks[0]).toMatchObject({ chunkId: "asr-001", sourceStartMs: 0 });
     expect(chunks.at(-1)?.sourceEndMs).toBe(2 * HOUR_MS);
-    expect(chunks.every((chunk) => chunk.sourceEndMs - chunk.sourceStartMs <= 210_000)).toBe(true);
+    expect(
+      chunks.every(
+        (chunk) =>
+          chunk.sourceEndMs - chunk.sourceStartMs <=
+          QWEN_ASR_SAFE_CHUNK_DURATION_MS,
+      ),
+    ).toBe(true);
     expect(
       chunks.reduce((sum, chunk) => sum + chunk.sourceEndMs - chunk.sourceStartMs, 0),
     ).toBe(plan.sampledAudioMs);
+  });
+
+  it("keeps a worst-case twelve-hour plan inside the Worker envelope", () => {
+    const durationMs = 12 * HOUR_MS;
+    const eventPeaks = Array.from(
+      { length: 12 },
+      (_, index) => Math.round(((index + 0.5) / 12) * durationMs),
+    );
+    const plan = createBroadcastContextSamplingPlan(durationMs, eventPeaks);
+    const chunks = createBroadcastContextTranscriptionChunks(plan.samplingWindows);
+
+    expect(chunks.length).toBeLessThanOrEqual(240);
+    expect(plan.estimatedAsrCostUsd).toBeLessThanOrEqual(
+      BROADCAST_CONTEXT_ASR_BUDGET_USD + 1e-9,
+    );
+  });
+
+  it("retries only source ranges missing from a paid transcript checkpoint", () => {
+    expect(
+      subtractBroadcastContextCoveredRanges(
+        [{ startMs: 0, endMs: 210_000, kind: "uniform" }],
+        [
+          { startMs: 0, endMs: 90_000 },
+          { startMs: 180_000, endMs: 210_000 },
+        ],
+      ),
+    ).toEqual([{ startMs: 90_000, endMs: 180_000, kind: "uniform" }]);
   });
 });

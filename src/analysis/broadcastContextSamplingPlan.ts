@@ -1,11 +1,13 @@
-export const BROADCAST_CONTEXT_SAMPLING_PLAN_VERSION = "1.1.0" as const;
+export const BROADCAST_CONTEXT_SAMPLING_PLAN_VERSION = "1.2.0" as const;
 export const QWEN_ASR_FILETRANS_USD_PER_SECOND = 0.000035;
 export const BROADCAST_CONTEXT_ASR_BUDGET_USD = 0.42;
 export const BROADCAST_CONTEXT_TOTAL_BUDGET_USD = 1;
-// Qwen3-ASR-Flash accepts at most five minutes and 10 MB per request. A
-// 16 kHz mono PCM16 WAV grows by 4/3 when encoded as Base64, so 210 seconds
-// leaves useful headroom for the JSON envelope and avoids a boundary failure.
-export const QWEN_ASR_SAFE_CHUNK_DURATION_MS = 210_000;
+// Production probes against the active Qwen Omni route succeeded at 60 and
+// 90 seconds, while 120 and 180 seconds failed at the edge before a structured
+// response was produced. Keep the browser-to-Worker transport inside the
+// verified envelope; billing is duration-based, so smaller chunks do not raise
+// the planned ASR cost.
+export const QWEN_ASR_SAFE_CHUNK_DURATION_MS = 90_000;
 
 const MAX_SOURCE_DURATION_MS = 12 * 60 * 60_000;
 const CHAPTER_CELL_MS = 10 * 60_000;
@@ -160,6 +162,41 @@ export function createBroadcastContextTranscriptionChunks(
     }
   }
   return chunks;
+}
+
+/** Returns only sampled source ranges not already represented by a checkpoint. */
+export function subtractBroadcastContextCoveredRanges(
+  samplingWindows: readonly BroadcastContextSamplingWindow[],
+  coveredRanges: readonly { readonly startMs: number; readonly endMs: number }[],
+): readonly BroadcastContextSamplingWindow[] {
+  const orderedCoverage = [...coveredRanges].sort(
+    (left, right) => left.startMs - right.startMs || left.endMs - right.endMs,
+  );
+  const uncovered: BroadcastContextSamplingWindow[] = [];
+  for (const window of samplingWindows) {
+    let cursorMs = window.startMs;
+    for (const covered of orderedCoverage) {
+      if (covered.endMs <= cursorMs) continue;
+      if (covered.startMs >= window.endMs) break;
+      if (covered.startMs > cursorMs) {
+        uncovered.push({
+          startMs: cursorMs,
+          endMs: Math.min(window.endMs, covered.startMs),
+          kind: window.kind,
+        });
+      }
+      cursorMs = Math.max(cursorMs, Math.min(window.endMs, covered.endMs));
+      if (cursorMs >= window.endMs) break;
+    }
+    if (cursorMs < window.endMs) {
+      uncovered.push({
+        startMs: cursorMs,
+        endMs: window.endMs,
+        kind: window.kind,
+      });
+    }
+  }
+  return uncovered;
 }
 
 function boundedEventPeaks(

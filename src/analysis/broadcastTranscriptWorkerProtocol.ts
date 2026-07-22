@@ -1,8 +1,11 @@
 import type { BroadcastContextTranscriptionChunk } from "./broadcastContextSamplingPlan";
 import type { BroadcastTranscriptQwenResult } from "./broadcastTranscriptQwen";
 
-export const BROADCAST_TRANSCRIPT_WORKER_VERSION = "1.0.0" as const;
-export const MAX_BROADCAST_TRANSCRIPT_WORKER_CHUNKS = 64;
+export const BROADCAST_TRANSCRIPT_WORKER_VERSION = "1.1.0" as const;
+// A 12-hour plan can contain up to 216 fragmented uniform chunks plus twelve
+// two-minute event windows (two 90-second requests each). Merging only lowers
+// this count, so 240 is a complete, bounded worst-case envelope.
+export const MAX_BROADCAST_TRANSCRIPT_WORKER_CHUNKS = 240;
 
 export interface BroadcastTranscriptWorkerIdentity {
   readonly taskId: string;

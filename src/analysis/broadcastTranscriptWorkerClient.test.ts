@@ -35,7 +35,7 @@ class FakeWorker {
 }
 
 describe("broadcastTranscriptWorkerClient", () => {
-  it("accepts the complete 2h15m food-talk plan as 39 bounded chunks", async () => {
+  it("accepts the complete 2h15m food-talk plan as 91 bounded chunks", async () => {
     const worker = new FakeWorker();
     const controller = new AbortController();
     const sourceDurationMs = 8_114_817;
@@ -50,7 +50,7 @@ describe("broadcastTranscriptWorkerClient", () => {
         workerFactory: () => worker,
       },
     );
-    expect(chunks).toHaveLength(39);
+    expect(chunks).toHaveLength(91);
     expect(worker.posted[0]).toMatchObject({
       type: "broadcast-transcript-analyze",
       sourceDurationMs,

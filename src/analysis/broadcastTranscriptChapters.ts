@@ -69,3 +69,52 @@ export function createBroadcastTranscriptChapters(
     };
   });
 }
+
+/**
+ * Combines already-paid chapter checkpoints with newly recovered ASR cells.
+ * Exact ranges are replaced by the newer cell; partial overlaps are rejected
+ * because they would make the source evidence ambiguous.
+ */
+export function mergeBroadcastTranscriptChapters(
+  existing: readonly BroadcastContextChapterInput[],
+  recovered: readonly BroadcastContextChapterInput[],
+  sourceDurationMs: number,
+  completeAudioCoverage: boolean,
+): readonly BroadcastContextChapterInput[] {
+  if (!Number.isSafeInteger(sourceDurationMs) || sourceDurationMs <= 0) {
+    throw new RangeError("Broadcast transcript source duration is invalid.");
+  }
+  const byRange = new Map<string, BroadcastContextChapterInput>();
+  for (const chapter of [...existing, ...recovered]) {
+    if (
+      !Number.isSafeInteger(chapter.startMs) ||
+      !Number.isSafeInteger(chapter.endMs) ||
+      chapter.startMs < 0 ||
+      chapter.endMs <= chapter.startMs ||
+      chapter.endMs > sourceDurationMs ||
+      typeof chapter.summaryKo !== "string" ||
+      chapter.summaryKo.trim().length === 0
+    ) {
+      throw new RangeError("Broadcast transcript checkpoint range is invalid.");
+    }
+    byRange.set(`${chapter.startMs}:${chapter.endMs}`, chapter);
+  }
+  const ordered = [...byRange.values()].sort(
+    (left, right) => left.startMs - right.startMs || left.endMs - right.endMs,
+  );
+  let previousEndMs = -1;
+  return ordered.map((chapter, index) => {
+    if (chapter.startMs < previousEndMs) {
+      throw new RangeError("Broadcast transcript checkpoints must not overlap.");
+    }
+    previousEndMs = chapter.endMs;
+    return {
+      ...chapter,
+      chapterId: `transcript-${String(index + 1).padStart(3, "0")}`,
+      evidenceMode: completeAudioCoverage
+        ? "complete-transcript"
+        : "sampled-audio-video",
+      evidenceCoverageRatio: 1,
+    };
+  });
+}

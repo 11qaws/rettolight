@@ -67,8 +67,12 @@ import {
 import {
   createBroadcastContextSamplingPlan,
   createBroadcastContextTranscriptionChunks,
+  subtractBroadcastContextCoveredRanges,
 } from "./analysis/broadcastContextSamplingPlan";
-import { createBroadcastTranscriptChapters } from "./analysis/broadcastTranscriptChapters";
+import {
+  createBroadcastTranscriptChapters,
+  mergeBroadcastTranscriptChapters,
+} from "./analysis/broadcastTranscriptChapters";
 import {
   parseBroadcastContextProxyResult,
   requestBroadcastContextDeepseek,
@@ -79,6 +83,9 @@ import {
 import type { BroadcastTranscriptWorkerProgress } from "./analysis/broadcastTranscriptWorkerProtocol";
 import {
   BROADCAST_TRANSCRIPT_ACTIVE_MODEL_REVISION,
+  BROADCAST_TRANSCRIPT_MIXED_CHECKPOINT_MODEL_REVISION,
+  BROADCAST_TRANSCRIPT_PREVIOUS_ACTIVE_MODEL_REVISION,
+  type BroadcastTranscriptQwenResult,
 } from "./analysis/broadcastTranscriptQwen";
 import {
   YOUTUBE_CAPTION_MODEL_REVISION,
@@ -94,6 +101,7 @@ import {
   isExplicitMusicOnlyCaption,
 } from "./analysis/captionCandidateEvidence";
 import { sampleCandidateVideoFrames } from "./analysis/candidateVideoFrames";
+import { candidatePassBCastRosterIdForSourceName } from "./analysis/participantRoster";
 import {
   mergeCandidatePassBEvidence,
   type CandidatePassBEvidenceById,
@@ -305,7 +313,7 @@ interface AudioAnalysisOutcome {
   readonly coverageComplete: boolean;
 }
 
-const APP_VERSION = "0.3.34";
+const APP_VERSION = "0.3.35";
 const PERSISTENCE_SCHEMA_VERSION = "0.3.0";
 const SIGNAL_ENGINE_VERSION =
   "streamer-reaction-fast-pass-v5-chat-fallback-music-confirmation";
@@ -3135,30 +3143,40 @@ function App() {
       string,
       Awaited<ReturnType<typeof sampleCandidateVideoFrames>>
     >();
-    await Promise.all(
-      targets.map(async (target) => {
-        const frames = await sampleCandidateVideoFrames(
-          sourceFile,
-          target.decodeStartMs,
-          target.decodeEndMs,
-          { signal: controller.signal, focusMs: target.reactionPeakMs },
-        );
-        videoFramesByCandidateId.set(target.candidateId, frames);
-        if (!controller.signal.aborted && isMounted.current) {
-          const relativePeakMs = target.reactionPeakMs - target.decodeStartMs;
-          const timelineFrame = [...frames].sort(
-            (left, right) =>
-              Math.abs(left.timestampMs - relativePeakMs) -
-              Math.abs(right.timestampMs - relativePeakMs),
-          )[0];
-          candidateTimelineFramesRef.current = {
-            ...candidateTimelineFramesRef.current,
-            [target.candidateId]: timelineFrame === undefined ? [] : [timelineFrame],
-          };
-          setCandidateTimelineFramesById(candidateTimelineFramesRef.current);
-        }
-      }),
-    );
+    const MAX_PARALLEL_FRAME_SAMPLERS = 2;
+    for (
+      let batchStart = 0;
+      batchStart < targets.length;
+      batchStart += MAX_PARALLEL_FRAME_SAMPLERS
+    ) {
+      await Promise.all(
+        targets
+          .slice(batchStart, batchStart + MAX_PARALLEL_FRAME_SAMPLERS)
+          .map(async (target) => {
+            const frames = await sampleCandidateVideoFrames(
+              sourceFile,
+              target.decodeStartMs,
+              target.decodeEndMs,
+              { signal: controller.signal, focusMs: target.reactionPeakMs },
+            );
+            videoFramesByCandidateId.set(target.candidateId, frames);
+            if (!controller.signal.aborted && isMounted.current) {
+              const relativePeakMs = target.reactionPeakMs - target.decodeStartMs;
+              const timelineFrame = [...frames].sort(
+                (left, right) =>
+                  Math.abs(left.timestampMs - relativePeakMs) -
+                  Math.abs(right.timestampMs - relativePeakMs),
+              )[0];
+              candidateTimelineFramesRef.current = {
+                ...candidateTimelineFramesRef.current,
+                [target.candidateId]:
+                  timelineFrame === undefined ? [] : [timelineFrame],
+              };
+              setCandidateTimelineFramesById(candidateTimelineFramesRef.current);
+            }
+          }),
+      );
+    }
     if (controller.signal.aborted) {
       candidatePassBStartPendingRef.current = false;
       setCandidatePassBStartPending(false);
@@ -3234,6 +3252,7 @@ function App() {
       operationEpoch === candidatePassBOperationEpoch.current &&
       candidatePassBIdentity.current?.passBRunId === identity.passBRunId;
     const targetById = new Map(targets.map((target) => [target.candidateId, target]));
+    const castRosterId = candidatePassBCastRosterIdForSourceName(sourceFile.name);
     const applyCurrentWorkerEvent = (
       event: CandidatePassBWorkerEventPayload,
     ): boolean => {
@@ -3257,6 +3276,7 @@ function App() {
           startMs: target.decodeStartMs,
           endMs: target.decodeEndMs,
           videoFrames: videoFramesByCandidateId.get(target.candidateId) ?? [],
+          ...(castRosterId === null ? {} : { castRosterId }),
         })),
         signal: controller.signal,
         onModelProgress: (progress) => {
@@ -5216,39 +5236,12 @@ function App() {
       const store = getResultStore();
       const youtubeVideoId = youtubeVideoIdFromSourceName(sourceFile.name);
       const saved = await store.getBroadcastContextSession(runId);
-      if (
+      const matchedSaved =
         saved !== null &&
         saved.inputSignature === inputSignature &&
-        (saved.modelRevision === BROADCAST_TRANSCRIPT_ACTIVE_MODEL_REVISION ||
-          (youtubeVideoId !== null &&
-            saved.modelRevision === YOUTUBE_CAPTION_MODEL_REVISION)) &&
         saved.sourceDurationMs === sourceDurationMs
-      ) {
-        if (
-          youtubeVideoId !== null &&
-          saved.modelRevision === YOUTUBE_CAPTION_MODEL_REVISION
-        ) {
-          try {
-            const captionTrack = await requestYouTubeCaptionTrack(youtubeVideoId, {
-              signal: controller.signal,
-            });
-            if (!controller.signal.aborted && isMounted.current) {
-              setYouTubeCaptionTrack(captionTrack);
-            }
-          } catch {
-            // The persisted complete chapter map remains usable offline.
-          }
-        }
-        if (!controller.signal.aborted && isMounted.current) {
-          setBroadcastTranscriptChapters(saved.chapters);
-          setBroadcastTranscriptStatus(
-            saved.gapChunkIds.length > 0 || !saved.completeAudioCoverage
-              ? "completedWithGaps"
-              : "completed",
-          );
-        }
-        return;
-      }
+          ? saved
+          : null;
 
       const persistTranscriptMap = async (
         chapters: readonly BroadcastContextChapterInput[],
@@ -5285,6 +5278,54 @@ function App() {
         return reopened;
       };
 
+      if (
+        matchedSaved !== null &&
+        youtubeVideoId !== null &&
+        matchedSaved.modelRevision === YOUTUBE_CAPTION_MODEL_REVISION
+      ) {
+          try {
+            const captionTrack = await requestYouTubeCaptionTrack(youtubeVideoId, {
+              signal: controller.signal,
+            });
+            if (!controller.signal.aborted && isMounted.current) {
+              setYouTubeCaptionTrack(captionTrack);
+            }
+          } catch {
+            // The persisted complete chapter map remains usable offline.
+          }
+        if (!controller.signal.aborted && isMounted.current) {
+          setBroadcastTranscriptChapters(matchedSaved.chapters);
+          setBroadcastTranscriptStatus("completed");
+        }
+        return;
+      }
+
+      const savedQwenCheckpoint =
+        matchedSaved !== null &&
+        (matchedSaved.modelRevision === BROADCAST_TRANSCRIPT_ACTIVE_MODEL_REVISION ||
+          matchedSaved.modelRevision ===
+            BROADCAST_TRANSCRIPT_PREVIOUS_ACTIVE_MODEL_REVISION ||
+          matchedSaved.modelRevision ===
+            BROADCAST_TRANSCRIPT_MIXED_CHECKPOINT_MODEL_REVISION)
+          ? matchedSaved
+          : null;
+      if (
+        savedQwenCheckpoint !== null &&
+        savedQwenCheckpoint.gapChunkIds.length === 0 &&
+        (savedQwenCheckpoint.completeAudioCoverage ||
+          broadcastContextSamplingPlan.estimatedAudioCoverageRatio < 1)
+      ) {
+        if (!controller.signal.aborted && isMounted.current) {
+          setBroadcastTranscriptChapters(savedQwenCheckpoint.chapters);
+          setBroadcastTranscriptStatus(
+            savedQwenCheckpoint.completeAudioCoverage
+              ? "completed"
+              : "completedWithGaps",
+          );
+        }
+        return;
+      }
+
       if (youtubeVideoId !== null) {
         try {
           const captionTrack = await requestYouTubeCaptionTrack(youtubeVideoId, {
@@ -5315,33 +5356,115 @@ function App() {
         }
       }
 
+      const checkpointChapters = savedQwenCheckpoint?.chapters ?? [];
+      const recoveredCheckpointModelRevision =
+        savedQwenCheckpoint?.modelRevision ===
+          BROADCAST_TRANSCRIPT_PREVIOUS_ACTIVE_MODEL_REVISION ||
+        savedQwenCheckpoint?.modelRevision ===
+          BROADCAST_TRANSCRIPT_MIXED_CHECKPOINT_MODEL_REVISION
+          ? BROADCAST_TRANSCRIPT_MIXED_CHECKPOINT_MODEL_REVISION
+          : BROADCAST_TRANSCRIPT_ACTIVE_MODEL_REVISION;
+      const uncoveredSamplingWindows = subtractBroadcastContextCoveredRanges(
+        broadcastContextSamplingPlan.samplingWindows,
+        checkpointChapters,
+      );
+      const transcriptChunks = createBroadcastContextTranscriptionChunks(
+        uncoveredSamplingWindows,
+      );
+      if (checkpointChapters.length > 0 && !controller.signal.aborted) {
+        setBroadcastTranscriptChapters(checkpointChapters);
+      }
+      if (transcriptChunks.length === 0) {
+        const completeAudioCoverage =
+          broadcastContextSamplingPlan.estimatedAudioCoverageRatio === 1;
+        const migratedChapters = mergeBroadcastTranscriptChapters(
+          checkpointChapters,
+          [],
+          sourceDurationMs,
+          completeAudioCoverage,
+        );
+        const reopened = await persistTranscriptMap(
+          migratedChapters,
+          completeAudioCoverage,
+          [],
+          savedQwenCheckpoint?.modelRevision ??
+            BROADCAST_TRANSCRIPT_ACTIVE_MODEL_REVISION,
+        );
+        setBroadcastTranscriptChapters(reopened.chapters);
+        setBroadcastTranscriptStatus(
+          completeAudioCoverage ? "completed" : "completedWithGaps",
+        );
+        return;
+      }
+
+      const checkpointResults = new Map<string, BroadcastTranscriptQwenResult>();
+      let checkpointPersistence: Promise<void> = Promise.resolve();
       const result = await runBroadcastTranscriptWorker(sourceFile, {
         sourceDurationMs,
-        chunks,
+        chunks: transcriptChunks,
         signal: controller.signal,
         onProgress: (progress) => {
           if (!controller.signal.aborted && isMounted.current) {
             setBroadcastTranscriptProgress(progress);
           }
         },
+        onPartialResult: (chunkId, partialResult) => {
+          checkpointResults.set(chunkId, partialResult);
+          const resultSnapshot = [...checkpointResults.values()];
+          const pendingGapIds = transcriptChunks
+            .filter((chunk) => !checkpointResults.has(chunk.chunkId))
+            .map((chunk) => chunk.chunkId);
+          checkpointPersistence = checkpointPersistence
+            .catch(() => undefined)
+            .then(async () => {
+              const recoveredChapters = createBroadcastTranscriptChapters(
+                resultSnapshot,
+                sourceDurationMs,
+                false,
+              );
+              const checkpointMap = mergeBroadcastTranscriptChapters(
+                checkpointChapters,
+                recoveredChapters,
+                sourceDurationMs,
+                false,
+              );
+              const reopened = await persistTranscriptMap(
+                checkpointMap,
+                false,
+                pendingGapIds,
+                recoveredCheckpointModelRevision,
+              );
+              if (!controller.signal.aborted && isMounted.current) {
+                setBroadcastTranscriptChapters(reopened.chapters);
+              }
+            });
+        },
       });
       if (controller.signal.aborted || !isMounted.current) {
         return;
       }
+      await checkpointPersistence.catch(() => undefined);
       setYouTubeCaptionTrack(null);
+      const finalGapChunkIds = result.gapChunkIds;
       const completeAudioCoverage =
         broadcastContextSamplingPlan.estimatedAudioCoverageRatio === 1 &&
-        result.gapChunkIds.length === 0;
-      const chapters = createBroadcastTranscriptChapters(
+        finalGapChunkIds.length === 0;
+      const recoveredChapters = createBroadcastTranscriptChapters(
         result.results,
+        sourceDurationMs,
+        completeAudioCoverage,
+      );
+      const chapters = mergeBroadcastTranscriptChapters(
+        checkpointChapters,
+        recoveredChapters,
         sourceDurationMs,
         completeAudioCoverage,
       );
       const reopened = await persistTranscriptMap(
         chapters,
         completeAudioCoverage,
-        result.gapChunkIds,
-        BROADCAST_TRANSCRIPT_ACTIVE_MODEL_REVISION,
+        finalGapChunkIds,
+        recoveredCheckpointModelRevision,
       );
       if (!controller.signal.aborted && isMounted.current) {
         setBroadcastTranscriptChapters(reopened.chapters);

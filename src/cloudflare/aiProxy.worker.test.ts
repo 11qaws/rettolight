@@ -4,6 +4,7 @@ import {
   encodeCandidatePassBPcm16Wav,
 } from "../analysis/candidatePassBGemini";
 import { CANDIDATE_PASS_B_SAMPLE_RATE_HZ } from "../analysis/candidatePassBWorkerProtocol";
+import { DEFAULT_CANDIDATE_PASS_B_CAST_ROSTER_ID } from "../analysis/participantRoster";
 import {
   handleBroadcastTranscriptRequest,
   handleBroadcastContextRequest,
@@ -104,6 +105,7 @@ function createGeminiPayload(candidateDurationMs = 1_000): unknown {
                 reactionSummaryKo: "목소리가 갑자기 커지는 반응이 들려요.",
                 whyGoodClipKo: "반응 변화가 뚜렷해 먼저 확인할 만해요.",
                 uncertaintiesKo: ["화면을 보지 않아 정확한 사건은 알 수 없어요."],
+                identifiedParticipants: [],
               }),
             },
           ],
@@ -358,6 +360,62 @@ describe("aiProxy.worker", () => {
       "qwen3.6-flash",
     );
     expect(response.headers.get("X-ExClipper-Fallback-Used")).toBe("true");
+    expect(response.headers.get("X-ExClipper-Fallback-Reason")).toBe(
+      "unavailable",
+    );
+  });
+
+  it("does not pay for a second context model when the shared input is invalid", async () => {
+    const contextInput = {
+      sourceDurationMs: 60_000,
+      chapters: [{
+        chapterId: "chapter-1",
+        startMs: 0,
+        endMs: 60_000,
+        evidenceMode: "complete-transcript",
+        evidenceCoverageRatio: 1,
+        summaryKo: "스트리머가 방송 내용을 차분하게 설명했다.",
+      }],
+      candidates: [{
+        candidateId: "candidate-1",
+        startMs: 5_000,
+        endMs: 50_000,
+        transcriptKo: "오늘 있었던 일을 설명할게요.",
+        eventSummaryKo: "방송 중 있었던 일을 설명했다.",
+        reactionSummaryKo: "차분한 목소리로 정리했다.",
+        chatReactionSummaryKo: null,
+      }],
+    };
+    const upstreamFetch = vi.fn(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            error: {
+              status: "INVALID_ARGUMENT",
+              message: "The shared request argument is invalid.",
+            },
+          }),
+          { status: 400 },
+        ),
+      ),
+    );
+    const response = await handleBroadcastContextRequest(
+      createRequest(contextInput, {
+        url: "https://rettohighlight-gemini.example/v1/broadcast-context",
+      }),
+      {
+        ...createEnvironment(),
+        BROADCAST_CONTEXT_PROVIDER: "qwen",
+        AI_PROVIDER_FALLBACK_MODE: "bounded",
+        QWEN_API_KEY: "qwen-secret",
+      },
+      { fetchImplementation: upstreamFetch, upstreamRetryDelaysMs: [] },
+    );
+
+    expect(response.status).toBe(502);
+    expect(await responseErrorCode(response)).toBe("UPSTREAM_REJECTED");
+    expect(response.headers.get("X-ExClipper-Fallback-Used")).toBeNull();
+    expect(upstreamFetch).toHaveBeenCalledTimes(1);
   });
 
   it("uses Qwen 3.6 Flash for bounded topic discovery", async () => {
@@ -602,6 +660,31 @@ describe("aiProxy.worker", () => {
     consoleError.mockRestore();
   });
 
+  it("rejects an overlong transcript chunk with structured JSON before upstream work", async () => {
+    const candidate = createCandidateBody(1_000);
+    const upstreamFetch = vi.fn();
+    const response = await handleBroadcastTranscriptRequest(
+      createRequest(
+        {
+          audioBase64: candidate.audioBase64,
+          sourceStartMs: 0,
+          durationMs: 90_001,
+        },
+        { url: "https://rettohighlight-gemini.example/v1/broadcast-transcript" },
+      ),
+      {
+        ...createEnvironment(),
+        BROADCAST_TRANSCRIPT_PROVIDER: "qwen",
+        QWEN_API_KEY: "qwen-secret",
+      },
+      { fetchImplementation: upstreamFetch },
+    );
+
+    expect(response.status).toBe(400);
+    expect(await responseErrorCode(response)).toBe("INVALID_REQUEST");
+    expect(upstreamFetch).not.toHaveBeenCalled();
+  });
+
   it("reports health without disclosing configuration or calling Gemini", async () => {
     const upstreamFetch = vi.fn();
     const response = await handleCandidateInsightRequest(
@@ -614,7 +697,7 @@ describe("aiProxy.worker", () => {
       ok: true,
       service: "rettohighlight-gemini",
       version: 2,
-      routingPolicyVersion: "1.7.0",
+      routingPolicyVersion: "1.8.0",
       contextModelRevision:
         "qwen3.7-plus-context-editorial-jury-gameplay-calibrated-2026-07-22",
     });
@@ -708,6 +791,10 @@ describe("aiProxy.worker", () => {
       { ...valid, candidateDurationMs: 999 },
       { ...valid, audioBase64: "AAAA" },
       { ...valid, audioBase64: "not-base64" },
+      {
+        ...valid,
+        castRosterId: "arbitrary-public-roster",
+      },
     ];
     for (const body of cases) {
       const response = await handleCandidateInsightRequest(
@@ -864,6 +951,35 @@ describe("aiProxy.worker", () => {
     expect(upstreamFetch).toHaveBeenCalledTimes(1);
   });
 
+  it("accepts only the built-in closed roster identifier", async () => {
+    const valid = createCandidateBody();
+    const qwenPayload = createQwenSsePayload(valid.candidateDurationMs);
+    let upstreamRequestBody = "";
+    const upstreamFetch = vi.fn(
+      (input: RequestInfo | URL, init?: RequestInit) => {
+        void input;
+        upstreamRequestBody = typeof init?.body === "string" ? init.body : "";
+        return Promise.resolve(new Response(qwenPayload, { status: 200 }));
+      },
+    );
+    const response = await handleCandidateInsightRequest(
+      createRequest({
+        ...valid,
+        castRosterId: DEFAULT_CANDIDATE_PASS_B_CAST_ROSTER_ID,
+      }),
+      {
+        ...createEnvironment(),
+        CANDIDATE_INSIGHT_PROVIDER: "qwen",
+        QWEN_API_KEY: "qwen-secret",
+      },
+      { fetchImplementation: upstreamFetch },
+    );
+
+    expect(response.status).toBe(200);
+    expect(upstreamRequestBody).toContain("아모레또");
+    expect(upstreamRequestBody).toContain("두 가지 이상");
+  });
+
   it("removes visual and causal claims from a successful provider response when no frame arrived", async () => {
     const candidateWithFrames = createCandidateBody();
     const candidate = { ...candidateWithFrames, videoFrames: [] };
@@ -967,7 +1083,7 @@ describe("aiProxy.worker", () => {
       "gemini-3.6-flash",
     );
     expect(response.headers.get("X-ExClipper-Model-Revision")).toBe(
-      "gemini-3.6-flash-grounded-frames-v3-2026-07-22",
+      "gemini-3.6-flash-grounded-frames-cast-v4-2026-07-22",
     );
     expect(response.headers.get("X-ExClipper-Fallback-Used")).toBe("true");
     expect(response.headers.get("X-ExClipper-Fallback-Reason")).toBe(

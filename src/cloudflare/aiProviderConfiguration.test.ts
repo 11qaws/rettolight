@@ -51,7 +51,7 @@ describe("aiProviderConfiguration", () => {
     expect(manifest.candidateInsight).toEqual({
       selectedProvider: "qwen",
       modelId: "qwen3.5-omni-flash",
-      modelRevision: "qwen3.5-omni-flash-grounded-frames-v2-2026-07-22",
+      modelRevision: "qwen3.5-omni-flash-grounded-frames-cast-v3-2026-07-22",
       implementationStatus: "active",
       configured: true,
       active: true,
@@ -191,7 +191,7 @@ describe("aiProviderConfiguration", () => {
     expect(createAiProviderReadinessManifest(environment).broadcastTranscript).toEqual({
       selectedProvider: "qwen",
       modelId: "qwen3.5-omni-flash",
-      modelRevision: "qwen3.5-omni-flash-audio-transcript-reviewed-2026-07-22",
+      modelRevision: "qwen3.5-omni-flash-audio-transcript-90s-reviewed-2026-07-22",
       implementationStatus: "active",
       configured: true,
       active: true,

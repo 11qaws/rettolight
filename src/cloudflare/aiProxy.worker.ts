@@ -20,6 +20,10 @@ import {
   type CandidatePassBVideoFrame,
 } from "../analysis/candidatePassBWorkerProtocol";
 import {
+  isCandidatePassBCastRosterId,
+  type CandidatePassBCastRosterId,
+} from "../analysis/participantRoster";
+import {
   MAX_BROADCAST_CONTEXT_DEEPSEEK_RESPONSE_BYTES,
   buildBroadcastContextDeepseekRequestBody,
   buildBroadcastContextQwenRequestBody,
@@ -133,6 +137,7 @@ interface CandidateInsightRequest {
   readonly audioBase64: string;
   readonly candidateDurationMs: number;
   readonly videoFrames: readonly CandidatePassBVideoFrame[];
+  readonly castRosterId: CandidatePassBCastRosterId | null;
 }
 
 type FetchImplementation = (
@@ -319,7 +324,14 @@ function parseCandidateRequest(bytes: Uint8Array): CandidateInsightRequest | nul
   if (
     !isRecord(value) ||
     (!hasExactKeys(value, ["audioBase64", "candidateDurationMs"]) &&
-      !hasExactKeys(value, ["audioBase64", "candidateDurationMs", "videoFrames"])) ||
+      !hasExactKeys(value, ["audioBase64", "candidateDurationMs", "videoFrames"]) &&
+      !hasExactKeys(value, ["audioBase64", "candidateDurationMs", "castRosterId"]) &&
+      !hasExactKeys(value, [
+        "audioBase64",
+        "candidateDurationMs",
+        "videoFrames",
+        "castRosterId",
+      ])) ||
     typeof value.audioBase64 !== "string" ||
     value.audioBase64.length === 0 ||
     value.audioBase64.length > MAX_AUDIO_BASE64_LENGTH ||
@@ -355,10 +367,15 @@ function parseCandidateRequest(bytes: Uint8Array): CandidateInsightRequest | nul
       dataBase64: frame.dataBase64,
     });
   }
+  const castRosterId = "castRosterId" in value ? value.castRosterId : null;
+  if (castRosterId !== null && !isCandidatePassBCastRosterId(castRosterId)) {
+    return null;
+  }
   return {
     audioBase64: value.audioBase64,
     candidateDurationMs: value.candidateDurationMs as number,
     videoFrames,
+    castRosterId,
   };
 }
 
@@ -722,11 +739,13 @@ async function attemptCandidateProvider(
             candidateRequest.audioBase64,
             candidateRequest.candidateDurationMs,
             candidateRequest.videoFrames,
+            candidateRequest.castRosterId,
           )
         : buildCandidatePassBGeminiRequestBody(
             candidateRequest.audioBase64,
             candidateRequest.candidateDurationMs,
             candidateRequest.videoFrames,
+            candidateRequest.castRosterId,
           ),
     );
   } catch {
@@ -829,6 +848,7 @@ async function attemptCandidateProvider(
       upstreamPayload = extractCandidatePassBQwenOmniSseResponse(
         text,
         candidateRequest.candidateDurationMs,
+        candidateRequest.castRosterId,
       );
     } else {
       upstreamPayload = JSON.parse(text);
@@ -841,6 +861,7 @@ async function attemptCandidateProvider(
   const parsed = extractCandidatePassBGeminiResponse(
     upstreamPayload,
     candidateRequest.candidateDurationMs,
+    candidateRequest.castRosterId,
   );
   if (!parsed.ok) {
     return {
@@ -861,12 +882,25 @@ async function attemptCandidateProvider(
           }),
     };
   }
+  const validatedPayload = {
+    candidates: [{
+      finishReason: "STOP",
+      content: {
+        parts: [{
+          text: JSON.stringify({
+            segments: parsed.analysis.segments,
+            ...parsed.analysis.insight,
+          }),
+        }],
+      },
+    }],
+  };
   const safePayload = candidateRequest.videoFrames.length === 0
     ? buildCandidatePassBAudioOnlySafeResponse(
-        upstreamPayload,
+        validatedPayload,
         candidateRequest.candidateDurationMs,
       )
-    : upstreamPayload;
+    : validatedPayload;
   if (safePayload === null) {
     return { ok: false, kind: "invalid-response" };
   }
@@ -1669,6 +1703,8 @@ export async function handleYouTubeCaptionsRequest(
   return successResponse(result, origin);
 }
 
+type BroadcastContextProviderFailureKind = CandidateProviderFailureKind;
+
 type BroadcastContextProviderAttempt =
   | {
       readonly ok: true;
@@ -1679,9 +1715,28 @@ type BroadcastContextProviderAttempt =
     }
   | {
       readonly ok: false;
-      readonly kind: "unavailable" | "rejected" | "invalid-response";
+      readonly kind: BroadcastContextProviderFailureKind;
       readonly diagnosticHeaders?: Readonly<Record<string, string>>;
     };
+
+/**
+ * The alternate context model is one bounded paid attempt. Only failures that
+ * can plausibly differ by model or recover after a transient outage may use it.
+ * Shared input mistakes, policy rejections, and a broken Qwen credential stop
+ * immediately instead of paying for the same deterministic failure twice.
+ */
+function shouldAttemptBroadcastContextModelFallback(
+  kind: BroadcastContextProviderFailureKind,
+): boolean {
+  return (
+    kind === "timeout" ||
+    kind === "unavailable" ||
+    kind === "rate-limited" ||
+    kind === "model-unavailable" ||
+    kind === "response-format" ||
+    kind === "invalid-response"
+  );
+}
 
 async function attemptBroadcastContextProvider(
   connection: Exclude<BroadcastContextConnection, { readonly provider: "disabled" }>,
@@ -1693,18 +1748,23 @@ async function attemptBroadcastContextProvider(
   timeoutMs: number,
   retryDelaysMs: readonly number[],
 ): Promise<BroadcastContextProviderAttempt> {
-  const upstreamRequestBody = JSON.stringify(
-    connection.provider === "qwen"
-      ? buildBroadcastContextQwenRequestBody(
-          broadcastContextRequest,
-          qwenModelId,
-          contextMode,
-        )
-      : buildBroadcastContextDeepseekRequestBody(
-          broadcastContextRequest,
-          connection.descriptor.modelId,
-        ),
-  );
+  let upstreamRequestBody: string;
+  try {
+    upstreamRequestBody = JSON.stringify(
+      connection.provider === "qwen"
+        ? buildBroadcastContextQwenRequestBody(
+            broadcastContextRequest,
+            qwenModelId,
+            contextMode,
+          )
+        : buildBroadcastContextDeepseekRequestBody(
+            broadcastContextRequest,
+            connection.descriptor.modelId,
+          ),
+    );
+  } catch {
+    return { ok: false, kind: "invalid-argument" };
+  }
 
   let upstreamResponse: Response;
   try {
@@ -1725,11 +1785,41 @@ async function attemptBroadcastContextProvider(
       timeoutMs,
       retryDelaysMs,
     );
-  } catch {
-    return { ok: false, kind: "unavailable" };
+  } catch (error) {
+    return {
+      ok: false,
+      kind: error instanceof UpstreamTimeoutError ? "timeout" : "unavailable",
+    };
   }
   if (!upstreamResponse.ok) {
     const upstreamStatus = upstreamResponse.status;
+    if (upstreamStatus === 429) {
+      await upstreamResponse.body?.cancel().catch(() => undefined);
+      return { ok: false, kind: "rate-limited" };
+    }
+    if (upstreamStatus === 401 || upstreamStatus === 403) {
+      await upstreamResponse.body?.cancel().catch(() => undefined);
+      return { ok: false, kind: "auth" };
+    }
+    if (upstreamStatus === 404) {
+      await upstreamResponse.body?.cancel().catch(() => undefined);
+      return { ok: false, kind: "model-unavailable" };
+    }
+    if (upstreamStatus >= 500 && upstreamStatus <= 599) {
+      await upstreamResponse.body?.cancel().catch(() => undefined);
+      return { ok: false, kind: "unavailable" };
+    }
+    if (upstreamStatus === 400) {
+      const rejection = await classifyUpstreamRejection(upstreamResponse);
+      if (rejection === "api-key") return { ok: false, kind: "auth" };
+      if (rejection === "response-format") {
+        return { ok: false, kind: "response-format" };
+      }
+      if (rejection === "invalid-argument") {
+        return { ok: false, kind: "invalid-argument" };
+      }
+      return { ok: false, kind: "rejected" };
+    }
     await upstreamResponse.body?.cancel().catch(() => undefined);
     return {
       ok: false,
@@ -1943,12 +2033,15 @@ export async function handleBroadcastContextRequest(
   );
   let finalAttempt = primaryAttempt;
   let fallbackUsed = false;
+  let primaryFailureKind: BroadcastContextProviderFailureKind | null = null;
   if (
     !primaryAttempt.ok &&
     providerConnection.provider === "qwen" &&
-    isBoundedAiProviderFallbackEnabled(environment)
+    isBoundedAiProviderFallbackEnabled(environment) &&
+    shouldAttemptBroadcastContextModelFallback(primaryAttempt.kind)
   ) {
     fallbackUsed = true;
+    primaryFailureKind = primaryAttempt.kind;
     const fallbackModelId =
       contextMode === "discovery"
         ? QWEN_CONTEXT_MODEL_ID
@@ -1969,20 +2062,35 @@ export async function handleBroadcastContextRequest(
     );
   }
   if (!finalAttempt.ok) {
+    const deterministicRejection =
+      finalAttempt.kind === "rejected" ||
+      finalAttempt.kind === "invalid-argument" ||
+      finalAttempt.kind === "auth";
+    const invalidResponse =
+      finalAttempt.kind === "invalid-response" ||
+      finalAttempt.kind === "response-format";
     return jsonResponse(
       502,
-      finalAttempt.kind === "invalid-response"
+      invalidResponse
         ? "UPSTREAM_INVALID_RESPONSE"
-        : finalAttempt.kind === "rejected"
+        : deterministicRejection
           ? "UPSTREAM_REJECTED"
           : "UPSTREAM_UNAVAILABLE",
-      finalAttempt.kind === "invalid-response"
+      invalidResponse
         ? "답변 형식을 확인할 수 없어요."
-        : finalAttempt.kind === "rejected"
+        : deterministicRejection
           ? "AI가 요청을 처리하지 못했어요."
           : "AI에 연결하지 못했어요.",
       origin,
-      finalAttempt.diagnosticHeaders,
+      {
+        ...finalAttempt.diagnosticHeaders,
+        ...(primaryFailureKind === null || !fallbackUsed
+          ? {}
+          : {
+              [EXCLIPPER_PRIMARY_FAILURE_HEADER]: primaryFailureKind,
+              [EXCLIPPER_FALLBACK_FAILURE_HEADER]: finalAttempt.kind,
+            }),
+      },
     );
   }
 
@@ -1991,6 +2099,9 @@ export async function handleBroadcastContextRequest(
     [CANDIDATE_PASS_B_RESPONSE_MODEL_REVISION_HEADER]:
       finalAttempt.modelRevision,
     [CANDIDATE_PASS_B_RESPONSE_FALLBACK_HEADER]: fallbackUsed ? "true" : "false",
+    ...(primaryFailureKind === null || !fallbackUsed
+      ? {}
+      : { [EXCLIPPER_FALLBACK_REASON_HEADER]: primaryFailureKind }),
     ...(finalAttempt.usage === null
       ? {}
       : {

@@ -26,10 +26,10 @@ describe("broadcastTranscriptQwen", () => {
   });
 
   it("validates the exact browser-to-proxy envelope", () => {
-    const valid = { audioBase64: "UklGRg==", sourceStartMs: 600_000, durationMs: 210_000 };
+    const valid = { audioBase64: "UklGRg==", sourceStartMs: 600_000, durationMs: 90_000 };
     expect(parseBroadcastTranscriptQwenProxyRequest(valid)).toEqual(valid);
     expect(parseBroadcastTranscriptQwenProxyRequest({ ...valid, model: "other" })).toBeNull();
-    expect(parseBroadcastTranscriptQwenProxyRequest({ ...valid, durationMs: 210_001 })).toBeNull();
+    expect(parseBroadcastTranscriptQwenProxyRequest({ ...valid, durationMs: 90_001 })).toBeNull();
   });
 
   it("maps a validated provider response back onto the source timeline", () => {

@@ -38,6 +38,7 @@ import {
   MAX_CANDIDATE_PASS_B_UNCERTAINTIES,
   MAX_CANDIDATE_PASS_B_UNCERTAINTY_LENGTH,
 } from "./candidatePassBGemini";
+import { isCandidatePassBCastRosterId } from "./participantRoster";
 
 export {
   CANDIDATE_PASS_B_DEVICE,
@@ -698,6 +699,17 @@ function normalizeInput(
       "videoFrames" in target && Array.isArray(target.videoFrames)
         ? target.videoFrames
         : [];
+    const castRosterId =
+      "castRosterId" in target ? target.castRosterId : undefined;
+    if (
+      castRosterId !== undefined &&
+      !isCandidatePassBCastRosterId(castRosterId)
+    ) {
+      return new CandidatePassBWorkerError(
+        "INVALID_INPUT",
+        "후보 출연진 기준을 확인하지 못했어요.",
+      );
+    }
     if (
       !Array.isArray(rawFrames) ||
       rawFrames.length > MAX_CANDIDATE_PASS_B_VIDEO_FRAMES ||
@@ -732,6 +744,7 @@ function normalizeInput(
             })),
           }
         : {}),
+      ...(castRosterId === undefined ? {} : { castRosterId }),
     };
     if (
       normalizedTarget.startMs < 0 ||

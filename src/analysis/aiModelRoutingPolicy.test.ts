@@ -59,6 +59,20 @@ describe("aiModelRoutingPolicy", () => {
     ).toBe(0);
   });
 
+  it("reports the production-proven 90-second transcript request count", () => {
+    const plan = createAiAnalysisRoutingPlan(2 * 60 * 60_000 + 15 * 60_000, 3);
+    expect(
+      plan.steps.find((step) => step.stage === "broadcast-transcription"),
+    ).toMatchObject({ maximumCalls: 90 });
+  });
+
+  it("reserves the complete fragmented twelve-hour transcript envelope", () => {
+    const plan = createAiAnalysisRoutingPlan(12 * 60 * 60_000, 3);
+    expect(
+      plan.steps.find((step) => step.stage === "broadcast-transcription"),
+    ).toMatchObject({ maximumCalls: 240 });
+  });
+
   it("rejects sources beyond the product's twelve-hour boundary", () => {
     expect(() => createAiAnalysisRoutingPlan(12 * 60 * 60_000 + 1, 1)).toThrow(
       RangeError,

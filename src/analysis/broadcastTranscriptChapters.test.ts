@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { calculateCoverage } from "./broadcastContextProtocol";
-import { createBroadcastTranscriptChapters } from "./broadcastTranscriptChapters";
+import {
+  createBroadcastTranscriptChapters,
+  mergeBroadcastTranscriptChapters,
+} from "./broadcastTranscriptChapters";
 
 describe("broadcastTranscriptChapters", () => {
   it("preserves ASR source fences and reports true full coverage", () => {
@@ -83,5 +86,53 @@ describe("broadcastTranscriptChapters", () => {
     expect(chapter?.summaryKo).toContain("중간사건");
     expect(chapter?.summaryKo).toContain("정확한사과");
     expect(Array.from(chapter?.summaryKo ?? "").length).toBeLessThanOrEqual(3_000);
+  });
+
+  it("keeps paid checkpoints, inserts recovered gaps, and reindexes the map", () => {
+    const existing = [
+      {
+        chapterId: "transcript-001",
+        startMs: 0,
+        endMs: 90_000,
+        evidenceMode: "sampled-audio-video" as const,
+        evidenceCoverageRatio: 1,
+        summaryKo: "첫 구간 대사",
+      },
+      {
+        chapterId: "transcript-002",
+        startMs: 180_000,
+        endMs: 210_000,
+        evidenceMode: "sampled-audio-video" as const,
+        evidenceCoverageRatio: 1,
+        summaryKo: "마지막 구간 대사",
+      },
+    ];
+    const recovered = [{
+      chapterId: "transcript-001",
+      startMs: 90_000,
+      endMs: 180_000,
+      evidenceMode: "sampled-audio-video" as const,
+      evidenceCoverageRatio: 1,
+      summaryKo: "복구한 중간 대사",
+    }];
+
+    expect(
+      mergeBroadcastTranscriptChapters(existing, recovered, 210_000, true),
+    ).toEqual([
+      expect.objectContaining({ chapterId: "transcript-001", startMs: 0, evidenceMode: "complete-transcript" }),
+      expect.objectContaining({ chapterId: "transcript-002", startMs: 90_000, evidenceMode: "complete-transcript" }),
+      expect.objectContaining({ chapterId: "transcript-003", startMs: 180_000, evidenceMode: "complete-transcript" }),
+    ]);
+  });
+
+  it("rejects partially overlapping checkpoint evidence", () => {
+    expect(() =>
+      mergeBroadcastTranscriptChapters(
+        [{ chapterId: "a", startMs: 0, endMs: 90_000, evidenceMode: "sampled-audio-video", evidenceCoverageRatio: 1, summaryKo: "기존" }],
+        [{ chapterId: "b", startMs: 80_000, endMs: 120_000, evidenceMode: "sampled-audio-video", evidenceCoverageRatio: 1, summaryKo: "겹침" }],
+        120_000,
+        false,
+      ),
+    ).toThrow(RangeError);
   });
 });
