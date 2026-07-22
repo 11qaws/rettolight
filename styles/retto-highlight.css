@@ -652,10 +652,47 @@
   font-variant-numeric: tabular-nums;
 }
 
+.rh-timeline-context-status {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin: 12px 0 0;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--accentBd) 72%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg) 82%, transparent);
+  color: var(--text3);
+  font-size: .6875rem;
+  font-weight: 650;
+  line-height: 1.45;
+}
+
+.rh-timeline-context-status::before {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 13%, transparent);
+  content: "";
+}
+
+.rh-timeline-context-status[data-tone="warning"] {
+  border-color: color-mix(in srgb, var(--rh-warning) 38%, var(--border));
+  background: color-mix(in srgb, var(--rh-warning) 7%, var(--bg));
+  color: var(--text2);
+}
+
+.rh-timeline-context-status[data-tone="warning"]::before {
+  background: var(--rh-warning);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--rh-warning) 14%, transparent);
+}
+
 .rh-timeline-track {
   position: relative;
   height: 172px;
   margin: 20px 8px 0 94px;
+  isolation: isolate;
 }
 
 .rh-timeline-row-labels {
@@ -796,6 +833,7 @@
   position: absolute;
   inset: 0;
   pointer-events: none;
+  z-index: 1;
 }
 
 .rh-timeline-tick {
@@ -815,6 +853,29 @@
   font-size: .625rem;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+}
+
+.rh-timeline-context-gaps {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: 5px;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.rh-timeline-context-gaps > span {
+  position: absolute;
+  top: 0;
+  bottom: 2px;
+  border-inline: 1px solid color-mix(in srgb, var(--rh-warning) 30%, transparent);
+  background: repeating-linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--rh-warning) 5%, transparent),
+    color-mix(in srgb, var(--rh-warning) 5%, transparent) 5px,
+    color-mix(in srgb, var(--rh-warning) 12%, transparent) 5px,
+    color-mix(in srgb, var(--rh-warning) 12%, transparent) 10px
+  );
 }
 
 .rh-timeline-lead-rail {
@@ -888,6 +949,17 @@
   color: var(--text4);
   font-size: .625rem;
   font-weight: 650;
+}
+
+.rh-timeline-legend > span[data-legend="gap"] {
+  border-color: color-mix(in srgb, var(--rh-warning) 34%, var(--border));
+  background: repeating-linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--rh-warning) 4%, var(--bg)),
+    color-mix(in srgb, var(--rh-warning) 4%, var(--bg)) 4px,
+    color-mix(in srgb, var(--rh-warning) 11%, var(--bg)) 4px,
+    color-mix(in srgb, var(--rh-warning) 11%, var(--bg)) 8px
+  );
 }
 
 .rh-timeline-marker {

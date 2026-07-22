@@ -5,8 +5,8 @@
     "semantic_hash": ""
   },
   "DEVELOPMENT_LOG.md": {
-    "mtime": 1784708321.801934,
-    "ast_hash": "0fd6c13998443d1f73fa4e4ba6e4b61a",
+    "mtime": 1784709718.174114,
+    "ast_hash": "b04573fb5aa1274e9bc62d9c6846def9",
     "semantic_hash": ""
   },
   "OPERATIONS.md": {
@@ -15,8 +15,8 @@
     "semantic_hash": ""
   },
   "PRODUCT_PLAN.md": {
-    "mtime": 1784708321.8087163,
-    "ast_hash": "ef9fe0ff72c6fac3c28c1cdd918e32cf",
+    "mtime": 1784709718.1772857,
+    "ast_hash": "f7db1f6cabba595101dea5555276745b",
     "semantic_hash": ""
   },
   "STATE_LIFECYCLE.md": {
@@ -30,13 +30,13 @@
     "semantic_hash": ""
   },
   "package.json": {
-    "mtime": 1784707858.0120654,
-    "ast_hash": "0b7851e495e5f5b6fac9a4f582ec5e18",
+    "mtime": 1784710083.1454122,
+    "ast_hash": "11185547ec35d04d8275cb9806364c30",
     "semantic_hash": ""
   },
   "src/App.tsx": {
-    "mtime": 1784707858.0213716,
-    "ast_hash": "a4d0552254cf9914fb5310c52788bea0",
+    "mtime": 1784710118.4586065,
+    "ast_hash": "21a90a6eba6f81747d4c6f6efa80fb7d",
     "semantic_hash": ""
   },
   "src/analysis/chatImport.test.ts": {
@@ -155,8 +155,8 @@
     "semantic_hash": ""
   },
   "README.md": {
-    "mtime": 1784708223.206545,
-    "ast_hash": "c4b167f4692dbdc3ee12a8e48d96020c",
+    "mtime": 1784710083.152196,
+    "ast_hash": "292918292d5fb6d1affcb4590ca470b4",
     "semantic_hash": ""
   },
   "index.html": {
@@ -992,6 +992,31 @@
   "graphify-out/memory/query_20260722_081416_how_does_exclipper_select_topic_balanced_caption_r.md": {
     "mtime": 1784708056.7945206,
     "ast_hash": "4cab30891bdaeab7db06219ad0bea8b2",
+    "semantic_hash": ""
+  },
+  "src/analysis/broadcastContextPersistence.test.ts": {
+    "mtime": 1784709817.269171,
+    "ast_hash": "2730c0c8fa200f314e5f8484635b709a",
+    "semantic_hash": ""
+  },
+  "src/analysis/broadcastContextPersistence.ts": {
+    "mtime": 1784709817.267622,
+    "ast_hash": "4f7990d4841a94caef198cd4d219d0bd",
+    "semantic_hash": ""
+  },
+  "src/analysis/broadcastContextTimelinePresentation.test.ts": {
+    "mtime": 1784709784.7724004,
+    "ast_hash": "0fad5662f1a8af8c5c62cfdd88c1bdbb",
+    "semantic_hash": ""
+  },
+  "src/analysis/broadcastContextTimelinePresentation.ts": {
+    "mtime": 1784709784.7713742,
+    "ast_hash": "dfb3201587133a5e51c299148a74c1a3",
+    "semantic_hash": ""
+  },
+  "graphify-out/memory/query_20260722_085545_how_should_exclipper_distinguish_semantic_chapter.md": {
+    "mtime": 1784710545.0671408,
+    "ast_hash": "43d55f5872fcfcebd038d81790afa118",
     "semantic_hash": ""
   }
 }

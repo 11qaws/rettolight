@@ -1,5 +1,12 @@
 # Development Log
 
+## 2026-07-22 `0.3.37` truthful context recovery and coverage-aware timeline
+
+- Accepted the narrow integrity portion of the GitHub context-pipeline review: a saved run that never produced whole-broadcast context must not be presented as an AI-confirmed `0 topics / 0 leads` result, and coverage gaps must not be interpreted as uneventful time.
+- The implementation restores paid whole-context summaries, semantic chapters, leads, AI projections, and already-refined semantic candidates from the analysis session without requiring the source video to be reconnected. A restore epoch prevents an older asynchronous read from overwriting the run the editor most recently opened.
+- Timeline work distinguishes restoring, running, failed, not analyzed, legacy-unsupported, partial-evidence, and completed-empty states. Unsupported or unperformed dimensions use an em dash instead of a false zero, while explicit evidence gaps receive their own striped source-time layer and legend.
+- Release gate passed: strict TypeScript, ESLint warning 0, 71 test files / 751 tests, production Vite build, and Wrangler dry-run. The main bundle is 614.39 kB (177.68 kB gzip), CSS is 84.99 kB, and the unchanged Worker upload is 193.93 KiB (37.96 KiB gzip). Deployment identifiers and the public saved-result smoke will be recorded after Pages completes.
+
 ## 2026-07-22 `0.3.36` topic-balanced semantic recall and gameplay abstention
 
 - Reproduced the regression against all three real caption-backed samples instead of comparing candidate counts. In food talk, the topical model had already found the expected 칼국수, 껍데기, and 두바이 초콜릿 events, but the downstream `top 3 + three reserves from the dominant selected topic` policy discarded them. In the Minecraft relay, the selection model assigned high confidence to ordinary coordinates, mining, caves, base building, and generic chat banter because the parser only enforced a numeric `0.93` threshold.
