@@ -54,6 +54,12 @@ const record: CandidatePassBInsightsRecord = {
       ],
     },
   },
+  modelByCandidateId: {
+    "candidate-a": {
+      id: "gemini-3.5-flash",
+      revision: "gemini-3.5-flash-grounded-frames-v2-2026-07-22",
+    },
+  },
   thumbnailById: {
     "candidate-a": {
       timestampMs: 1_500,
@@ -92,5 +98,19 @@ describe("Candidate Pass B insight persistence", () => {
         thumbnailById: undefined,
       }),
     ).not.toThrow();
+  });
+
+  it("rejects a provider model paired with another provider revision", () => {
+    expect(() =>
+      assertCandidatePassBInsightsRecord({
+        ...record,
+        modelByCandidateId: {
+          "candidate-a": {
+            id: "gemini-3.5-flash",
+            revision: "qwen3.5-omni-flash-grounded-frames-v2-2026-07-22",
+          },
+        },
+      }),
+    ).toThrow(TypeError);
   });
 });

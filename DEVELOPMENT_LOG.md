@@ -1,5 +1,24 @@
 # Development Log
 
+## 2026-07-22 `0.3.31` bounded Qwen/Gemini runtime failover
+
+- 클립 검토 화면에서는 지난 분석 목록과 현재 편집 작업 요약을 숨겨, 타임라인과 후보 검토가 첫 화면에 더 빨리 보이도록 정리했다.
+- 넓은 화면의 후보 검토 영역을 영상 39%·단서 61%에 가까운 비대칭 2열로 바꾸고, 오른쪽 단서 열만 화면 높이 안에서 스크롤되도록 했다. 1120px 이하에서는 다시 자연스러운 단일 열로 전환한다.
+- 후보 타임라인에 30분 단위 눈금과 시각 라벨, 겹침을 피하는 3단 번호 마커, 방송 주제 구간 띠, 전체 맥락 AI가 새로 찾은 의미 단서 레일을 추가했다. 숫자·카드·의미 단서는 모두 동일한 원본 시각에 연결되며 후보가 없는 잠재 점수 지형도 계속 비교할 수 있다.
+- Qwen 압축 전체 맥락 계약에 실제 챕터 ID로 근거가 확인되는 2~16개의 주제 구간을 추가했다. 같은 주제는 합치고 시간순·비중첩 범위만 허용하며, 잘못된 범위는 이미 결제된 다른 판단을 버리지 않고 해당 구간만 제외한다. 라우팅 정책을 `1.3.0`으로 올려 과거의 `주제 구간 0개` 캐시를 새 실행에 재사용하지 않는다.
+- 대표 화면 채집용 video element를 문서에 1px로 연결한 뒤 디코딩 완료와 seek 완료를 모두 기다리도록 보강했다. 화면이 끝내 0장이면 브라우저와 Worker 양쪽에서 제공자에게서 받은 시각·게임·인과 추측을 제거하고, 대사 시각과 오디오 단서만 남기는 안전 응답으로 바꾼다.
+- 방송 전체 전사 preflight는 더 이상 모든 입력 문제를 같은 문장으로 표시하지 않는다. 파일 구조, 청크 수, 중복 ID, 소수 시각, 겹침, 원본 초과, 210초 초과를 구분해 보고한다. 음식 토크 02:15:14.817 계획은 39개 청크로 정상 허용됨을 회귀 테스트로 고정했다.
+
+- Connected `aiModelRoutingPolicy.ts` to the Cloudflare runtime rather than leaving it as a planning-only catalog. Production enables `AI_PROVIDER_FALLBACK_MODE=bounded`.
+- Candidate audio+frame perception now performs the configured provider's bounded transient retries and, only if that provider still fails, one alternate-provider attempt. The deployed route is Qwen3.5 Omni Flash then Gemini3.5 Flash; selecting Gemini as primary reverses the single fallback order when Qwen credentials are valid.
+- Compressed broadcast context now performs one model-tier fallback: overview/refinement use Qwen3.7 Plus then Qwen3.6 Flash, while the cheaper selection pass uses Qwen3.6 Flash then Qwen3.7 Plus. Provider outputs still pass the same strict local parser before success is returned.
+- Kept long broadcast transcription single-provider per chunk. Timeout and malformed-response retries may duplicate duration billing, so Gemini is not called automatically after a Qwen ASR attempt. Failed chunks remain explicit coverage gaps.
+- Added public response metadata headers for model ID, model revision, and fallback use. Candidate Worker validation accepts only the exact Qwen or Gemini model/revision pair and defaults to the legacy Qwen identity only when an older Worker returns no metadata.
+- Changed the Candidate Pass B run manifest to a route revision and added per-candidate actual model persistence in insight schema `1.3.0`. Existing schemas 1.0–1.2 remain readable; impossible cross-provider model/revision pairs fail closed.
+- Targeted routing, provider, Worker proxy, Worker lifecycle, client protocol, frame safety, context topic, and transcript preflight tests: 7 files / 74 tests passed before the full release gate. Full check, build, dry-run, sample regression, and deployment verification remain required below.
+- Release gate before deployment: TypeScript strict, ESLint warning 0, 65 test files / 694 tests, Vite production build, and Wrangler dry-run passed. The three real sources completed full fast-pass coverage: food talk stayed at exactly 3 candidates with peaks 01:11.5, 02:38.5, and 03:56.5; subscription and relay retained 24-candidate broad reservoirs for the later semantic selector rather than being treated as positive ground truth.
+
+
 ## 2026-07-22 `0.3.30` grounded participant attribution and strict context recovery
 
 - Added a bounded `identifiedParticipants` result to the existing candidate audio+frame request. Qwen3.5 Omni Flash or Gemini3.5 Flash may emit up to six names only when an on-screen label or audible name call grounds the attribution; avatar appearance and voice resemblance are explicitly forbidden as name evidence.

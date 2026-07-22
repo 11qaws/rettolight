@@ -68,7 +68,8 @@ describe("broadcastContextDeepseek", () => {
       expect(body.thinking_budget).toBe(768);
       expect(body.max_tokens).toBe(3_072);
       expect(body.messages[0].content).toContain("클립 편집 라우터");
-      expect(body.messages[0].content).not.toContain("semanticChapters");
+      expect(body.messages[0].content).toContain('"chapters"');
+      expect(body.messages[0].content).toContain("주제가 바뀌는 경계");
       expect(body.response_format).toEqual({ type: "json_object" });
       expect(body).not.toHaveProperty("thinking");
       expect(body).not.toHaveProperty("reasoning_effort");
@@ -148,6 +149,12 @@ describe("broadcastContextDeepseek", () => {
         choices: [{ message: { content: JSON.stringify({
           summary: "실수의 경위를 설명하고 사과했다.",
           themes: ["사과"],
+          chapters: [{
+            s: "c1",
+            e: "c2",
+            title: "실수 경위와 사과",
+            kind: "main-event",
+          }],
           candidates: [{
             id: "can1",
             d: "select",
@@ -176,6 +183,13 @@ describe("broadcastContextDeepseek", () => {
           category: "apology-accountability",
           startMs: 0,
           endMs: 300_000,
+        });
+        expect(parsed.result.semanticChaptersSupported).toBe(true);
+        expect(parsed.result.semanticChapters[0]).toMatchObject({
+          titleKo: "실수 경위와 사과",
+          startMs: 0,
+          endMs: 600_000,
+          kind: "main-event",
         });
       }
     });

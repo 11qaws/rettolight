@@ -24,9 +24,15 @@ import {
 import {
   CANDIDATE_PASS_B_DEVICE,
   CANDIDATE_PASS_B_DTYPE,
+  CANDIDATE_PASS_B_GEMINI_MODEL_ID,
+  CANDIDATE_PASS_B_GEMINI_MODEL_REVISION,
   CANDIDATE_PASS_B_LANGUAGE,
   CANDIDATE_PASS_B_MODEL_ID,
   CANDIDATE_PASS_B_MODEL_REVISION,
+  CANDIDATE_PASS_B_QWEN_MODEL_ID,
+  CANDIDATE_PASS_B_QWEN_MODEL_REVISION,
+  CANDIDATE_PASS_B_RESPONSE_MODEL_ID_HEADER,
+  CANDIDATE_PASS_B_RESPONSE_MODEL_REVISION_HEADER,
   CANDIDATE_PASS_B_SAMPLE_RATE_HZ,
   CANDIDATE_PASS_B_TASK,
   MAX_CANDIDATE_PASS_B_SOURCE_DURATION_MS,
@@ -603,7 +609,7 @@ async function decodeCandidate(
   return decoded;
 }
 
-async function analyzeCandidateWithGemini(
+async function analyzeCandidateWithRemoteAi(
   pcm: Float32Array,
   target: CandidatePassBTarget,
   task: ActiveTask,
@@ -704,6 +710,33 @@ async function analyzeCandidateWithGemini(
       throw new ProxyWorkerFailure("PROXY_INVALID_RESPONSE");
     }
 
+    const responseModelId = response.headers.get(
+      CANDIDATE_PASS_B_RESPONSE_MODEL_ID_HEADER,
+    );
+    const responseModelRevision = response.headers.get(
+      CANDIDATE_PASS_B_RESPONSE_MODEL_REVISION_HEADER,
+    );
+    const model =
+      responseModelId === CANDIDATE_PASS_B_GEMINI_MODEL_ID &&
+      responseModelRevision === CANDIDATE_PASS_B_GEMINI_MODEL_REVISION
+        ? {
+            id: CANDIDATE_PASS_B_GEMINI_MODEL_ID,
+            revision: CANDIDATE_PASS_B_GEMINI_MODEL_REVISION,
+          }
+        : responseModelId === CANDIDATE_PASS_B_QWEN_MODEL_ID &&
+            responseModelRevision === CANDIDATE_PASS_B_QWEN_MODEL_REVISION
+          ? {
+              id: CANDIDATE_PASS_B_QWEN_MODEL_ID,
+              revision: CANDIDATE_PASS_B_QWEN_MODEL_REVISION,
+            }
+          : {
+              // Older deployed Workers did not expose model metadata. Preserve
+              // their established Qwen identity instead of trusting arbitrary
+              // response headers or making an already-paid result unusable.
+              id: CANDIDATE_PASS_B_MODEL_ID,
+              revision: CANDIDATE_PASS_B_MODEL_REVISION,
+            };
+
     const segments = parsed.analysis.segments.map((segment) => ({
       startMs: target.startMs + segment.relativeStartMs,
       endMs: target.startMs + segment.relativeEndMs,
@@ -718,8 +751,7 @@ async function analyzeCandidateWithGemini(
       segments,
       insight: parsed.analysis.insight,
       model: {
-        id: CANDIDATE_PASS_B_MODEL_ID,
-        revision: CANDIDATE_PASS_B_MODEL_REVISION,
+        ...model,
         dtype: CANDIDATE_PASS_B_DTYPE,
         device: CANDIDATE_PASS_B_DEVICE,
       },
@@ -869,7 +901,7 @@ async function runTask(request: AnalyzeRequest, task: ActiveTask): Promise<void>
         candidatePcm = null;
         const requestPromise = (async (): Promise<void> => {
           try {
-            const result = await analyzeCandidateWithGemini(
+            const result = await analyzeCandidateWithRemoteAi(
               pcmForRequest,
               target,
               task,

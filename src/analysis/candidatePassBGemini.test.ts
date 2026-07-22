@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   CANDIDATE_PASS_B_PROXY_ENDPOINT,
+  buildCandidatePassBAudioOnlySafeResponse,
   buildCandidatePassBGeminiRequestBody,
   buildCandidatePassBProxyRequestBody,
   classifyCandidatePassBProxyHttpFailure,
@@ -133,6 +134,27 @@ describe("candidatePassBGemini", () => {
     expect(buildCandidatePassBProxyRequestBody("UklGRg==", 45_000, frames)).toMatchObject({
       videoFrames: frames,
     });
+  });
+
+  it("removes invented screen and game claims when no representative frame survived", () => {
+    const providerPayload = {
+      candidates: [{
+        finishReason: "STOP",
+        content: { parts: [{ text: JSON.stringify(validAnalysis()) }] },
+      }],
+    };
+    const safePayload = buildCandidatePassBAudioOnlySafeResponse(
+      providerPayload,
+      45_000,
+    );
+    const parsed = extractCandidatePassBGeminiResponse(safePayload, 45_000);
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) {
+      expect(parsed.analysis.segments).toHaveLength(2);
+      expect(parsed.analysis.insight.eventSummaryKo).toContain("대표 화면을 확보하지 못해");
+      expect(parsed.analysis.insight.eventSummaryKo).not.toContain("게임");
+      expect(parsed.analysis.insight.identifiedParticipants).toEqual([]);
+    }
   });
 
   it("rejects audio that is longer than the disclosed sixty-second candidate limit", () => {

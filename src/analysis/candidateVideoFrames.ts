@@ -57,6 +57,12 @@ function waitForVideoSeek(
   timestampSeconds: number,
   signal: AbortSignal | undefined,
 ): Promise<void> {
+  if (
+    Math.abs(video.currentTime - timestampSeconds) < 0.001 &&
+    video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA
+  ) {
+    return Promise.resolve();
+  }
   return new Promise((resolve, reject) => {
     let settled = false;
     const timeout = window.setTimeout(() => finish(new Error("Video seek timed out.")), SEEK_TIMEOUT_MS);
@@ -84,6 +90,44 @@ function waitForVideoSeek(
     } catch (error) {
       finish(error instanceof Error ? error : new Error("Video seek failed."));
     }
+  });
+}
+
+function waitForCurrentVideoFrame(
+  video: HTMLVideoElement,
+  signal: AbortSignal | undefined,
+): Promise<void> {
+  if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const timeout = window.setTimeout(
+      () => finish(new Error("Video frame decode timed out.")),
+      SEEK_TIMEOUT_MS,
+    );
+    const cleanup = (): void => {
+      window.clearTimeout(timeout);
+      video.removeEventListener("loadeddata", onReady);
+      video.removeEventListener("canplay", onReady);
+      video.removeEventListener("error", onError);
+      signal?.removeEventListener("abort", onAbort);
+    };
+    const finish = (error?: Error): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      if (error === undefined) resolve();
+      else reject(error);
+    };
+    const onReady = (): void => finish();
+    const onError = (): void => finish(new Error("Video frame decode failed."));
+    const onAbort = (): void =>
+      finish(new DOMException("The frame sampling was cancelled.", "AbortError"));
+    video.addEventListener("loadeddata", onReady, { once: true });
+    video.addEventListener("canplay", onReady, { once: true });
+    video.addEventListener("error", onError, { once: true });
+    signal?.addEventListener("abort", onAbort, { once: true });
   });
 }
 
@@ -122,7 +166,19 @@ export async function sampleCandidateVideoFrames(
     video.preload = "metadata";
     video.muted = true;
     video.playsInline = true;
+    video.setAttribute("aria-hidden", "true");
+    video.style.position = "fixed";
+    video.style.width = "1px";
+    video.style.height = "1px";
+    video.style.opacity = "0";
+    video.style.pointerEvents = "none";
+    video.style.inset = "0 auto auto 0";
     video.src = url;
+    // Chromium may defer decoding for a detached media element. Keeping a
+    // one-pixel invisible element attached during sampling makes metadata,
+    // seeking, and canvas capture deterministic without entering layout.
+    documentImplementation.body?.append(video);
+    video.load();
     await new Promise<void>((resolve, reject) => {
       const timeout = window.setTimeout(() => reject(new Error("Video metadata timed out.")), SEEK_TIMEOUT_MS);
       const cleanup = (): void => {
@@ -151,6 +207,7 @@ export async function sampleCandidateVideoFrames(
       abortIfRequested(options.signal);
       try {
         await waitForVideoSeek(video, (startMs + timestampMs) / 1_000, options.signal);
+        await waitForCurrentVideoFrame(video, options.signal);
         context.drawImage(video, 0, 0, width, height);
         const data = dataUrlToBase64(canvas.toDataURL("image/jpeg", JPEG_QUALITY));
         if (data !== null) frames.push({ timestampMs, mimeType: "image/jpeg", dataBase64: data });
@@ -163,8 +220,10 @@ export async function sampleCandidateVideoFrames(
     return [];
   } finally {
     if (video !== null) {
+      video.pause();
       video.removeAttribute("src");
       video.load();
+      video.remove();
     }
     if (url !== null) revokeUrl(url);
   }

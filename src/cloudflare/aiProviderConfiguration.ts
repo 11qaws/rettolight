@@ -10,6 +10,10 @@ import {
   BROADCAST_TRANSCRIPT_QWEN_OMNI_MODEL_ID,
   BROADCAST_TRANSCRIPT_QWEN_OMNI_MODEL_REVISION,
 } from "../analysis/broadcastTranscriptQwen";
+import {
+  AI_MODEL_ROUTING_POLICY_VERSION,
+  EXCLIPPER_MODEL_IDS,
+} from "../analysis/aiModelRoutingPolicy";
 
 export const AI_PROVIDER_CONFIGURATION_VERSION = "1.0.0" as const;
 
@@ -18,10 +22,11 @@ export const QWEN_CANDIDATE_MODEL_REVISION = CANDIDATE_PASS_B_QWEN_MODEL_REVISIO
 export const DEEPSEEK_CONTEXT_MODEL_ID = "deepseek-v4-pro" as const;
 export const DEEPSEEK_CONTEXT_MODEL_REVISION =
   "deepseek-v4-pro-api-reviewed-2026-07-22" as const;
-export const QWEN_CONTEXT_MODEL_ID = "qwen3.7-plus" as const;
+export const QWEN_CONTEXT_MODEL_ID = EXCLIPPER_MODEL_IDS.broadcastContextReasoning;
 export const QWEN_CONTEXT_MODEL_REVISION =
-  "qwen3.7-plus-api-reviewed-2026-07-22" as const;
-export const QWEN_CONTEXT_SELECTION_MODEL_ID = "qwen3.6-flash" as const;
+  "qwen3.7-plus-topic-chapters-reviewed-2026-07-22" as const;
+export const QWEN_CONTEXT_SELECTION_MODEL_ID =
+  EXCLIPPER_MODEL_IDS.broadcastContextReasoningFallback;
 export const QWEN_CONTEXT_SELECTION_MODEL_REVISION =
   "qwen3.6-flash-skeptical-selection-reviewed-2026-07-22" as const;
 
@@ -30,6 +35,11 @@ export type BroadcastContextProviderId = "disabled" | "deepseek" | "qwen";
 export type BroadcastTranscriptProviderId = "disabled" | "gemini" | "qwen";
 export type AiProviderImplementationStatus = "active" | "prepared";
 export type QwenRegion = "singapore" | "beijing";
+export type AiProviderFallbackMode = "disabled" | "bounded";
+
+/** Runtime marker tying the Worker transport to the shared role policy. */
+export const AI_PROVIDER_ROUTING_POLICY_VERSION =
+  AI_MODEL_ROUTING_POLICY_VERSION;
 
 export interface AiProviderDescriptor {
   readonly role: "candidate-insight" | "broadcast-context" | "broadcast-transcript";
@@ -117,6 +127,7 @@ export interface AiProviderEnvironment {
   readonly QWEN_WORKSPACE_ID?: string;
   readonly QWEN_REGION?: string;
   readonly DEEPSEEK_API_KEY?: string;
+  readonly AI_PROVIDER_FALLBACK_MODE?: string;
 }
 
 export type AiProviderConfigurationErrorCode =
@@ -358,6 +369,32 @@ export function resolveCandidateInsightConnection(
       region,
     },
   };
+}
+
+export function isBoundedAiProviderFallbackEnabled(
+  environment: AiProviderEnvironment,
+): boolean {
+  return environment.AI_PROVIDER_FALLBACK_MODE === "bounded";
+}
+
+/**
+ * Resolves one alternate candidate provider without exposing credentials to the
+ * browser. The caller remains responsible for allowing at most one paid switch.
+ */
+export function resolveCandidateInsightFallbackConnection(
+  environment: AiProviderEnvironment,
+  primaryProvider: CandidateInsightProviderId,
+): CandidateInsightConnection | null {
+  if (!isBoundedAiProviderFallbackEnabled(environment)) {
+    return null;
+  }
+  const fallbackProvider: CandidateInsightProviderId =
+    primaryProvider === "qwen" ? "gemini" : "qwen";
+  const resolution = resolveCandidateInsightConnection({
+    ...environment,
+    CANDIDATE_INSIGHT_PROVIDER: fallbackProvider,
+  });
+  return resolution.ok ? resolution.connection : null;
 }
 
 export function resolveBroadcastContextConnection(

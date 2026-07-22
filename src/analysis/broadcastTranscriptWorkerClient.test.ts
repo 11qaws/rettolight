@@ -1,5 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
-import { runBroadcastTranscriptWorker } from "./broadcastTranscriptWorkerClient";
+import {
+  createBroadcastContextSamplingPlan,
+  createBroadcastContextTranscriptionChunks,
+} from "./broadcastContextSamplingPlan";
+import {
+  BroadcastTranscriptWorkerClientError,
+  runBroadcastTranscriptWorker,
+} from "./broadcastTranscriptWorkerClient";
 import type {
   BroadcastTranscriptWorkerRequest,
   BroadcastTranscriptWorkerResponse,
@@ -28,6 +35,52 @@ class FakeWorker {
 }
 
 describe("broadcastTranscriptWorkerClient", () => {
+  it("accepts the complete 2h15m food-talk plan as 39 bounded chunks", async () => {
+    const worker = new FakeWorker();
+    const controller = new AbortController();
+    const sourceDurationMs = 8_114_817;
+    const plan = createBroadcastContextSamplingPlan(sourceDurationMs, [1_212_000]);
+    const chunks = createBroadcastContextTranscriptionChunks(plan.samplingWindows);
+    const promise = runBroadcastTranscriptWorker(
+      new File(["x"], "food-talk.mp4"),
+      {
+        sourceDurationMs,
+        chunks,
+        signal: controller.signal,
+        workerFactory: () => worker,
+      },
+    );
+    expect(chunks).toHaveLength(39);
+    expect(worker.posted[0]).toMatchObject({
+      type: "broadcast-transcript-analyze",
+      sourceDurationMs,
+    });
+    controller.abort();
+    await expect(promise).rejects.toMatchObject({ code: "ABORTED" });
+  });
+
+  it("reports the precise invalid chunk instead of blaming API credentials", async () => {
+    try {
+      await runBroadcastTranscriptWorker(new File(["x"], "sample.mp4"), {
+        sourceDurationMs: 2_000,
+        chunks: [
+          {
+            chunkId: "asr-001",
+            sourceStartMs: 0.5,
+            sourceEndMs: 1_000,
+            kind: "uniform",
+          },
+        ],
+      });
+      throw new Error("Expected invalid input to be rejected.");
+    } catch (error) {
+      expect(error).toBeInstanceOf(BroadcastTranscriptWorkerClientError);
+      if (!(error instanceof BroadcastTranscriptWorkerClientError)) throw error;
+      expect(error.code).toBe("INVALID_INPUT");
+      expect(error.message).toContain("정수 밀리초");
+    }
+  });
+
   it("collects source-fenced partial results in plan order", async () => {
     const worker = new FakeWorker();
     const chunks = [

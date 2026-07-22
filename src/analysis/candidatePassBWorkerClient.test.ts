@@ -3,6 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 import {
   CANDIDATE_PASS_B_DEVICE,
   CANDIDATE_PASS_B_DTYPE,
+  CANDIDATE_PASS_B_GEMINI_MODEL_ID,
+  CANDIDATE_PASS_B_GEMINI_MODEL_REVISION,
   CANDIDATE_PASS_B_LANGUAGE,
   CANDIDATE_PASS_B_MODEL_ID,
   CANDIDATE_PASS_B_MODEL_REVISION,
@@ -282,7 +284,15 @@ describe("runCandidatePassBWorker", () => {
         ratio: 1,
       },
     });
-    const secondTranscript = transcriptFor(targets[1] as CandidatePassBTarget);
+    const secondTranscript: CandidatePassBTranscriptResult = {
+      ...transcriptFor(targets[1] as CandidatePassBTarget),
+      model: {
+        id: CANDIDATE_PASS_B_GEMINI_MODEL_ID,
+        revision: CANDIDATE_PASS_B_GEMINI_MODEL_REVISION,
+        dtype: CANDIDATE_PASS_B_DTYPE,
+        device: CANDIDATE_PASS_B_DEVICE,
+      },
+    };
     emit(worker, "event-9", {
       type: "candidate-pass-b-partial-result",
       result: secondTranscript,

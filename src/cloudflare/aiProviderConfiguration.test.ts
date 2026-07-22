@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 import {
   AI_PROVIDER_CATALOG,
   createAiProviderReadinessManifest,
+  isBoundedAiProviderFallbackEnabled,
   resolveBroadcastContextConnection,
   resolveBroadcastTranscriptConnection,
   resolveCandidateInsightConnection,
+  resolveCandidateInsightFallbackConnection,
 } from "./aiProviderConfiguration";
 
 describe("aiProviderConfiguration", () => {
@@ -49,11 +51,41 @@ describe("aiProviderConfiguration", () => {
     expect(manifest.candidateInsight).toEqual({
       selectedProvider: "qwen",
       modelId: "qwen3.5-omni-flash",
-      modelRevision: "qwen3.5-omni-flash-multimodal-participants-2026-07-22",
+      modelRevision: "qwen3.5-omni-flash-grounded-frames-v2-2026-07-22",
       implementationStatus: "active",
       configured: true,
       active: true,
     });
+  });
+
+  it("enables exactly one alternate candidate provider only in bounded mode", () => {
+    const environment = {
+      CANDIDATE_INSIGHT_PROVIDER: "qwen",
+      AI_PROVIDER_FALLBACK_MODE: "bounded",
+      QWEN_API_KEY: "qwen-secret",
+      GEMINI_API_KEY: "gemini-secret",
+    } as const;
+
+    expect(isBoundedAiProviderFallbackEnabled(environment)).toBe(true);
+    expect(resolveCandidateInsightFallbackConnection(environment, "qwen")).toEqual({
+      provider: "gemini",
+      descriptor: AI_PROVIDER_CATALOG.candidateInsight.gemini,
+      endpoint:
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent",
+      apiKey: "gemini-secret",
+    });
+    expect(
+      resolveCandidateInsightFallbackConnection(
+        { ...environment, AI_PROVIDER_FALLBACK_MODE: "disabled" },
+        "qwen",
+      ),
+    ).toBeNull();
+    expect(
+      resolveCandidateInsightFallbackConnection(
+        { ...environment, GEMINI_API_KEY: "" },
+        "qwen",
+      ),
+    ).toBeNull();
   });
 
   it("fails closed for missing or malformed provider configuration", () => {
@@ -133,7 +165,7 @@ describe("aiProviderConfiguration", () => {
     expect(createAiProviderReadinessManifest(environment).broadcastContext).toEqual({
       selectedProvider: "qwen",
       modelId: "qwen3.7-plus",
-      modelRevision: "qwen3.7-plus-api-reviewed-2026-07-22",
+      modelRevision: "qwen3.7-plus-topic-chapters-reviewed-2026-07-22",
       implementationStatus: "active",
       configured: true,
       active: true,

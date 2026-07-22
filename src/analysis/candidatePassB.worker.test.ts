@@ -3,6 +3,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { CANDIDATE_PASS_B_PROXY_ENDPOINT } from "./candidatePassBGemini";
 import {
   CANDIDATE_PASS_B_DEVICE,
+  CANDIDATE_PASS_B_GEMINI_MODEL_ID,
+  CANDIDATE_PASS_B_GEMINI_MODEL_REVISION,
+  CANDIDATE_PASS_B_RESPONSE_MODEL_ID_HEADER,
+  CANDIDATE_PASS_B_RESPONSE_MODEL_REVISION_HEADER,
   type CandidatePassBWorkerIdentity,
   type CandidatePassBWorkerRequest,
   type CandidatePassBWorkerResponse,
@@ -212,7 +216,15 @@ describe("candidatePassB.worker remote lifecycle", () => {
               },
             ],
           }),
-          { status: 200 },
+          {
+            status: 200,
+            headers: {
+              [CANDIDATE_PASS_B_RESPONSE_MODEL_ID_HEADER]:
+                CANDIDATE_PASS_B_GEMINI_MODEL_ID,
+              [CANDIDATE_PASS_B_RESPONSE_MODEL_REVISION_HEADER]:
+                CANDIDATE_PASS_B_GEMINI_MODEL_REVISION,
+            },
+          },
         ),
       );
     vi.stubGlobal("self", fakeSelf);
@@ -247,7 +259,15 @@ describe("candidatePassB.worker remote lifecycle", () => {
     });
     expect(
       responses.find((response) => response.type === "candidate-pass-b-partial-result"),
-    ).toMatchObject({ result: { candidateId: "candidate-2" } });
+    ).toMatchObject({
+      result: {
+        candidateId: "candidate-2",
+        model: {
+          id: CANDIDATE_PASS_B_GEMINI_MODEL_ID,
+          revision: CANDIDATE_PASS_B_GEMINI_MODEL_REVISION,
+        },
+      },
+    });
     expect(
       responses.find((response) => response.type === "candidate-pass-b-completed"),
     ).toMatchObject({

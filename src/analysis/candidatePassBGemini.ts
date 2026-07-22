@@ -642,6 +642,44 @@ export function extractCandidatePassBGeminiResponse(
   return parseCandidatePassBGeminiAnalysis(parsed, candidateDurationMs);
 }
 
+/**
+ * Keeps the paid-for transcript when browser frame capture failed, but removes
+ * provider-authored visual and causal claims. Audio-only output must never be
+ * presented as if the model saw the game, avatar, captions, or screen event.
+ */
+export function buildCandidatePassBAudioOnlySafeResponse(
+  value: unknown,
+  candidateDurationMs: number,
+): Record<string, unknown> | null {
+  const parsed = extractCandidatePassBGeminiResponse(value, candidateDurationMs);
+  if (!parsed.ok) return null;
+  const safeAnalysis = {
+    segments: parsed.analysis.segments,
+    eventSummaryKo:
+      "대표 화면을 확보하지 못해 오디오에서 확인된 실제 발화만 기록했습니다. 화면에서 일어난 사건과 발화의 원인은 원본 재생으로 확인해야 합니다.",
+    reactionSummaryKo:
+      "목소리와 발화 변화는 들을 수 있지만 표정·몸짓·게임 또는 다른 화면 상황은 확인하지 못했습니다.",
+    whyGoodClipKo:
+      "화면 증거가 없어 이 구간의 클립 적합성은 자동으로 확정하지 않았습니다. 대사 위치부터 직접 재생해 확인해 주세요.",
+    uncertaintiesKo: [
+      "대표 화면 캡처가 준비되지 않아 화면 상황과 사건 원인을 판단하지 않았습니다.",
+      ...parsed.analysis.insight.uncertaintiesKo,
+    ].slice(0, MAX_CANDIDATE_PASS_B_UNCERTAINTIES),
+    identifiedParticipants:
+      parsed.analysis.insight.identifiedParticipants?.filter(
+        ({ evidenceBasis }) => evidenceBasis === "spoken-name",
+      ) ?? [],
+  };
+  return {
+    candidates: [
+      {
+        finishReason: "STOP",
+        content: { parts: [{ text: JSON.stringify(safeAnalysis) }] },
+      },
+    ],
+  };
+}
+
 export function classifyCandidatePassBProxyHttpFailure(
   status: number,
   payload?: unknown,

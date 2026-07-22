@@ -1,5 +1,16 @@
 # ExClipper 제품·UX·기술 계획서
 
+## `0.3.31` bounded runtime model routing
+
+- The shared role policy is now part of the Worker runtime instead of a test-only catalog. Candidate perception uses the configured primary (`qwen3.5-omni-flash` in production) and may switch once to `gemini-3.5-flash` only when bounded fallback is enabled and both credentials are valid.
+- Whole-broadcast compressed-text reasoning uses `qwen3.7-plus`, with one schema-compatible `qwen3.6-flash` fallback. The low-cost selection pass starts with `qwen3.6-flash` and may use `qwen3.7-plus` once when the cheaper model cannot return a valid decision.
+- Full or sampled broadcast transcription remains single-provider per chunk. An ambiguous timeout may already have been billed, so ExClipper does not automatically resend the same long audio to Gemini. This preserves the `$1` run envelope and leaves failed coverage explicit.
+- A provider switch never changes candidate score, range, approval, or review state. The actual candidate model ID and revision are validated from exposed response metadata and stored per candidate so a recovered paid result is not mislabeled as another model.
+- The route has one switch maximum after the primary provider's bounded transient retries. It is a recovery path, not speculative model voting or parallel duplicate spend.
+- Whole-context overview also returns 2–16 grounded, non-overlapping topic chapters. Their ranges must resolve to transcript chapter IDs; they inform the timeline and editor orientation but never alter candidate score, boundary, approval, or review state.
+- The maximized review workspace places 30-minute ticks, numbered candidate markers, topic bands, semantic leads, and the faint potential-score landscape on one time axis. Nearby candidate numbers may use separate vertical lanes but retain their exact horizontal source time.
+- Representative-frame absence is an explicit capability gap. The transport must not let an audio-only provider response invent a visual scene, game, participant, or causal explanation; only bounded transcript and audio evidence may survive until the editor reconnects or re-runs the source.
+
 ## 2026-07-21 implementation update
 
 The working assumption for the clip page is a maximized desktop window. The top of the page therefore uses a wide two-column workspace: source input and an always-visible readiness summary. The primary analysis action is placed immediately below that row so a beginner does not have to scroll to start.

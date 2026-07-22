@@ -56,6 +56,7 @@ import {
   formatEstimatedUsd,
 } from "./analysis/candidatePassBCost";
 import { createAnalysisBudgetEnvelope } from "./analysis/analysisBudgetPolicy";
+import { AI_MODEL_ROUTING_POLICY_VERSION } from "./analysis/aiModelRoutingPolicy";
 import {
   createDiscoveredLeadRefinementChapters,
   createDiscoveredLeadRefinementPlan,
@@ -90,8 +91,8 @@ import {
   type CandidatePassBEvidenceById,
 } from "./analysis/candidatePassBEvidenceState";
 import {
-  CANDIDATE_PASS_B_MODEL_ID,
-  CANDIDATE_PASS_B_MODEL_REVISION,
+  CANDIDATE_PASS_B_ROUTING_MODEL_ID,
+  CANDIDATE_PASS_B_ROUTING_MODEL_REVISION,
   CandidatePassBWorkerError,
   runCandidatePassBWorker,
   type CandidatePassBCandidateGap,
@@ -244,6 +245,7 @@ import {
 import {
   CANDIDATE_PASS_B_INSIGHT_SCHEMA_VERSION,
   type CandidatePassBInsightsRecord,
+  type StoredCandidatePassBModelIdentity,
 } from "./storage/candidatePassBInsightStore";
 import type { CandidatePassBVideoFrame } from "./analysis/candidatePassBWorkerProtocol";
 
@@ -282,7 +284,7 @@ interface AudioAnalysisOutcome {
   readonly coverageComplete: boolean;
 }
 
-const APP_VERSION = "0.3.30";
+const APP_VERSION = "0.3.31";
 const PERSISTENCE_SCHEMA_VERSION = "0.3.0";
 const SIGNAL_ENGINE_VERSION =
   "streamer-reaction-fast-pass-v5-chat-fallback-music-confirmation";
@@ -291,6 +293,9 @@ const SIGNAL_GAP_POLICY_ID = DURABLE_SIGNAL_GAP_POLICY_ID;
 
 type CandidateGeminiInsight = CandidatePassBTranscriptResult["insight"];
 type CandidateGeminiInsightById = Readonly<Record<string, CandidateGeminiInsight>>;
+type CandidatePassBModelById = Readonly<
+  Record<string, StoredCandidatePassBModelIdentity>
+>;
 type CandidateTimelineFrame = Awaited<ReturnType<typeof sampleCandidateVideoFrames>>[number];
 type CandidateTimelineFramesById = Readonly<
   Record<string, readonly CandidateTimelineFrame[]>
@@ -900,6 +905,7 @@ function App() {
     useState<string | null>(null);
   const candidatePassBEvidenceRef = useRef<CandidatePassBEvidenceById>({});
   const candidateGeminiInsightRef = useRef<CandidateGeminiInsightById>({});
+  const candidatePassBModelByIdRef = useRef<CandidatePassBModelById>({});
   const candidateTimelineFramesRef = useRef<CandidateTimelineFramesById>({});
   const candidatePassBInsightWriteChainRef = useRef<Promise<void>>(Promise.resolve());
   const candidatePassBInsightWriteEpochRef = useRef(0);
@@ -1353,14 +1359,43 @@ function App() {
     analysisRun !== null ||
     openedRecoveredResult !== null;
   const showRecoveryPanel =
-    openedRecoveredResult !== null ||
-    recoveryCatalog.status === "failed" ||
-    (recoveryCatalog.status === "ready" && recoveryCatalog.audit.results.length > 0);
+    selectionResult === null &&
+    (openedRecoveredResult !== null ||
+      recoveryCatalog.status === "failed" ||
+      (recoveryCatalog.status === "ready" && recoveryCatalog.audit.results.length > 0));
   const boundarySourceDurationMs = Math.round(
     preflight?.metadata.durationMs ??
       openedRecoveredResult?.finalResult.result.input.source.durationMs ??
       0,
   );
+  const timelineAxisTicks = useMemo(() => {
+    const intervalMs = 30 * 60_000;
+    if (boundarySourceDurationMs <= intervalMs) return [];
+    return Array.from(
+      { length: Math.floor((boundarySourceDurationMs - 1) / intervalMs) },
+      (_, index) => (index + 1) * intervalMs,
+    );
+  }, [boundarySourceDurationMs]);
+  const timelineMarkerLaneById = useMemo(() => {
+    const lastPositionByLane = [-Infinity, -Infinity, -Infinity];
+    const laneById: Record<string, number> = {};
+    for (const candidate of orderedCandidates) {
+      const position =
+        boundarySourceDurationMs > 0
+          ? (candidate.peakMs / boundarySourceDurationMs) * 100
+          : 0;
+      let lane = lastPositionByLane.findIndex(
+        (lastPosition) => position - lastPosition >= 2.4,
+      );
+      if (lane < 0) {
+        lane = lastPositionByLane.indexOf(Math.min(...lastPositionByLane));
+      }
+      laneById[candidate.id] = lane;
+      lastPositionByLane[lane] = position;
+    }
+    return laneById;
+  }, [boundarySourceDurationMs, orderedCandidates]);
+  const timelineDiscoveredLeads = broadcastContextResult?.discoveredLeads ?? [];
   const broadcastContextSamplingPlan = useMemo(() => {
     if (boundarySourceDurationMs <= 0) {
       return null;
@@ -1435,7 +1470,7 @@ function App() {
     broadcastContextStatus === "running"
       ? "Qwen 3.7 Plus 전체 맥락 판단 중"
       : broadcastContextStatus === "completed"
-        ? `전체 맥락 완료 · 의미 구간 ${broadcastContextResult?.semanticChapters.length ?? 0}개`
+        ? `전체 맥락 완료 · 주제 구간 ${broadcastContextResult?.semanticChapters.length ?? 0}개`
         : broadcastContextStatus === "failed"
           ? "전체 맥락 판단 실패"
           : broadcastTranscriptStatus === "running"
@@ -1626,6 +1661,7 @@ function App() {
     setCandidatePassBRun(null);
     candidatePassBEvidenceRef.current = {};
     candidateGeminiInsightRef.current = {};
+    candidatePassBModelByIdRef.current = {};
     setCandidatePassBEvidenceById({});
     setCandidateGeminiInsightById({});
     setCandidatePassBStartPending(false);
@@ -2864,6 +2900,8 @@ function App() {
     thumbnailById: CandidateTimelineThumbnailById = firstTimelineFrameById(
       candidateTimelineFramesRef.current,
     ),
+    modelByCandidateId: CandidatePassBModelById =
+      candidatePassBModelByIdRef.current,
   ): void => {
     const runId = currentAnalysisRunId;
     const inputSignature =
@@ -2879,9 +2917,10 @@ function App() {
       runId,
       schemaVersion: CANDIDATE_PASS_B_INSIGHT_SCHEMA_VERSION,
       inputSignature,
-      modelManifestHash: CANDIDATE_PASS_B_MODEL_REVISION,
+      modelManifestHash: CANDIDATE_PASS_B_ROUTING_MODEL_REVISION,
       evidenceById,
       insightById,
+      ...(Object.keys(modelByCandidateId).length > 0 ? { modelByCandidateId } : {}),
       ...(Object.keys(thumbnailById).length > 0 ? { thumbnailById } : {}),
       recordedAt: new Date().toISOString(),
     };
@@ -3031,8 +3070,8 @@ function App() {
         sourceDurationMs,
       },
       model: {
-        modelId: CANDIDATE_PASS_B_MODEL_ID,
-        modelRevision: CANDIDATE_PASS_B_MODEL_REVISION,
+        modelId: CANDIDATE_PASS_B_ROUTING_MODEL_ID,
+        modelRevision: CANDIDATE_PASS_B_ROUTING_MODEL_REVISION,
         runtimeDevice,
       },
       candidates: targets.map((target) => ({
@@ -3156,11 +3195,24 @@ function App() {
               ...candidateGeminiInsightRef.current,
               [result.candidateId]: result.insight,
             };
+            const nextModels: CandidatePassBModelById = {
+              ...candidatePassBModelByIdRef.current,
+              [result.candidateId]: {
+                id: result.model.id,
+                revision: result.model.revision,
+              },
+            };
             candidatePassBEvidenceRef.current = nextEvidence;
             candidateGeminiInsightRef.current = nextInsights;
+            candidatePassBModelByIdRef.current = nextModels;
             setCandidatePassBEvidenceById(nextEvidence);
             setCandidateGeminiInsightById(nextInsights);
-            queueCandidatePassBInsightPersistence(nextEvidence, nextInsights);
+            queueCandidatePassBInsightPersistence(
+              nextEvidence,
+              nextInsights,
+              firstTimelineFrameById(candidateTimelineFramesRef.current),
+              nextModels,
+            );
           }
         },
         onCandidateGap: (gap: CandidatePassBCandidateGap) => {
@@ -4129,7 +4181,11 @@ function App() {
     // reconnecting does not schedule the same Gemini verification again.
     const isRecoverablePassBCandidate = (candidateId: string) =>
       recoveredCandidateIds.has(candidateId) || candidateId.startsWith("semantic-");
-    const recoveredPassBInsights = recovered.candidatePassBInsights;
+    const recoveredPassBInsights =
+      recovered.candidatePassBInsights?.modelManifestHash ===
+      CANDIDATE_PASS_B_ROUTING_MODEL_REVISION
+        ? recovered.candidatePassBInsights
+        : null;
     const recoveredEvidence = Object.fromEntries(
       Object.entries(recoveredPassBInsights?.evidenceById ?? {}).filter(([candidateId]) =>
         isRecoverablePassBCandidate(candidateId),
@@ -4140,6 +4196,11 @@ function App() {
         isRecoverablePassBCandidate(candidateId),
       ),
     ) as CandidateGeminiInsightById;
+    const recoveredModels = Object.fromEntries(
+      Object.entries(recoveredPassBInsights?.modelByCandidateId ?? {}).filter(
+        ([candidateId]) => isRecoverablePassBCandidate(candidateId),
+      ),
+    ) as CandidatePassBModelById;
     const recoveredTimelineFrames = Object.fromEntries(
       Object.entries(recoveredPassBInsights?.thumbnailById ?? {})
         .filter(([candidateId]) => isRecoverablePassBCandidate(candidateId))
@@ -4147,6 +4208,7 @@ function App() {
     ) as CandidateTimelineFramesById;
     candidatePassBEvidenceRef.current = recoveredEvidence;
     candidateGeminiInsightRef.current = recoveredGeminiInsights;
+    candidatePassBModelByIdRef.current = recoveredModels;
     candidateTimelineFramesRef.current = recoveredTimelineFrames;
     setCandidatePassBEvidenceById(recoveredEvidence);
     setCandidateGeminiInsightById(recoveredGeminiInsights);
@@ -4506,7 +4568,7 @@ function App() {
       const contextInputSignature = await createContentFingerprint([
         inputSignature,
         JSON.stringify(contextInput),
-        "qwen3.7-plus-api-reviewed-2026-07-22",
+        `ai-routing-policy:${AI_MODEL_ROUTING_POLICY_VERSION}`,
       ]);
       if (controller.signal.aborted || !isMounted.current) return;
       const store = getResultStore();
@@ -5288,7 +5350,7 @@ function App() {
         </details>
         )}
 
-        {(analysisBusy || selectionResult !== null || openedRecoveredResult !== null) && (
+        {(analysisBusy || (selectionResult === null && openedRecoveredResult !== null)) && (
           <section className="rh-project-context" aria-label="현재 편집 작업">
             <div className="rh-project-context-copy">
               <p className="rh-eyebrow">
@@ -5819,12 +5881,13 @@ function App() {
                 <section className="rh-context-summary" aria-labelledby="broadcast-context-title">
                   <div>
                     <p className="rh-eyebrow">AI 방송 요약</p>
-                    <h4 id="broadcast-context-title">전체 흐름에서 남긴 후보</h4>
+                    <h4 id="broadcast-context-title">방송 흐름과 주제 구간</h4>
                   </div>
                   <p>{broadcastContextResult.broadcastSummaryKo}</p>
                   <div className="rh-context-summary-meta">
-                    <span>의미 구간 {broadcastContextResult.semanticChapters.length}개</span>
-                    <span>새 의미 후보 {broadcastContextResult.discoveredLeads.length}개</span>
+                    <span>최종 검토 후보 {candidates.length}개</span>
+                    <span>주제 구간 {broadcastContextResult.semanticChapters.length}개</span>
+                    <span>발견한 의미 단서 {broadcastContextResult.discoveredLeads.length}개</span>
                     {broadcastContextResult.recurringThemesKo.slice(0, 4).map((themeLabel) => (
                       <span key={themeLabel}>{themeLabel}</span>
                     ))}
@@ -6230,9 +6293,22 @@ function App() {
                           선의 위치는 방송 시각, 흐릿한 높이는 잠재 점수예요. 원과 요약 카드를 누르면 같은 장면을 바로 확인합니다.
                         </p>
                       </div>
-                      <span className="rh-timeline-count">{orderedCandidates.length}개 후보</span>
+                      <span className="rh-timeline-count">
+                        {orderedCandidates.length}개 후보 · {timelineSemanticChapters.length}개 주제
+                      </span>
                     </div>
                     <div className="rh-timeline-track" aria-label="방송 안 후보 위치">
+                      <div className="rh-timeline-ticks" aria-hidden="true">
+                        {timelineAxisTicks.map((tickMs) => (
+                          <span
+                            className="rh-timeline-tick"
+                            key={tickMs}
+                            style={{ left: `${(tickMs / boundarySourceDurationMs) * 100}%` }}
+                          >
+                            <small>{formatDuration(tickMs)}</small>
+                          </span>
+                        ))}
+                      </div>
                       <div className="rh-timeline-score-rail" aria-label="후보 점수로 보는 신호 가능성">
                         {candidateTimelineScorePoints.map((point) => {
                           const position =
@@ -6274,11 +6350,37 @@ function App() {
                               <div
                                 key={chapter.semanticChapterId}
                                 className="rh-timeline-semantic-chapter"
+                                data-kind={chapter.kind}
                                 style={{ left: `${left}%`, width: `${width}%` }}
                                 title={chapter.summaryKo}
                               >
                                 <span className="rh-timeline-semantic-title">{chapter.titleKo}</span>
                               </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                      {timelineDiscoveredLeads.length > 0 && (
+                        <div className="rh-timeline-lead-rail" aria-label="전체 맥락에서 발견한 의미 후보 범위">
+                          {timelineDiscoveredLeads.map((lead, index) => {
+                            const left =
+                              boundarySourceDurationMs > 0
+                                ? Math.min(100, Math.max(0, (lead.startMs / boundarySourceDurationMs) * 100))
+                                : 0;
+                            const width =
+                              boundarySourceDurationMs > 0
+                                ? Math.max(0.45, Math.min(100 - left, ((lead.endMs - lead.startMs) / boundarySourceDurationMs) * 100))
+                                : 0;
+                            return (
+                              <span
+                                key={lead.leadId}
+                                className="rh-timeline-semantic-lead"
+                                data-category={lead.category}
+                                style={{ left: `${left}%`, width: `${width}%` }}
+                                title={`의미 후보 ${index + 1} · ${lead.eventSummaryKo}`}
+                              >
+                                <span>{index + 1}</span>
+                              </span>
                             );
                           })}
                         </div>
@@ -6293,13 +6395,17 @@ function App() {
                             className="rh-timeline-marker"
                             key={candidate.id}
                             type="button"
-                            style={{ left: `${position}%` }}
+                            style={{
+                              left: `${position}%`,
+                              top: `${27 + (timelineMarkerLaneById[candidate.id] ?? 0) * 30}px`,
+                            }}
                             data-selected={candidate.id === focusedCandidateId}
                             data-review-state={candidate.reviewState}
+                            data-origin={candidate.evidence.semantic === undefined ? "signal" : "semantic"}
                             aria-label={`후보 ${index + 1}, ${formatDuration(candidate.peakMs)} 위치 선택${sourcePreviewUrl === null ? "" : " 및 재생"}`}
                             onClick={() => playCandidate(candidate)}
                           >
-                            <span aria-hidden="true">O</span>
+                            <span aria-hidden="true">{index + 1}</span>
                           </button>
                         );
                       })}
@@ -6310,9 +6416,15 @@ function App() {
                     </div>
                     <p className="rh-timeline-score-hint">
                       {selectionResult.analyzedChatMessageCount > 0
-                        ? "흐릿한 막대는 오디오·채팅·화면 신호의 상대 점수예요. O가 없어도 막대가 있는 구간은 먼저 확인할 잠재 후보입니다."
-                        : "흐릿한 막대는 오디오·화면 신호의 상대 점수예요. O가 없어도 막대가 있는 구간은 먼저 확인할 잠재 후보입니다."}
+                        ? "흐릿한 막대는 오디오·채팅·화면 신호의 상대 점수예요. 번호가 없어도 막대가 있는 구간은 먼저 확인할 잠재 후보입니다."
+                        : "흐릿한 막대는 오디오·화면 신호의 상대 점수예요. 번호가 없어도 막대가 있는 구간은 먼저 확인할 잠재 후보입니다."}
                     </p>
+                    <div className="rh-timeline-legend" aria-label="타임라인 범례">
+                      <span data-legend="candidate">숫자 원 · 검토 후보</span>
+                      <span data-legend="topic">색 띠 · 방송 주제 구간</span>
+                      <span data-legend="lead">마름모 · 전체 맥락 의미 후보</span>
+                      <span data-legend="score">흐린 높이 · 잠재 점수</span>
+                    </div>
                     <ol className="rh-timeline-cards" aria-label="시간순 클립 후보 요약">
                       {orderedCandidates.map((candidate, index) => {
                         const frames = candidateTimelineFramesById[candidate.id] ?? [];
@@ -6353,6 +6465,11 @@ function App() {
                                 <strong>
                                   후보 {index + 1} · {candidate.reviewState === "approved" ? "사용" : candidate.reviewState === "rejected" ? "제외" : "검토 전"}
                                 </strong>
+                                <small>
+                                  {candidate.evidence.semantic === undefined
+                                    ? "빠른 탐색 후보"
+                                    : "전체 맥락에서 찾은 의미 후보"}
+                                </small>
                                 <span>{oneLineSummary}</span>
                               </span>
                             </button>

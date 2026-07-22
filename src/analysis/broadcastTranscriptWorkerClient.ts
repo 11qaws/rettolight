@@ -83,41 +83,59 @@ function validResult(
   );
 }
 
-function validInput(
+function inputIssue(
   file: File,
   sourceDurationMs: number,
   chunks: readonly BroadcastContextTranscriptionChunk[],
-): boolean {
+): string | null {
   if (
-    !(file instanceof File) ||
+    typeof file.name !== "string" ||
+    file.name.trim().length === 0 ||
+    !Number.isFinite(file.size) ||
+    file.size < 0 ||
+    typeof file.slice !== "function"
+  ) {
+    return "원본 영상 파일 연결을 확인하지 못했어요.";
+  }
+  if (
     !Number.isSafeInteger(sourceDurationMs) ||
     sourceDurationMs <= 0 ||
-    sourceDurationMs > 12 * 60 * 60_000 ||
-    chunks.length === 0 ||
-    chunks.length > MAX_BROADCAST_TRANSCRIPT_WORKER_CHUNKS
+    sourceDurationMs > 12 * 60 * 60_000
   ) {
-    return false;
+    return "원본 영상 길이가 1ms~12시간 범위를 벗어났어요.";
+  }
+  if (chunks.length === 0) return "분석할 대사 구간이 비어 있어요.";
+  if (chunks.length > MAX_BROADCAST_TRANSCRIPT_WORKER_CHUNKS) {
+    return `대사 분석 구간이 ${chunks.length}개라 현재 상한 ${MAX_BROADCAST_TRANSCRIPT_WORKER_CHUNKS}개를 넘었어요.`;
   }
   let previousEndMs = -1;
   const ids = new Set<string>();
-  for (const chunk of chunks) {
+  for (const [index, chunk] of chunks.entries()) {
+    const ordinal = index + 1;
+    if (chunk.chunkId.length === 0) return `${ordinal}번째 대사 구간 ID가 비어 있어요.`;
+    if (ids.has(chunk.chunkId)) return `${ordinal}번째 대사 구간 ID가 앞 구간과 겹쳐요.`;
     if (
-      chunk.chunkId.length === 0 ||
-      ids.has(chunk.chunkId) ||
       !Number.isSafeInteger(chunk.sourceStartMs) ||
-      !Number.isSafeInteger(chunk.sourceEndMs) ||
-      chunk.sourceStartMs < 0 ||
-      chunk.sourceStartMs < previousEndMs ||
-      chunk.sourceEndMs <= chunk.sourceStartMs ||
-      chunk.sourceEndMs > sourceDurationMs ||
-      chunk.sourceEndMs - chunk.sourceStartMs > 210_000
+      !Number.isSafeInteger(chunk.sourceEndMs)
     ) {
-      return false;
+      return `${ordinal}번째 대사 구간 시간이 정수 밀리초가 아니에요.`;
+    }
+    if (chunk.sourceStartMs < 0 || chunk.sourceEndMs <= chunk.sourceStartMs) {
+      return `${ordinal}번째 대사 구간의 시작·끝 순서가 올바르지 않아요.`;
+    }
+    if (chunk.sourceStartMs < previousEndMs) {
+      return `${ordinal}번째 대사 구간이 앞 구간과 시간상 겹쳐요.`;
+    }
+    if (chunk.sourceEndMs > sourceDurationMs) {
+      return `${ordinal}번째 대사 구간이 원본 영상 끝을 넘어가요.`;
+    }
+    if (chunk.sourceEndMs - chunk.sourceStartMs > 210_000) {
+      return `${ordinal}번째 대사 구간이 3분 30초 안전 길이를 넘었어요.`;
     }
     ids.add(chunk.chunkId);
     previousEndMs = chunk.sourceEndMs;
   }
-  return true;
+  return null;
 }
 
 function isResponse(value: unknown): value is BroadcastTranscriptWorkerResponse {
@@ -141,11 +159,12 @@ export function runBroadcastTranscriptWorker(
   file: File,
   options: RunBroadcastTranscriptWorkerOptions,
 ): Promise<BroadcastTranscriptWorkerRunResult> {
-  if (!validInput(file, options.sourceDurationMs, options.chunks)) {
+  const issue = inputIssue(file, options.sourceDurationMs, options.chunks);
+  if (issue !== null) {
     return Promise.reject(
       new BroadcastTranscriptWorkerClientError(
         "INVALID_INPUT",
-        "방송 전체 대사 분석 범위를 준비하지 못했어요.",
+        `방송 전체 대사 분석 범위를 준비하지 못했어요. ${issue}`,
       ),
     );
   }

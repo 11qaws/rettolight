@@ -1,5 +1,6 @@
 import {
   MAX_CANDIDATE_PASS_B_RESPONSE_BYTES,
+  buildCandidatePassBAudioOnlySafeResponse,
   buildCandidatePassBGeminiRequestBody,
   extractCandidatePassBGeminiResponse,
 } from "../analysis/candidatePassBGemini";
@@ -9,6 +10,9 @@ import {
   inspectCandidatePassBQwenOmniSseResponse,
 } from "../analysis/candidatePassBQwenOmni";
 import {
+  CANDIDATE_PASS_B_RESPONSE_FALLBACK_HEADER,
+  CANDIDATE_PASS_B_RESPONSE_MODEL_ID_HEADER,
+  CANDIDATE_PASS_B_RESPONSE_MODEL_REVISION_HEADER,
   CANDIDATE_PASS_B_SAMPLE_RATE_HZ,
   MAX_CANDIDATE_PASS_B_TARGET_DURATION_MS,
   MAX_CANDIDATE_PASS_B_VIDEO_FRAME_BASE64_LENGTH,
@@ -27,6 +31,7 @@ import {
 import {
   createBroadcastContextRequest,
   BroadcastContextInputError,
+  type BroadcastContextRequest,
   type BroadcastContextRequestInput,
 } from "../analysis/broadcastContextProtocol";
 import {
@@ -47,11 +52,18 @@ import {
 } from "../analysis/youtubeCaptionTrack";
 
 import {
+  QWEN_CONTEXT_MODEL_ID,
+  QWEN_CONTEXT_MODEL_REVISION,
   QWEN_CONTEXT_SELECTION_MODEL_ID,
+  QWEN_CONTEXT_SELECTION_MODEL_REVISION,
+  isBoundedAiProviderFallbackEnabled,
+  resolveCandidateInsightFallbackConnection,
   resolveCandidateInsightConnection,
   resolveBroadcastContextConnection,
   resolveBroadcastTranscriptConnection,
   type AiProviderEnvironment,
+  type BroadcastContextConnection,
+  type CandidateInsightConnection,
 } from "./aiProviderConfiguration";
 
 const ENDPOINT_PATH = "/v1/candidate-insights";
@@ -168,6 +180,14 @@ function isAllowedOrigin(origin: string | null): origin is string {
 function corsHeaders(origin: string): Headers {
   const headers = new Headers();
   headers.set("Access-Control-Allow-Origin", origin);
+  headers.set(
+    "Access-Control-Expose-Headers",
+    [
+      CANDIDATE_PASS_B_RESPONSE_MODEL_ID_HEADER,
+      CANDIDATE_PASS_B_RESPONSE_MODEL_REVISION_HEADER,
+      CANDIDATE_PASS_B_RESPONSE_FALLBACK_HEADER,
+    ].join(", "),
+  );
   headers.set("Vary", "Origin");
   return headers;
 }
@@ -563,11 +583,18 @@ async function readSafeProviderErrorCode(response: Response): Promise<string> {
     : "missing";
 }
 
-function successResponse(payload: unknown, origin: string): Response {
+function successResponse(
+  payload: unknown,
+  origin: string,
+  additionalHeaders?: Readonly<Record<string, string>>,
+): Response {
   const headers = corsHeaders(origin);
   headers.set("Content-Type", JSON_CONTENT_TYPE);
   headers.set("Cache-Control", "no-store");
   headers.set("X-Content-Type-Options", "nosniff");
+  for (const [name, value] of Object.entries(additionalHeaders ?? {})) {
+    headers.set(name, value);
+  }
   return new Response(JSON.stringify(payload), { status: 200, headers });
 }
 
@@ -581,6 +608,256 @@ function healthResponse(request: Request): Response {
     ? null
     : JSON.stringify({ ok: true, service: "rettohighlight-gemini", version: 1 });
   return new Response(body, { status: 200, headers });
+}
+
+type CandidateProviderFailureKind =
+  | "timeout"
+  | "unavailable"
+  | "rate-limited"
+  | "auth"
+  | "response-format"
+  | "invalid-argument"
+  | "rejected"
+  | "invalid-response";
+
+type CandidateProviderAttempt =
+  | {
+      readonly ok: true;
+      readonly payload: unknown;
+      readonly connection: CandidateInsightConnection;
+    }
+  | {
+      readonly ok: false;
+      readonly kind: CandidateProviderFailureKind;
+      readonly diagnosticHeaders?: Readonly<Record<string, string>>;
+    };
+
+async function attemptCandidateProvider(
+  connection: CandidateInsightConnection,
+  candidateRequest: CandidateInsightRequest,
+  fetchImplementation: FetchImplementation,
+  timeoutMs: number,
+  retryDelaysMs: readonly number[],
+): Promise<CandidateProviderAttempt> {
+  let upstreamRequestBody: string;
+  try {
+    upstreamRequestBody = JSON.stringify(
+      connection.provider === "qwen"
+        ? buildCandidatePassBQwenOmniRequestBody(
+            candidateRequest.audioBase64,
+            candidateRequest.candidateDurationMs,
+            candidateRequest.videoFrames,
+          )
+        : buildCandidatePassBGeminiRequestBody(
+            candidateRequest.audioBase64,
+            candidateRequest.candidateDurationMs,
+            candidateRequest.videoFrames,
+          ),
+    );
+  } catch {
+    return { ok: false, kind: "invalid-argument" };
+  }
+
+  let upstreamResponse: Response;
+  try {
+    upstreamResponse = await fetchWithTransientRetries(
+      fetchImplementation,
+      connection.endpoint,
+      {
+        method: "POST",
+        headers:
+          connection.provider === "qwen"
+            ? {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${connection.apiKey}`,
+              }
+            : {
+                "Content-Type": "application/json",
+                "x-goog-api-key": connection.apiKey,
+              },
+        body: upstreamRequestBody,
+        cache: "no-store",
+        credentials: "omit",
+        referrerPolicy: "no-referrer",
+      },
+      timeoutMs,
+      retryDelaysMs,
+    );
+  } catch (error) {
+    return {
+      ok: false,
+      kind: error instanceof UpstreamTimeoutError ? "timeout" : "unavailable",
+    };
+  }
+
+  if (!upstreamResponse.ok) {
+    if (upstreamResponse.status === 429) {
+      await upstreamResponse.body?.cancel().catch(() => undefined);
+      return { ok: false, kind: "rate-limited" };
+    }
+    if (upstreamResponse.status === 401 || upstreamResponse.status === 403) {
+      await upstreamResponse.body?.cancel().catch(() => undefined);
+      return { ok: false, kind: "auth" };
+    }
+    if (upstreamResponse.status >= 500 && upstreamResponse.status <= 599) {
+      await upstreamResponse.body?.cancel().catch(() => undefined);
+      return { ok: false, kind: "unavailable" };
+    }
+    if (upstreamResponse.status === 400) {
+      const rejection = await classifyUpstreamRejection(upstreamResponse);
+      if (rejection === "api-key") return { ok: false, kind: "auth" };
+      if (rejection === "response-format") {
+        return { ok: false, kind: "response-format" };
+      }
+      if (rejection === "invalid-argument") {
+        return { ok: false, kind: "invalid-argument" };
+      }
+      return { ok: false, kind: "rejected" };
+    }
+    await upstreamResponse.body?.cancel().catch(() => undefined);
+    return { ok: false, kind: "rejected" };
+  }
+
+  const upstreamDeclaredLength = upstreamResponse.headers.get("Content-Length");
+  if (
+    upstreamDeclaredLength !== null &&
+    (!/^\d+$/u.test(upstreamDeclaredLength) ||
+      Number(upstreamDeclaredLength) > MAX_CANDIDATE_PASS_B_RESPONSE_BYTES)
+  ) {
+    await upstreamResponse.body?.cancel().catch(() => undefined);
+    return { ok: false, kind: "invalid-response" };
+  }
+
+  let upstreamBytes: Uint8Array;
+  try {
+    upstreamBytes = await readBodyWithLimit(
+      upstreamResponse.body,
+      MAX_CANDIDATE_PASS_B_RESPONSE_BYTES,
+    );
+  } catch {
+    return { ok: false, kind: "invalid-response" };
+  }
+
+  let upstreamPayload: unknown;
+  let qwenDiagnostics: ReturnType<
+    typeof inspectCandidatePassBQwenOmniSseResponse
+  > | null = null;
+  try {
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(upstreamBytes);
+    upstreamBytes.fill(0);
+    if (connection.provider === "qwen") {
+      qwenDiagnostics = inspectCandidatePassBQwenOmniSseResponse(text);
+      upstreamPayload = extractCandidatePassBQwenOmniSseResponse(
+        text,
+        candidateRequest.candidateDurationMs,
+      );
+    } else {
+      upstreamPayload = JSON.parse(text);
+    }
+  } catch {
+    upstreamBytes.fill(0);
+    return { ok: false, kind: "invalid-response" };
+  }
+
+  const parsed = extractCandidatePassBGeminiResponse(
+    upstreamPayload,
+    candidateRequest.candidateDurationMs,
+  );
+  if (!parsed.ok) {
+    return {
+      ok: false,
+      kind: "invalid-response",
+      ...(qwenDiagnostics === null
+        ? {}
+        : {
+            diagnosticHeaders: {
+              "X-Qwen-Stop": qwenDiagnostics.sawStop ? "yes" : "no",
+              "X-Qwen-Text-Length": String(qwenDiagnostics.textLength),
+              "X-Qwen-Content-Type": qwenDiagnostics.contentWasString
+                ? "string"
+                : "other",
+              "X-Qwen-Json": qwenDiagnostics.jsonObject ? "record" : "invalid",
+              "X-Qwen-Keys": qwenDiagnostics.keys.join(",").slice(0, 160),
+            },
+          }),
+    };
+  }
+  const safePayload = candidateRequest.videoFrames.length === 0
+    ? buildCandidatePassBAudioOnlySafeResponse(
+        upstreamPayload,
+        candidateRequest.candidateDurationMs,
+      )
+    : upstreamPayload;
+  if (safePayload === null) {
+    return { ok: false, kind: "invalid-response" };
+  }
+  return { ok: true, payload: safePayload, connection };
+}
+
+function candidateProviderFailureResponse(
+  failure: Extract<CandidateProviderAttempt, { readonly ok: false }>,
+  origin: string,
+): Response {
+  switch (failure.kind) {
+    case "timeout":
+      return jsonResponse(
+        504,
+        "UPSTREAM_TIMEOUT",
+        "AI 응답 시간이 길어져 요청을 멈췄어요. 다시 시도해 주세요.",
+        origin,
+      );
+    case "unavailable":
+      return jsonResponse(
+        502,
+        "UPSTREAM_UNAVAILABLE",
+        "AI에 연결하지 못했어요. 잠시 뒤 다시 시도해 주세요.",
+        origin,
+      );
+    case "rate-limited":
+      return jsonResponse(
+        429,
+        "UPSTREAM_RATE_LIMITED",
+        "AI 사용 한도에 도달했어요. 잠시 뒤 다시 시도해 주세요.",
+        origin,
+        { "Retry-After": "60" },
+      );
+    case "auth":
+      return jsonResponse(
+        503,
+        "PROXY_NOT_CONFIGURED",
+        "AI 연결 설정을 확인해야 해요.",
+        origin,
+      );
+    case "response-format":
+      return jsonResponse(
+        502,
+        "UPSTREAM_RESPONSE_FORMAT_REJECTED",
+        "AI 응답 형식 설정을 확인해야 해요.",
+        origin,
+      );
+    case "invalid-argument":
+      return jsonResponse(
+        502,
+        "UPSTREAM_INVALID_ARGUMENT",
+        "AI가 후보 분석 요청을 받아들이지 않았어요.",
+        origin,
+      );
+    case "rejected":
+      return jsonResponse(
+        502,
+        "UPSTREAM_REJECTED",
+        "AI가 후보 분석 요청을 처리하지 못했어요.",
+        origin,
+      );
+    case "invalid-response":
+      return jsonResponse(
+        502,
+        "UPSTREAM_INVALID_RESPONSE",
+        "AI 답변을 안전하게 확인하지 못했어요.",
+        origin,
+        failure.diagnosticHeaders,
+      );
+  }
 }
 
 export async function handleCandidateInsightRequest(
@@ -763,211 +1040,47 @@ export async function handleCandidateInsightRequest(
     );
   }
 
-  let upstreamRequestBody: string;
-  try {
-    upstreamRequestBody = JSON.stringify(
-      providerConnection.provider === "qwen"
-        ? buildCandidatePassBQwenOmniRequestBody(
-            candidateRequest.audioBase64,
-            candidateRequest.candidateDurationMs,
-            candidateRequest.videoFrames,
-          )
-        : buildCandidatePassBGeminiRequestBody(
-            candidateRequest.audioBase64,
-            candidateRequest.candidateDurationMs,
-            candidateRequest.videoFrames,
-          ),
-    );
-  } catch {
-    wavBytes.fill(0);
-    return jsonResponse(
-      400,
-      "INVALID_REQUEST",
-      "후보 오디오 요청 형식을 확인해 주세요.",
-      origin,
-    );
-  }
   wavBytes.fill(0);
 
   const fetchImplementation = dependencies.fetchImplementation ?? fetch;
   const timeoutMs = dependencies.upstreamTimeoutMs ?? UPSTREAM_TIMEOUT_MS;
   const retryDelaysMs =
     dependencies.upstreamRetryDelaysMs ?? DEFAULT_UPSTREAM_RETRY_DELAYS_MS;
-  let upstreamResponse: Response;
-  try {
-    upstreamResponse = await fetchWithTransientRetries(
-      fetchImplementation,
-      providerConnection.endpoint,
-      {
-        method: "POST",
-        headers: providerConnection.provider === "qwen"
-          ? {
-              "Content-Type": "application/json",
-              "Authorization": `Bearer ${providerConnection.apiKey}`,
-            }
-          : {
-              "Content-Type": "application/json",
-              "x-goog-api-key": providerConnection.apiKey,
-            },
-        body: upstreamRequestBody,
-        cache: "no-store",
-        credentials: "omit",
-        referrerPolicy: "no-referrer",
-      },
-      timeoutMs,
-      retryDelaysMs,
-    );
-  } catch (error) {
-    if (error instanceof UpstreamTimeoutError) {
-      return jsonResponse(
-        504,
-        "UPSTREAM_TIMEOUT",
-        "AI 응답 시간이 길어져 요청을 멈췄어요. 다시 시도해 주세요.",
-        origin,
-      );
-    }
-    return jsonResponse(
-      502,
-      "UPSTREAM_UNAVAILABLE",
-      "AI에 연결하지 못했어요. 잠시 뒤 다시 시도해 주세요.",
-      origin,
-    );
-  }
-  if (!upstreamResponse.ok) {
-    if (upstreamResponse.status === 429) {
-      return jsonResponse(
-        429,
-        "UPSTREAM_RATE_LIMITED",
-        "AI 사용 한도에 도달했어요. 잠시 뒤 다시 시도해 주세요.",
-        origin,
-        { "Retry-After": "60" },
-      );
-    }
-    if (upstreamResponse.status === 401 || upstreamResponse.status === 403) {
-      return jsonResponse(
-        503,
-        "PROXY_NOT_CONFIGURED",
-        "AI 연결 설정을 확인해야 해요.",
-        origin,
-      );
-    }
-    if (upstreamResponse.status >= 500 && upstreamResponse.status <= 599) {
-      return jsonResponse(
-        502,
-        "UPSTREAM_UNAVAILABLE",
-        "AI에 연결하지 못했어요. 잠시 뒤 다시 시도해 주세요.",
-        origin,
-      );
-    }
-    if (upstreamResponse.status === 400) {
-      const rejection = await classifyUpstreamRejection(upstreamResponse);
-      if (rejection === "api-key") {
-        return jsonResponse(
-          503,
-          "PROXY_NOT_CONFIGURED",
-          "AI 연결 설정을 확인해야 해요.",
-          origin,
-        );
-      }
-      if (rejection === "response-format") {
-        return jsonResponse(
-          502,
-          "UPSTREAM_RESPONSE_FORMAT_REJECTED",
-          "AI 응답 형식 설정을 확인해야 해요.",
-          origin,
-        );
-      }
-      if (rejection === "invalid-argument") {
-        return jsonResponse(
-          502,
-          "UPSTREAM_INVALID_ARGUMENT",
-          "AI가 후보 분석 요청을 받아들이지 않았어요.",
-          origin,
-        );
-      }
-    }
-    return jsonResponse(
-      502,
-      "UPSTREAM_REJECTED",
-      "AI가 후보 분석 요청을 처리하지 못했어요.",
-      origin,
-    );
-  }
-
-  const upstreamDeclaredLength = upstreamResponse.headers.get("Content-Length");
-  if (
-    upstreamDeclaredLength !== null &&
-    (!/^\d+$/u.test(upstreamDeclaredLength) ||
-      Number(upstreamDeclaredLength) > MAX_CANDIDATE_PASS_B_RESPONSE_BYTES)
-  ) {
-    return jsonResponse(
-      502,
-      "UPSTREAM_INVALID_RESPONSE",
-      "AI 답변을 안전하게 확인하지 못했어요.",
-      origin,
-    );
-  }
-
-  let upstreamBytes: Uint8Array;
-  try {
-    upstreamBytes = await readBodyWithLimit(
-      upstreamResponse.body,
-      MAX_CANDIDATE_PASS_B_RESPONSE_BYTES,
-    );
-  } catch {
-    return jsonResponse(
-      502,
-      "UPSTREAM_INVALID_RESPONSE",
-      "AI 답변을 안전하게 확인하지 못했어요.",
-      origin,
-    );
-  }
-
-  let upstreamPayload: unknown;
-  let qwenDiagnostics: ReturnType<typeof inspectCandidatePassBQwenOmniSseResponse> | null = null;
-  try {
-    const text = new TextDecoder("utf-8", { fatal: true }).decode(upstreamBytes);
-    upstreamBytes.fill(0);
-    if (providerConnection.provider === "qwen") {
-      qwenDiagnostics = inspectCandidatePassBQwenOmniSseResponse(text);
-      upstreamPayload = extractCandidatePassBQwenOmniSseResponse(
-        text,
-        candidateRequest.candidateDurationMs,
-      );
-    } else {
-      upstreamPayload = JSON.parse(text);
-    }
-  } catch {
-    upstreamBytes.fill(0);
-    return jsonResponse(
-      502,
-      "UPSTREAM_INVALID_RESPONSE",
-      "AI 답변을 안전하게 확인하지 못했어요.",
-      origin,
-    );
-  }
-  const parsed = extractCandidatePassBGeminiResponse(
-    upstreamPayload,
-    candidateRequest.candidateDurationMs,
+  const primaryAttempt = await attemptCandidateProvider(
+    providerConnection,
+    candidateRequest,
+    fetchImplementation,
+    timeoutMs,
+    retryDelaysMs,
   );
-  if (!parsed.ok) {
-    return jsonResponse(
-      502,
-      "UPSTREAM_INVALID_RESPONSE",
-      "AI 답변을 안전하게 확인하지 못했어요.",
-      origin,
-      qwenDiagnostics === null
-        ? undefined
-        : {
-            "X-Qwen-Stop": qwenDiagnostics.sawStop ? "yes" : "no",
-            "X-Qwen-Text-Length": String(qwenDiagnostics.textLength),
-            "X-Qwen-Content-Type": qwenDiagnostics.contentWasString ? "string" : "other",
-            "X-Qwen-Json": qwenDiagnostics.jsonObject ? "record" : "invalid",
-            "X-Qwen-Keys": qwenDiagnostics.keys.join(",").slice(0, 160),
-          },
+  let finalAttempt = primaryAttempt;
+  let fallbackUsed = false;
+  if (!primaryAttempt.ok) {
+    const fallbackConnection = resolveCandidateInsightFallbackConnection(
+      environment,
+      providerConnection.provider,
     );
+    if (fallbackConnection !== null) {
+      fallbackUsed = true;
+      finalAttempt = await attemptCandidateProvider(
+        fallbackConnection,
+        candidateRequest,
+        fetchImplementation,
+        timeoutMs,
+        retryDelaysMs,
+      );
+    }
   }
-  return successResponse(upstreamPayload, origin);
+  if (!finalAttempt.ok) {
+    return candidateProviderFailureResponse(finalAttempt, origin);
+  }
+  return successResponse(finalAttempt.payload, origin, {
+    [CANDIDATE_PASS_B_RESPONSE_MODEL_ID_HEADER]:
+      finalAttempt.connection.descriptor.modelId,
+    [CANDIDATE_PASS_B_RESPONSE_MODEL_REVISION_HEADER]:
+      finalAttempt.connection.descriptor.modelRevision,
+    [CANDIDATE_PASS_B_RESPONSE_FALLBACK_HEADER]: fallbackUsed ? "true" : "false",
+  });
 }
 
 
@@ -1420,6 +1533,170 @@ export async function handleYouTubeCaptionsRequest(
   return successResponse(result, origin);
 }
 
+type BroadcastContextProviderAttempt =
+  | {
+      readonly ok: true;
+      readonly result: unknown;
+      readonly modelId: string;
+      readonly modelRevision: string;
+    }
+  | {
+      readonly ok: false;
+      readonly kind: "unavailable" | "rejected" | "invalid-response";
+      readonly diagnosticHeaders?: Readonly<Record<string, string>>;
+    };
+
+async function attemptBroadcastContextProvider(
+  connection: Exclude<BroadcastContextConnection, { readonly provider: "disabled" }>,
+  broadcastContextRequest: BroadcastContextRequest,
+  contextMode: "overview" | "refinement" | "selection",
+  qwenModelId: string,
+  qwenModelRevision: string,
+  fetchImplementation: FetchImplementation,
+  timeoutMs: number,
+  retryDelaysMs: readonly number[],
+): Promise<BroadcastContextProviderAttempt> {
+  const upstreamRequestBody = JSON.stringify(
+    connection.provider === "qwen"
+      ? buildBroadcastContextQwenRequestBody(
+          broadcastContextRequest,
+          qwenModelId,
+          contextMode,
+        )
+      : buildBroadcastContextDeepseekRequestBody(
+          broadcastContextRequest,
+          connection.descriptor.modelId,
+        ),
+  );
+
+  let upstreamResponse: Response;
+  try {
+    upstreamResponse = await fetchWithTransientRetries(
+      fetchImplementation,
+      connection.endpoint,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${connection.apiKey}`,
+        },
+        body: upstreamRequestBody,
+        cache: "no-store",
+        credentials: "omit",
+        referrerPolicy: "no-referrer",
+      },
+      timeoutMs,
+      retryDelaysMs,
+    );
+  } catch {
+    return { ok: false, kind: "unavailable" };
+  }
+  if (!upstreamResponse.ok) {
+    const upstreamStatus = upstreamResponse.status;
+    await upstreamResponse.body?.cancel().catch(() => undefined);
+    return {
+      ok: false,
+      kind: "rejected",
+      diagnosticHeaders: { "X-Upstream-Status": String(upstreamStatus) },
+    };
+  }
+
+  let upstreamPayload: unknown;
+  try {
+    const upstreamBytes = await readBodyWithLimit(
+      upstreamResponse.body,
+      MAX_BROADCAST_CONTEXT_DEEPSEEK_RESPONSE_BYTES,
+    );
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(upstreamBytes);
+    upstreamBytes.fill(0);
+    upstreamPayload = JSON.parse(text);
+  } catch {
+    return { ok: false, kind: "invalid-response" };
+  }
+
+  const parsed =
+    connection.provider === "qwen" && contextMode === "refinement"
+      ? extractBroadcastContextQwenRefinementResponse(
+          upstreamPayload,
+          broadcastContextRequest,
+        )
+      : connection.provider === "qwen" && contextMode === "selection"
+        ? extractBroadcastContextQwenSelectionResponse(
+            upstreamPayload,
+            broadcastContextRequest,
+          )
+        : connection.provider === "qwen"
+          ? extractBroadcastContextQwenOverviewResponse(
+              upstreamPayload,
+              broadcastContextRequest,
+            )
+          : extractBroadcastContextDeepseekResponse(
+              upstreamPayload,
+              broadcastContextRequest,
+              { recoverMalformedItems: true },
+            );
+  if (!parsed.ok) {
+    const choices: readonly unknown[] =
+      isRecord(upstreamPayload) && Array.isArray(upstreamPayload.choices)
+        ? upstreamPayload.choices
+        : [];
+    const choice: unknown = choices[0] ?? null;
+    const message = isRecord(choice) && isRecord(choice.message)
+      ? choice.message
+      : null;
+    const content = message !== null && typeof message.content === "string"
+      ? message.content
+      : null;
+    let generatedKeys: readonly string[] = [];
+    let generatedJson = false;
+    if (content !== null) {
+      try {
+        const generated = JSON.parse(content) as unknown;
+        if (isRecord(generated)) {
+          generatedJson = true;
+          generatedKeys = Object.keys(generated).sort();
+        }
+      } catch {
+        // Only shape metadata is logged; source captions and model text are not.
+      }
+    }
+    console.warn("broadcast-context-invalid-response", {
+      finishReason:
+        isRecord(choice) && typeof choice.finish_reason === "string"
+          ? choice.finish_reason
+          : null,
+      contentLength: content?.length ?? null,
+      generatedJson,
+      generatedKeys,
+    });
+    return {
+      ok: false,
+      kind: "invalid-response",
+      diagnosticHeaders: {
+        "X-Upstream-Finish":
+          isRecord(choice) && typeof choice.finish_reason === "string"
+            ? choice.finish_reason.slice(0, 40)
+            : "unknown",
+        "X-Upstream-Content-Length": String(content?.length ?? -1),
+        "X-Upstream-Json": generatedJson ? "record" : "invalid",
+        "X-Upstream-Keys": generatedKeys.join(",").slice(0, 160),
+      },
+    };
+  }
+  return {
+    ok: true,
+    result: parsed.result,
+    modelId:
+      connection.provider === "qwen"
+        ? qwenModelId
+        : connection.descriptor.modelId,
+    modelRevision:
+      connection.provider === "qwen"
+        ? qwenModelRevision
+        : connection.descriptor.modelRevision,
+  };
+}
+
 export async function handleBroadcastContextRequest(
   request: Request,
   environment: AiProxyEnvironment,
@@ -1492,134 +1769,82 @@ export async function handleBroadcastContextRequest(
     return jsonResponse(429, "RATE_LIMITED", "잠시 요청이 많아요. 1분 뒤 다시 시도해 주세요.", origin, { "Retry-After": "60" });
   }
 
-  const upstreamRequestBody = JSON.stringify(
-    providerConnection.provider === "qwen"
-      ? buildBroadcastContextQwenRequestBody(
-          broadcastContextRequest,
-          contextMode === "selection"
-            ? QWEN_CONTEXT_SELECTION_MODEL_ID
-            : providerConnection.descriptor.modelId,
-          contextMode,
-        )
-      : buildBroadcastContextDeepseekRequestBody(
-          broadcastContextRequest,
-          providerConnection.descriptor.modelId,
-        ),
-  );
-
   const fetchImplementation = dependencies.fetchImplementation ?? fetch;
   const timeoutMs = dependencies.upstreamTimeoutMs ?? UPSTREAM_TIMEOUT_MS;
   const retryDelaysMs = dependencies.upstreamRetryDelaysMs ?? DEFAULT_UPSTREAM_RETRY_DELAYS_MS;
-  
-  let upstreamResponse: Response;
-  try {
-    upstreamResponse = await fetchWithTransientRetries(
+  const primaryModelId =
+    providerConnection.provider === "qwen" && contextMode === "selection"
+      ? QWEN_CONTEXT_SELECTION_MODEL_ID
+      : providerConnection.provider === "qwen"
+        ? QWEN_CONTEXT_MODEL_ID
+        : providerConnection.descriptor.modelId;
+  const primaryModelRevision =
+    providerConnection.provider === "qwen" && contextMode === "selection"
+      ? QWEN_CONTEXT_SELECTION_MODEL_REVISION
+      : providerConnection.provider === "qwen"
+        ? QWEN_CONTEXT_MODEL_REVISION
+        : providerConnection.descriptor.modelRevision;
+  const primaryAttempt = await attemptBroadcastContextProvider(
+    providerConnection,
+    broadcastContextRequest,
+    contextMode,
+    primaryModelId,
+    primaryModelRevision,
+    fetchImplementation,
+    timeoutMs,
+    retryDelaysMs,
+  );
+  let finalAttempt = primaryAttempt;
+  let fallbackUsed = false;
+  if (
+    !primaryAttempt.ok &&
+    providerConnection.provider === "qwen" &&
+    isBoundedAiProviderFallbackEnabled(environment)
+  ) {
+    fallbackUsed = true;
+    const fallbackModelId =
+      contextMode === "selection"
+        ? QWEN_CONTEXT_MODEL_ID
+        : QWEN_CONTEXT_SELECTION_MODEL_ID;
+    const fallbackModelRevision =
+      contextMode === "selection"
+        ? QWEN_CONTEXT_MODEL_REVISION
+        : QWEN_CONTEXT_SELECTION_MODEL_REVISION;
+    finalAttempt = await attemptBroadcastContextProvider(
+      providerConnection,
+      broadcastContextRequest,
+      contextMode,
+      fallbackModelId,
+      fallbackModelRevision,
       fetchImplementation,
-      providerConnection.endpoint,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${providerConnection.apiKey}`,
-        },
-        body: upstreamRequestBody,
-        cache: "no-store",
-        credentials: "omit",
-        referrerPolicy: "no-referrer",
-      },
       timeoutMs,
       retryDelaysMs,
     );
-  } catch {
-    return jsonResponse(502, "UPSTREAM_UNAVAILABLE", "AI에 연결하지 못했어요.", origin);
   }
-
-  if (!upstreamResponse.ok) {
+  if (!finalAttempt.ok) {
     return jsonResponse(
       502,
-      "UPSTREAM_REJECTED",
-      "AI가 요청을 처리하지 못했어요.",
+      finalAttempt.kind === "invalid-response"
+        ? "UPSTREAM_INVALID_RESPONSE"
+        : finalAttempt.kind === "rejected"
+          ? "UPSTREAM_REJECTED"
+          : "UPSTREAM_UNAVAILABLE",
+      finalAttempt.kind === "invalid-response"
+        ? "답변 형식을 확인할 수 없어요."
+        : finalAttempt.kind === "rejected"
+          ? "AI가 요청을 처리하지 못했어요."
+          : "AI에 연결하지 못했어요.",
       origin,
-      { "X-Upstream-Status": String(upstreamResponse.status) },
+      finalAttempt.diagnosticHeaders,
     );
   }
 
-  let upstreamBytes: Uint8Array;
-  try {
-    upstreamBytes = await readBodyWithLimit(upstreamResponse.body, MAX_BROADCAST_CONTEXT_DEEPSEEK_RESPONSE_BYTES);
-  } catch {
-    return jsonResponse(502, "UPSTREAM_INVALID_RESPONSE", "답변을 안전하게 확인하지 못했어요.", origin);
-  }
-
-  let upstreamPayload: unknown;
-  try {
-    const text = new TextDecoder("utf-8", { fatal: true }).decode(upstreamBytes);
-    upstreamPayload = JSON.parse(text);
-  } catch {
-    return jsonResponse(502, "UPSTREAM_INVALID_RESPONSE", "답변을 안전하게 확인하지 못했어요.", origin);
-  }
-
-  const parsed = providerConnection.provider === "qwen" && contextMode === "refinement"
-    ? extractBroadcastContextQwenRefinementResponse(upstreamPayload, broadcastContextRequest)
-    : providerConnection.provider === "qwen" && contextMode === "selection"
-      ? extractBroadcastContextQwenSelectionResponse(upstreamPayload, broadcastContextRequest)
-      : providerConnection.provider === "qwen"
-        ? extractBroadcastContextQwenOverviewResponse(upstreamPayload, broadcastContextRequest)
-      : extractBroadcastContextDeepseekResponse(
-          upstreamPayload,
-          broadcastContextRequest,
-          { recoverMalformedItems: true },
-        );
-  if (!parsed.ok) {
-    const choices: readonly unknown[] =
-      isRecord(upstreamPayload) && Array.isArray(upstreamPayload.choices)
-        ? upstreamPayload.choices
-        : [];
-    const choice: unknown = choices[0] ?? null;
-    const message = isRecord(choice) && isRecord(choice.message)
-      ? choice.message
-      : null;
-    const content = message !== null && typeof message.content === "string"
-      ? message.content
-      : null;
-    let generatedKeys: readonly string[] = [];
-    let generatedJson = false;
-    if (content !== null) {
-      try {
-        const generated = JSON.parse(content) as unknown;
-        if (isRecord(generated)) {
-          generatedJson = true;
-          generatedKeys = Object.keys(generated).sort();
-        }
-      } catch {
-        // Only shape metadata is logged; source captions and model text are not.
-      }
-    }
-    console.warn("broadcast-context-invalid-response", {
-      finishReason: isRecord(choice) && typeof choice.finish_reason === "string"
-        ? choice.finish_reason
-        : null,
-      contentLength: content?.length ?? null,
-      generatedJson,
-      generatedKeys,
-    });
-    return jsonResponse(
-      502,
-      "UPSTREAM_INVALID_RESPONSE",
-      "답변 형식을 확인할 수 없어요.",
-      origin,
-      {
-        "X-Upstream-Finish": isRecord(choice) && typeof choice.finish_reason === "string"
-          ? choice.finish_reason.slice(0, 40)
-          : "unknown",
-        "X-Upstream-Content-Length": String(content?.length ?? -1),
-        "X-Upstream-Json": generatedJson ? "record" : "invalid",
-        "X-Upstream-Keys": generatedKeys.join(",").slice(0, 160),
-      },
-    );
-  }
-
-  return successResponse(parsed.result, origin);
+  return successResponse(finalAttempt.result, origin, {
+    [CANDIDATE_PASS_B_RESPONSE_MODEL_ID_HEADER]: finalAttempt.modelId,
+    [CANDIDATE_PASS_B_RESPONSE_MODEL_REVISION_HEADER]:
+      finalAttempt.modelRevision,
+    [CANDIDATE_PASS_B_RESPONSE_FALLBACK_HEADER]: fallbackUsed ? "true" : "false",
+  });
 }
 
 export default {

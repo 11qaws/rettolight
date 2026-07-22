@@ -1,15 +1,25 @@
 import type { CandidatePassBEvidence } from "../analysis/candidatePassB";
 import {
+  CANDIDATE_PASS_B_GEMINI_MODEL_ID,
+  CANDIDATE_PASS_B_GEMINI_MODEL_REVISION,
+  CANDIDATE_PASS_B_QWEN_MODEL_ID,
+  CANDIDATE_PASS_B_QWEN_MODEL_REVISION,
   MAX_CANDIDATE_PASS_B_VIDEO_FRAME_BASE64_LENGTH,
   type CandidatePassBParticipantAttribution,
   type CandidatePassBVideoFrame,
 } from "../analysis/candidatePassBWorkerProtocol";
 
-export const CANDIDATE_PASS_B_INSIGHT_SCHEMA_VERSION = "1.2.0" as const;
-export type CandidatePassBInsightSchemaVersion = "1.0.0" | "1.1.0" | "1.2.0";
+export const CANDIDATE_PASS_B_INSIGHT_SCHEMA_VERSION = "1.3.0" as const;
+export type CandidatePassBInsightSchemaVersion =
+  | "1.0.0"
+  | "1.1.0"
+  | "1.2.0"
+  | "1.3.0";
 
 const SUPPORTED_INSIGHT_SCHEMA_VERSIONS = new Set<CandidatePassBInsightSchemaVersion>([
   "1.0.0",
+  "1.1.0",
+  "1.2.0",
   CANDIDATE_PASS_B_INSIGHT_SCHEMA_VERSION,
 ]);
 
@@ -21,6 +31,15 @@ export interface StoredCandidatePassBInsight {
   readonly identifiedParticipants?: readonly CandidatePassBParticipantAttribution[];
 }
 
+export interface StoredCandidatePassBModelIdentity {
+  readonly id:
+    | typeof CANDIDATE_PASS_B_QWEN_MODEL_ID
+    | typeof CANDIDATE_PASS_B_GEMINI_MODEL_ID;
+  readonly revision:
+    | typeof CANDIDATE_PASS_B_QWEN_MODEL_REVISION
+    | typeof CANDIDATE_PASS_B_GEMINI_MODEL_REVISION;
+}
+
 export interface CandidatePassBInsightsRecord {
   readonly kind: "candidatePassBInsights";
   readonly runId: string;
@@ -29,6 +48,10 @@ export interface CandidatePassBInsightsRecord {
   readonly modelManifestHash: string;
   readonly evidenceById: Readonly<Record<string, CandidatePassBEvidence>>;
   readonly insightById: Readonly<Record<string, StoredCandidatePassBInsight>>;
+  /** Actual provider model per candidate, including bounded fallback results. */
+  readonly modelByCandidateId?: Readonly<
+    Record<string, StoredCandidatePassBModelIdentity>
+  >;
   /** One impact thumbnail per candidate, kept with the analysis-session snapshot. */
   readonly thumbnailById?: Readonly<Record<string, CandidatePassBVideoFrame>>;
   readonly recordedAt: string;
@@ -128,6 +151,19 @@ function isCandidateVideoFrame(value: unknown): value is CandidatePassBVideoFram
   );
 }
 
+function isStoredModelIdentity(
+  value: unknown,
+): value is StoredCandidatePassBModelIdentity {
+  return (
+    isRecord(value) &&
+    Object.keys(value).sort().join(",") === "id,revision" &&
+    ((value.id === CANDIDATE_PASS_B_QWEN_MODEL_ID &&
+      value.revision === CANDIDATE_PASS_B_QWEN_MODEL_REVISION) ||
+      (value.id === CANDIDATE_PASS_B_GEMINI_MODEL_ID &&
+        value.revision === CANDIDATE_PASS_B_GEMINI_MODEL_REVISION))
+  );
+}
+
 export function assertCandidatePassBInsightsRecord(
   value: unknown,
 ): asserts value is CandidatePassBInsightsRecord {
@@ -156,6 +192,16 @@ export function assertCandidatePassBInsightsRecord(
   for (const insight of Object.values(value.insightById)) {
     if (!isStoredInsight(insight)) {
       throw new TypeError("Invalid Candidate Pass B insight entry.");
+    }
+  }
+  if (value.modelByCandidateId !== undefined) {
+    if (!isRecord(value.modelByCandidateId)) {
+      throw new TypeError("Invalid Candidate Pass B model map.");
+    }
+    for (const [candidateId, model] of Object.entries(value.modelByCandidateId)) {
+      if (!isNonEmptyBoundedString(candidateId, 256) || !isStoredModelIdentity(model)) {
+        throw new TypeError("Invalid Candidate Pass B model entry.");
+      }
     }
   }
   if (value.thumbnailById !== undefined) {

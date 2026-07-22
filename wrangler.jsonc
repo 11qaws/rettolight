@@ -11,6 +11,7 @@
     "CANDIDATE_INSIGHT_PROVIDER": "qwen",
     "BROADCAST_CONTEXT_PROVIDER": "qwen",
     "BROADCAST_TRANSCRIPT_PROVIDER": "qwen",
+    "AI_PROVIDER_FALLBACK_MODE": "bounded",
     "QWEN_REGION": "singapore"
   },
   "secrets": {

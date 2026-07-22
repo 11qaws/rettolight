@@ -1,11 +1,22 @@
 /** Provider-specific IDs plus the currently deployed default. */
 export const CANDIDATE_PASS_B_GEMINI_MODEL_ID = "gemini-3.5-flash" as const;
-export const CANDIDATE_PASS_B_GEMINI_MODEL_REVISION = "3.5-flash-07-2026" as const;
+export const CANDIDATE_PASS_B_GEMINI_MODEL_REVISION =
+  "gemini-3.5-flash-grounded-frames-v2-2026-07-22" as const;
 export const CANDIDATE_PASS_B_QWEN_MODEL_ID = "qwen3.5-omni-flash" as const;
 export const CANDIDATE_PASS_B_QWEN_MODEL_REVISION =
-  "qwen3.5-omni-flash-multimodal-participants-2026-07-22" as const;
+  "qwen3.5-omni-flash-grounded-frames-v2-2026-07-22" as const;
 export const CANDIDATE_PASS_B_MODEL_ID = CANDIDATE_PASS_B_QWEN_MODEL_ID;
 export const CANDIDATE_PASS_B_MODEL_REVISION = CANDIDATE_PASS_B_QWEN_MODEL_REVISION;
+export const CANDIDATE_PASS_B_ROUTING_MODEL_ID =
+  "exclipper-candidate-perception-route" as const;
+export const CANDIDATE_PASS_B_ROUTING_MODEL_REVISION =
+  "qwen3.5-omni-flash_then_gemini-3.5-flash_bounded-v2" as const;
+export const CANDIDATE_PASS_B_RESPONSE_MODEL_ID_HEADER =
+  "X-ExClipper-Model-Id" as const;
+export const CANDIDATE_PASS_B_RESPONSE_MODEL_REVISION_HEADER =
+  "X-ExClipper-Model-Revision" as const;
+export const CANDIDATE_PASS_B_RESPONSE_FALLBACK_HEADER =
+  "X-ExClipper-Fallback-Used" as const;
 export const CANDIDATE_PASS_B_DTYPE = "remote" as const;
 export const CANDIDATE_PASS_B_DEVICE = "remote" as const;
 export const CANDIDATE_PASS_B_LANGUAGE = "korean" as const;
@@ -124,8 +135,12 @@ export interface CandidatePassBTranscriptResult {
   readonly segments: readonly CandidatePassBTranscriptSegment[];
   readonly insight: CandidatePassBInsight;
   readonly model: {
-    readonly id: typeof CANDIDATE_PASS_B_MODEL_ID;
-    readonly revision: typeof CANDIDATE_PASS_B_MODEL_REVISION;
+    readonly id:
+      | typeof CANDIDATE_PASS_B_QWEN_MODEL_ID
+      | typeof CANDIDATE_PASS_B_GEMINI_MODEL_ID;
+    readonly revision:
+      | typeof CANDIDATE_PASS_B_QWEN_MODEL_REVISION
+      | typeof CANDIDATE_PASS_B_GEMINI_MODEL_REVISION;
     readonly dtype: typeof CANDIDATE_PASS_B_DTYPE;
     readonly device: typeof CANDIDATE_PASS_B_DEVICE;
   };

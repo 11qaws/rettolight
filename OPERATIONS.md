@@ -2,6 +2,14 @@
 
 ## 2026-07-22 release notes
 
+- `0.3.31`: production sets `AI_PROVIDER_FALLBACK_MODE=bounded`. Candidate perception may switch once between Qwen3.5 Omni Flash and Gemini3.5 Flash; compressed Qwen context may switch once between Qwen3.7 Plus and Qwen3.6 Flash. Long-audio transcription is deliberately excluded from automatic provider switching to avoid ambiguous double billing.
+- Successful candidate responses expose only public model ID, public revision, and whether fallback was used. CORS exposes those three headers; no credential, endpoint, workspace ID, provider body, transcript, or source metadata is included.
+- Candidate result persistence schema is `1.3.0`. Rollback readers must continue accepting 1.0–1.2 records without `modelByCandidateId`; forward readers reject mismatched model/revision pairs.
+- Routing policy `1.3.0` adds compact, grounded topic chapters to the Qwen whole-context response. A new run must not reuse an older context result that reports no topic support under the earlier policy.
+- Candidate frame sampling waits for decoded data on a temporarily attached, invisible media element. If the request still contains zero frames, both client and Worker reduce the result to audio-only evidence and discard provider-authored screen, game, participant, and causal claims.
+- Broadcast transcript preflight reports the exact violated invariant. The 02:15:14.817 food-talk source is a valid 39-chunk plan; if it fails before fetch, investigate the newly reported invariant instead of rotating API keys.
+- Timeline release smoke at a maximized width must verify 30-minute ticks, numbered/staggered candidates, topic bands, semantic-lead markers, the score landscape, and a wider independently scrolling evidence pane.
+
 - Desktop-first workspace: verify the source summary and the primary analysis action are visible in the first viewport at a maximized browser width. At widths below 840px the columns collapse to one column.
 - Phase contract: fast-pass completion may automatically start AI Pass B. A cancelled or failed Pass B must leave the fast candidates usable.
 - Candidate event kinds now include `dialogue-issue-signal`. It is a conservative speech-change lead and must be described as a lead, never as a confirmed event.
@@ -10,7 +18,7 @@
 - Pass B evidence and AI insight snapshots are stored by analysis run in a dedicated IndexedDB object store. Recovery filters them to the recovered candidate IDs, and a new run epoch prevents late writes from an older source contaminating the current result.
 - Fixed non-vocal program-edge bursts (opening, ending, and break loops) are rejected by default. An edge segment can still survive when it has a distinctive vocal/dialogue anchor, while the central UI presents the automatic phase and candidate list without promotional copy.
 
-- 문서 버전: `0.3.30`
+- 문서 버전: `0.3.31`
 - 기준일: 2026-07-22 (Asia/Seoul)
 - 대상: GitHub Pages에서 실행되는 1인용 AI 편집 어시스턴트
 - 함께 읽을 문서: `PRODUCT_PLAN.md`, `STATE_LIFECYCLE.md`, `DEVELOPMENT_LOG.md`

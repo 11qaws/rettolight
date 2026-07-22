@@ -31,6 +31,10 @@ function createEnvironment(): AiProxyEnvironment {
 function createCandidateBody(candidateDurationMs = 1_000): {
   readonly audioBase64: string;
   readonly candidateDurationMs: number;
+  readonly videoFrames: readonly [
+    { readonly timestampMs: number; readonly mimeType: "image/jpeg"; readonly dataBase64: string },
+    { readonly timestampMs: number; readonly mimeType: "image/jpeg"; readonly dataBase64: string },
+  ];
 } {
   const sampleCount = Math.ceil(
     (candidateDurationMs / 1_000) * CANDIDATE_PASS_B_SAMPLE_RATE_HZ,
@@ -42,6 +46,14 @@ function createCandidateBody(candidateDurationMs = 1_000): {
   return {
     audioBase64: encodeCandidatePassBBase64(wav),
     candidateDurationMs,
+    videoFrames: [
+      { timestampMs: 100, mimeType: "image/jpeg", dataBase64: "aGVsbG8=" },
+      {
+        timestampMs: Math.max(101, candidateDurationMs - 100),
+        mimeType: "image/jpeg",
+        dataBase64: "d29ybGQ=",
+      },
+    ],
   };
 }
 
@@ -239,6 +251,90 @@ describe("aiProxy.worker", () => {
     expect(environment.RATE_LIMITER.limit).toHaveBeenCalledWith({
       key: "broadcast-context",
     });
+  });
+
+  it("falls back once from Qwen 3.7 Plus to Qwen 3.6 Flash for text context", async () => {
+    const contextInput = {
+      sourceDurationMs: 60_000,
+      chapters: [
+        {
+          chapterId: "chapter-1",
+          startMs: 0,
+          endMs: 60_000,
+          evidenceMode: "complete-transcript",
+          evidenceCoverageRatio: 1,
+          summaryKo: "스트리머가 조용히 목표를 달성하고 기뻐했다.",
+        },
+      ],
+      candidates: [
+        {
+          candidateId: "candidate-1",
+          startMs: 5_000,
+          endMs: 50_000,
+          transcriptKo: "드디어 성공했어.",
+          eventSummaryKo: "목표를 달성했다.",
+          reactionSummaryKo: "작게 웃으며 안도했다.",
+          chatReactionSummaryKo: null,
+        },
+      ],
+    };
+    const providerResult = {
+      summary: "오랜 시도 끝에 조용히 목표를 달성했다.",
+      themes: ["조용한 성취"],
+      leads: [],
+      candidates: [
+        {
+          id: "candidate-1",
+          c: "quiet-achievement",
+          d: "select",
+          p: 0.91,
+          reason: "성공의 맥락과 반응이 함께 확인된다.",
+        },
+      ],
+    };
+    const attemptedModels: string[] = [];
+    const upstreamFetch = vi.fn(
+      (_input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+        const body = JSON.parse(
+          typeof init?.body === "string" ? init.body : "{}",
+        ) as { model: string };
+        attemptedModels.push(body.model);
+        if (body.model === "qwen3.7-plus") {
+          return Promise.resolve(new Response("temporary", { status: 503 }));
+        }
+        expect(body.model).toBe("qwen3.6-flash");
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              choices: [{ message: { content: JSON.stringify(providerResult) } }],
+            }),
+            { status: 200 },
+          ),
+        );
+      },
+    );
+    const response = await handleBroadcastContextRequest(
+      createRequest(contextInput, {
+        url: "https://rettohighlight-gemini.example/v1/broadcast-context",
+      }),
+      {
+        ...createEnvironment(),
+        BROADCAST_CONTEXT_PROVIDER: "qwen",
+        AI_PROVIDER_FALLBACK_MODE: "bounded",
+        QWEN_API_KEY: "qwen-secret",
+      },
+      { fetchImplementation: upstreamFetch, upstreamRetryDelaysMs: [] },
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      broadcastSummaryKo: providerResult.summary,
+    });
+    expect(attemptedModels).toEqual(["qwen3.7-plus", "qwen3.6-flash"]);
+    expect(response.headers.get("X-ExClipper-Model-Id")).toBe(
+      "qwen3.6-flash",
+    );
+    expect(response.headers.get("X-ExClipper-Fallback-Used")).toBe("true");
   });
 
   it("transcribes a bounded broadcast chunk through the fixed Qwen Omni adapter", async () => {
@@ -615,6 +711,118 @@ describe("aiProxy.worker", () => {
       identifiedParticipants: [],
     });
     expect(upstreamFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("removes visual and causal claims from a successful provider response when no frame arrived", async () => {
+    const candidateWithFrames = createCandidateBody();
+    const candidate = { ...candidateWithFrames, videoFrames: [] };
+    const inventedAnalysis = JSON.stringify({
+      segments: [
+        {
+          relativeStartMs: 100,
+          relativeEndMs: 700,
+          text: "내가 두바이 초콜릿을 안 먹어",
+        },
+      ],
+      eventSummaryKo: "게임에서 아이템을 잘못 골라 공격에 실패했다.",
+      reactionSummaryKo: "화면의 캐릭터를 보며 당황했다.",
+      whyGoodClipKo: "게임 화면과 반응의 인과가 뚜렷하다.",
+      uncertaintiesKo: [],
+      identifiedParticipants: [
+        {
+          nameKo: "유레카",
+          roleKo: "스트리머",
+          evidenceBasis: "on-screen-label",
+          evidenceKo: "화면에 이름이 보였다.",
+          confidence: 0.9,
+          relativeTimestampMs: 300,
+        },
+      ],
+    });
+    const sse = [
+      `data: ${JSON.stringify({ choices: [{ delta: { content: inventedAnalysis }, finish_reason: null }] })}`,
+      `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "stop" }] })}`,
+      "data: [DONE]",
+      "",
+    ].join("\n");
+    const response = await handleCandidateInsightRequest(
+      createRequest(candidate),
+      {
+        ...createEnvironment(),
+        CANDIDATE_INSIGHT_PROVIDER: "qwen",
+        QWEN_API_KEY: "qwen-secret",
+      },
+      { fetchImplementation: () => Promise.resolve(new Response(sse, { status: 200 })) },
+    );
+
+    expect(response.status).toBe(200);
+    const payload = await response.json() as {
+      candidates: readonly [{ content: { parts: readonly [{ text: string }] } }];
+    };
+    const safeAnalysis = JSON.parse(payload.candidates[0].content.parts[0].text) as {
+      eventSummaryKo: string;
+      reactionSummaryKo: string;
+      whyGoodClipKo: string;
+      segments: readonly { text: string }[];
+      identifiedParticipants: readonly unknown[];
+    };
+    expect(safeAnalysis.segments[0]?.text).toBe("내가 두바이 초콜릿을 안 먹어");
+    expect(safeAnalysis.eventSummaryKo).toContain("대표 화면을 확보하지 못해");
+    expect(safeAnalysis.reactionSummaryKo).not.toContain("캐릭터");
+    expect(safeAnalysis.whyGoodClipKo).not.toContain("게임 화면");
+    expect(safeAnalysis.identifiedParticipants).toEqual([]);
+  });
+
+  it("uses one bounded Gemini fallback when Qwen candidate perception fails", async () => {
+    const candidate = createCandidateBody();
+    const geminiPayload = createGeminiPayload(candidate.candidateDurationMs);
+    const upstreamFetch = vi.fn(
+      (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+        const url =
+          typeof input === "string"
+            ? input
+            : input instanceof URL
+              ? input.toString()
+              : input.url;
+        if (url.includes("dashscope-intl.aliyuncs.com")) {
+          expect(new Headers(init?.headers).get("Authorization")).toBe(
+            "Bearer qwen-secret",
+          );
+          return Promise.resolve(
+            new Response("temporary qwen failure", { status: 503 }),
+          );
+        }
+        expect(url).toContain("models/gemini-3.5-flash:generateContent");
+        expect(new Headers(init?.headers).get("x-goog-api-key")).toBe(API_KEY);
+        return Promise.resolve(
+          new Response(JSON.stringify(geminiPayload), { status: 200 }),
+        );
+      },
+    );
+    const response = await handleCandidateInsightRequest(
+      createRequest(candidate),
+      {
+        ...createEnvironment(),
+        CANDIDATE_INSIGHT_PROVIDER: "qwen",
+        AI_PROVIDER_FALLBACK_MODE: "bounded",
+        QWEN_API_KEY: "qwen-secret",
+      },
+      { fetchImplementation: upstreamFetch, upstreamRetryDelaysMs: [] },
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(geminiPayload);
+    expect(response.headers.get("X-ExClipper-Model-Id")).toBe(
+      "gemini-3.5-flash",
+    );
+    expect(response.headers.get("X-ExClipper-Model-Revision")).toBe(
+      "gemini-3.5-flash-grounded-frames-v2-2026-07-22",
+    );
+    expect(response.headers.get("X-ExClipper-Fallback-Used")).toBe("true");
+    expect(response.headers.get("Access-Control-Expose-Headers")).toContain(
+      "X-ExClipper-Model-Id",
+    );
+    expect(upstreamFetch).toHaveBeenCalledTimes(2);
   });
 
   it.each([

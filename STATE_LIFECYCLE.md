@@ -6,6 +6,17 @@
 - 적용 범위: GitHub Pages에서 실행되는 개인 편집 어시스턴트와 선택형 CHZZK 동반 수집기
 - 문서 지위: 구현 전 상태 모델의 기준 문서
 
+## `0.3.31` 후보 모델 라우팅과 결과 귀속
+
+- 후보 정밀 분석 run은 `exclipper-candidate-perception-route`를 불변 model manifest로 고정한다. 개별 후보 결과는 Qwen 또는 Gemini의 실제 model ID·revision을 별도 보조 상태로 기록한다.
+- 기본 provider 실패 뒤 bounded fallback은 같은 후보 operation 안의 단 한 번의 대체 시도다. 새 run이나 새 canonical candidate를 만들지 않으며 기존 빠른 후보·사람 결정·경계를 변경하지 않는다.
+- fallback 응답도 기존 operation identity, candidate ID, source range, event fence를 모두 통과한 뒤에만 확정된다. 늦은 응답과 알 수 없는 model ID/revision 조합은 거부한다.
+- 후보별 실제 모델 귀속은 Candidate Pass B insight schema `1.3.0`의 `modelByCandidateId`에 저장한다. 1.0~1.2 기록은 이 필드가 없는 legacy 결과로 계속 복구한다.
+- 장시간 방송 전사는 timeout 뒤 자동 provider 전환을 하지 않는다. 이미 과금됐을 가능성이 있는 동일 오디오를 다시 보내지 않고 해당 구간을 coverage gap으로 유지한다.
+- 전체 맥락 결과의 주제 구간은 실제 transcript chapter ID와 시간 범위를 모두 만족하는 파생 projection이다. 잘못되거나 겹치는 주제 구간 하나를 제외해도 독립적으로 유효한 후보 판정과 의미 단서는 보존한다.
+- 대표 화면 수가 0이면 Candidate Pass B 결과를 `audio-only` 안전 projection으로 낮춘다. 대사 시각은 유지하지만 화면 사건·게임 종류·출연자·인과 설명은 저장하거나 복원하지 않는다.
+- 타임라인의 후보 번호, 세로 lane, 30분 눈금, 주제 띠, 의미 단서 표시는 화면 projection일 뿐 candidate ID·원본 범위·점수·review state의 소유권이나 lifecycle을 바꾸지 않는다.
+
 ## 0. 이 문서가 해결하는 문제
 
 ExClipper는 최대 12시간의 방송 원본을 브라우저에서 여러 단계로 분석한다. 정확히 12시간은 유효하고 초과 원본은 SourceCheck에서 분석 전에 차단한다. 모델 다운로드, 미디어 디코딩, 채팅 가져오기, AI 분석, 자동 저장, 클립 렌더링은 모두 비동기이며 탭 종료나 브라우저 오류로 중간에 끊길 수 있다. 동시에 사용자는 AI 분석이 끝나기 전부터 후보를 검토하고 직접 수정할 수 있다.
