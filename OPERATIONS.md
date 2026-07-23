@@ -2,6 +2,11 @@
 
 ## 2026-07-23 release notes
 
+- `0.3.44`: 1단계 빠른 탐색, 2단계 전체 맥락, 3단계 후보 종합은 하나의 현재 진행 패널과 같은 7px 진행 막대를 사용한다. 빠른 탐색은 화면·오디오 worker의 실제 완료율을 합산하고, 전체 맥락은 전사 수집 5~70%·저장 복구 76%·맥락 모델 해석 84%로 단조 진행한 뒤 단계 완료 시 다음 단계로 전환한다. 모델 내부 토큰 진행률을 가짜 백분율로 세분화하지 않는다.
+- 시작 전 한국어/영어 선택은 세션 입력으로 고정되고 후보·전체 맥락 AI 요청에도 전달된다. 분석 시작 뒤에는 선택기를 잠가 한 저장 세션에 두 언어가 섞이지 않게 하며, 원문 대사는 그대로 보존한다. 한국어 서술의 비의도 한자 출력은 strict 응답 경계에서 거부되어 fallback 또는 명시적 gap으로 남는다.
+- 방송 전체 서술과 진행자 프로필은 하나의 맥락 카드로 통합하되 데이터 역할은 분리한다. 전자는 시간순 사건·주제 흐름, 후자는 방송에서 반복 관찰된 진행 방식만 표시하며 같은 내용을 두 번 요약하지 않는다.
+- `0.3.44`: candidate detail uses one shared frame producer and a two-consumer AI queue. A candidate enters paid multimodal analysis only after all four distinct source-fenced JPEGs are ready; an incomplete frame bundle retains its fast proposal but does not receive audio-only screen interpretation. The exact same AI bundle provides the impact thumbnail and a required participant state (`identified`, visible but unknown, none present, or insufficient visual evidence). Channel-scoped references keep 세라 교수님 exclusive to the 교환학생 main channel and never treat a channel owner prior as proof that the avatar is visible in a candidate.
+- The final editor view is one bordered workspace, not three vertically separated cards. At maximized width its left source-time map and right review rail share one grid row; the right rail keeps candidate navigation, paused video, decision summary, actions, and expandable evidence contiguous. Only the evidence body scrolls internally. At narrow widths the same workflow becomes timeline → video → decision with no duplicated detail card.
 - `0.3.43`: 저장 전사 map은 그대로 보존하면서 전체 맥락 transport만 144개 이하로 압축한다. 탐색 완료 셀은 즉시 클릭 가능한 근거로 공개하고, 넓은 화면은 타임라인 2/3·일시정지 검토 도크 1/3으로 나눈다. 음악·MV·오프닝·엔딩·휴식 context 판정은 미승인 후보와 자동 상세 큐에서 제외하며, 후보 대표 화면 준비와 원격 AI 해석은 모바일에서도 화면 폭과 무관한 2개 bounded pipeline으로 겹쳐 실행한다.
 - `0.3.42`: source-ready 첫 화면을 같은 높이의 1:1 준비 작업대로 바꾼다. 왼쪽은 확인된 원본과 길이·형식·크기, 오른쪽은 실제 원본 범위, 분석 경로, 사용 가능한 신호, 기본 분석 시작 동작을 담당한다. 별도 검사 영수증과 화면 아래에 떨어져 있던 CTA는 준비 완료 상태에서 제거한다.
 - 분석 전 source ruler는 30분 경계를 모두 유지하고 긴 방송에서는 라벨만 줄인다. 이 ruler는 원본 길이의 presentation projection이며 후보·주제·점수를 미리 확정하지 않는다. 기존 source check, persistence schema, Candidate Ledger, Worker 계약과 유료 AI 경로는 변경하지 않는다.
@@ -58,8 +63,8 @@
 - Pass B evidence and AI insight snapshots are stored by analysis run in a dedicated IndexedDB object store. Recovery filters them to the recovered candidate IDs, and a new run epoch prevents late writes from an older source contaminating the current result.
 - Fixed non-vocal program-edge bursts (opening, ending, and break loops) are rejected by default. An edge segment can still survive when it has a distinctive vocal/dialogue anchor, while the central UI presents the automatic phase and candidate list without promotional copy.
 
-- 문서 버전: `0.3.40`
-- 기준일: 2026-07-22 (Asia/Seoul)
+- 문서 버전: `0.3.44`
+- 기준일: 2026-07-23 (Asia/Seoul)
 - 대상: GitHub Pages에서 실행되는 1인용 AI 편집 어시스턴트
 - 함께 읽을 문서: `PRODUCT_PLAN.md`, `STATE_LIFECYCLE.md`, `DEVELOPMENT_LOG.md`
 

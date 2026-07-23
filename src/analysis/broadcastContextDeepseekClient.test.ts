@@ -27,6 +27,7 @@ const input = {
       eventSummaryKo: "실수를 인정했다.",
       reactionSummaryKo: "차분하게 사과했다.",
       chatReactionSummaryKo: null,
+      participantContextKo: "이 후보의 화면 등장인물은 아직 확인하지 못했습니다.",
     },
   ],
 };

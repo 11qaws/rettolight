@@ -60,6 +60,7 @@ export type CandidatePassBCandidateFailureReasonCode =
   | "audio_extraction_failed"
   | "audio_decode_failed"
   | "transcription_failed"
+  | "visual_evidence_incomplete"
   | "worker_candidate_failed";
 
 export type CandidatePassBRunFailureReasonCode =

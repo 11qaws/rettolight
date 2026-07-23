@@ -70,6 +70,15 @@ export interface BroadcastContextParseOptions {
   readonly recoverMalformedItems?: boolean;
 }
 
+function containsUnexpectedHan(value: unknown): boolean {
+  if (typeof value === "string") return /\p{Script=Han}/u.test(value);
+  if (Array.isArray(value)) return value.some(containsUnexpectedHan);
+  if (typeof value === "object" && value !== null) {
+    return Object.values(value as Record<string, unknown>).some(containsUnexpectedHan);
+  }
+  return false;
+}
+
 const SYSTEM_PROMPT = `당신은 긴 인터넷 방송(라이브 스트리밍)의 전체 흐름과 맥락을 파악하여, 특정 하이라이트 구간(후보)들이 전체 방송에서 어떤 역할을 하는지 분류하고 방송을 의미 단위로 묶는(Semantic Chapters) 전문 편집 어시스턴트입니다.
 
 ## 입력 데이터 형식
@@ -270,7 +279,10 @@ export function buildBroadcastContextDeepseekRequestBody(
   request: BroadcastContextRequest,
   model: string = "deepseek-v4-pro",
 ): BroadcastContextDeepseekRequestBody {
-  let userContent = `총 방송 길이: ${formatDuration(request.sourceDurationMs)}\n\n`;
+  const languageRule = request.outputLanguage === "ko"
+    ? "출력 서술은 현대 한국어 한글로만 작성하고 한자·중국어 문자를 섞지 마세요."
+    : "Write every generated narrative, title, reason, theme, uncertainty, and host profile in English only. Keep proper VTuber names and verbatim source quotations unchanged.";
+  let userContent = `총 방송 길이: ${formatDuration(request.sourceDurationMs)}\n${languageRule} 방송 흐름에는 사건의 시간 순서를, host profile에는 반복 관찰된 진행 방식만 적어 서로 중복하지 마세요.\n\n`;
   userContent += buildBroadcastContextCastRosterBlock(request);
   userContent += `### 방송 챕터 요약 (시간순)\n`;
   for (const chapter of request.chapters) {
@@ -283,6 +295,7 @@ export function buildBroadcastContextDeepseekRequestBody(
     userContent += `대화 요약:\n${candidate.transcriptKo}\n`;
     userContent += `사건 요약: ${candidate.eventSummaryKo}\n`;
     userContent += `반응 요약: ${candidate.reactionSummaryKo}\n`;
+    userContent += `등장인물: ${candidate.participantContextKo}\n`;
     if (candidate.chatReactionSummaryKo) {
       userContent += `채팅 요약: ${candidate.chatReactionSummaryKo}\n`;
     }
@@ -309,7 +322,10 @@ export function buildBroadcastContextQwenRequestBody(
   mode: BroadcastContextQwenMode = "overview",
 ): BroadcastContextQwenRequestBody {
   const isRefinementMode = mode === "refinement" || mode === "refinement-fast";
-  let userContent = `총 방송 길이: ${formatDuration(request.sourceDurationMs)}\n\n`;
+  const languageRule = request.outputLanguage === "ko"
+    ? "출력 서술은 현대 한국어 한글로만 작성하고 한자·중국어 문자를 섞지 마세요."
+    : "Write every generated narrative, title, reason, theme, uncertainty, and host profile in English only. Keep proper VTuber names and verbatim source quotations unchanged.";
+  let userContent = `총 방송 길이: ${formatDuration(request.sourceDurationMs)}\n${languageRule} 방송 흐름에는 사건의 시간 순서를, host profile에는 반복 관찰된 진행 방식만 적어 서로 중복하지 마세요.\n\n`;
   userContent += buildBroadcastContextCastRosterBlock(request);
   userContent += "### 시간순 대사 챕터\n";
   for (const chapter of request.chapters) {
@@ -324,6 +340,7 @@ export function buildBroadcastContextQwenRequestBody(
     userContent += `  대사: ${candidate.transcriptKo}\n`;
     userContent += `  사건: ${candidate.eventSummaryKo}\n`;
     userContent += `  반응: ${candidate.reactionSummaryKo}\n`;
+    userContent += `  등장인물: ${candidate.participantContextKo}\n`;
     if (candidate.chatReactionSummaryKo) {
       userContent += `  채팅: ${candidate.chatReactionSummaryKo}\n`;
     }
@@ -376,6 +393,7 @@ export function extractBroadcastContextQwenRefinementResponse(
   } catch {
     return { ok: false };
   }
+  if (containsUnexpectedHan(parsed)) return { ok: false };
   if (!isRecord(parsed) || typeof parsed.summary !== "string" || !Array.isArray(parsed.leads)) {
     return { ok: false };
   }
@@ -467,6 +485,7 @@ export function extractBroadcastContextQwenDiscoveryResponse(
   } catch {
     return { ok: false };
   }
+  if (containsUnexpectedHan(parsed)) return { ok: false };
   if (!isRecord(parsed) || typeof parsed.summary !== "string" || !Array.isArray(parsed.leads)) {
     return { ok: false };
   }
@@ -548,6 +567,7 @@ export function extractBroadcastContextQwenOverviewResponse(
   } catch {
     return { ok: false };
   }
+  if (containsUnexpectedHan(parsed)) return { ok: false };
   if (!isRecord(parsed) || typeof parsed.summary !== "string") return { ok: false };
   const broadcastSummaryKo = parsed.summary;
   const themes = isStringArray(parsed.themes) ? parsed.themes.slice(0, 4) : [];
@@ -769,6 +789,7 @@ export function extractBroadcastContextQwenSelectionResponse(
   } catch {
     return { ok: false };
   }
+  if (containsUnexpectedHan(parsed)) return { ok: false };
   if (!isRecord(parsed) || typeof parsed.summary !== "string" || !Array.isArray(parsed.selected)) {
     return { ok: false };
   }
@@ -1093,6 +1114,8 @@ export function extractBroadcastContextDeepseekResponse(
   } catch {
     return { ok: false };
   }
+
+  if (containsUnexpectedHan(parsed)) return { ok: false };
 
   if (!isRecord(parsed) || typeof parsed.broadcastSummaryKo !== "string") {
     return { ok: false };

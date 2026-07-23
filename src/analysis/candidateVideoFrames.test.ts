@@ -26,4 +26,16 @@ describe("candidateVideoFrames", () => {
       36_000,
     ]);
   });
+
+  it("still produces four distinct timestamps when the reaction peak touches an edge", () => {
+    const nearStart = candidateVideoFrameTimestamps(120_000, 150_000, 120_000);
+    const nearEnd = candidateVideoFrameTimestamps(120_000, 150_000, 150_000);
+
+    expect(nearStart).toHaveLength(4);
+    expect(new Set(nearStart).size).toBe(4);
+    expect(nearStart.every((timestamp) => timestamp >= 0 && timestamp < 30_000)).toBe(true);
+    expect(nearEnd).toHaveLength(4);
+    expect(new Set(nearEnd).size).toBe(4);
+    expect(nearEnd.every((timestamp) => timestamp >= 0 && timestamp < 30_000)).toBe(true);
+  });
 });

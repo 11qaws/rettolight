@@ -9,6 +9,7 @@ import {
   handleBroadcastTranscriptRequest,
   handleBroadcastContextRequest,
   handleCandidateInsightRequest,
+  handleChzzkVideoChannelRequest,
   handleYouTubeCaptionsRequest,
   type AiProxyEnvironment,
 } from "./aiProxy.worker";
@@ -105,6 +106,8 @@ function createGeminiPayload(candidateDurationMs = 1_000): unknown {
                 reactionSummaryKo: "목소리가 갑자기 커지는 반응이 들려요.",
                 whyGoodClipKo: "반응 변화가 뚜렷해 먼저 확인할 만해요.",
                 uncertaintiesKo: ["화면을 보지 않아 정확한 사건은 알 수 없어요."],
+                participantPresence: "none-present",
+                participantSummaryKo: "준비된 대표 화면 네 장에는 확인할 수 있는 등장인물이 없습니다.",
                 identifiedParticipants: [],
               }),
             },
@@ -176,6 +179,39 @@ describe("aiProxy.worker", () => {
     expect(String(upstreamFetch.mock.calls[0]?.[0])).toContain("youtubei/v1/player");
     expect(upstreamFetch.mock.calls[0]?.[1]).toMatchObject({ method: "POST" });
     expect(String(upstreamFetch.mock.calls[1]?.[0])).toContain("fmt=json3");
+  });
+
+  it("resolves a CHZZK replay to its source channel through the fixed upstream", async () => {
+    let requestedUrl = "";
+    const upstreamFetch = vi.fn((input: RequestInfo | URL) => {
+      requestedUrl = typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.href
+          : input.url;
+      return Promise.resolve(new Response(JSON.stringify({
+        content: {
+          channel: { channelId: "0385e1a232e51078bad18aef8479ab22" },
+        },
+      }), { status: 200 }));
+    });
+    const response = await handleChzzkVideoChannelRequest(
+      createRequest(undefined, {
+        method: "GET",
+        url: "https://rettohighlight-gemini.example/v1/chzzk-video-channel?v=13996057",
+      }),
+      createEnvironment(),
+      { fetchImplementation: upstreamFetch },
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      videoNo: "13996057",
+      channelId: "0385e1a232e51078bad18aef8479ab22",
+    });
+    expect(requestedUrl).toBe(
+      "https://api.chzzk.naver.com/service/v2/videos/13996057",
+    );
   });
 
   it("reasons over whole-broadcast context through Qwen 3.7 Plus", async () => {
@@ -1211,14 +1247,17 @@ describe("aiProxy.worker", () => {
       reactionSummaryKo: "화면의 캐릭터를 보며 당황했다.",
       whyGoodClipKo: "게임 화면과 반응의 인과가 뚜렷하다.",
       uncertaintiesKo: [],
+      participantPresence: "identified",
+      participantSummaryKo: "대표 화면의 이름표를 근거로 유레카가 등장합니다.",
       identifiedParticipants: [
         {
-          nameKo: "유레카",
-          roleKo: "스트리머",
-          evidenceBasis: "on-screen-label",
+          displayName: "유레카",
+          role: "streamer",
+          evidenceBasis: "on-screen-name",
           evidenceKo: "화면에 이름이 보였다.",
           confidence: 0.9,
           relativeTimestampMs: 300,
+          observedFrameIndices: [0],
         },
       ],
     });
@@ -1299,7 +1338,7 @@ describe("aiProxy.worker", () => {
       "gemini-3.6-flash",
     );
     expect(response.headers.get("X-ExClipper-Model-Revision")).toBe(
-      "gemini-3.6-flash-grounded-frames-cast-v5-2026-07-22",
+      "gemini-3.6-flash-grounded-frames-participants-language-v7-2026-07-23",
     );
     expect(response.headers.get("X-ExClipper-Fallback-Used")).toBe("true");
     expect(response.headers.get("X-ExClipper-Fallback-Reason")).toBe(

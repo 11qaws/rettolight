@@ -18,6 +18,7 @@ const dummyRequest: BroadcastContextRequest = {
   schemaVersion: BROADCAST_CONTEXT_SCHEMA_VERSION,
   sourceDurationMs: 3600000,
   castRosterId: null,
+  outputLanguage: "ko",
   chapters: [
     {
       chapterId: "c1",
@@ -112,6 +113,15 @@ describe("broadcastContextDeepseek", () => {
       expect(body.response_format).toEqual({ type: "json_object" });
       expect(body).not.toHaveProperty("thinking");
       expect(body).not.toHaveProperty("reasoning_effort");
+    });
+
+    it("requests English-only editorial narration when the session language is English", () => {
+      const body = buildBroadcastContextQwenRequestBody({
+        ...dummyRequest,
+        outputLanguage: "en",
+      });
+      expect(body.messages[1].content).toContain("in English only");
+      expect(body.messages[1].content).toContain("host profile");
     });
 
     it.each([

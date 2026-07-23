@@ -192,6 +192,9 @@ describe("candidatePassB.worker remote lifecycle", () => {
       reactionSummaryKo: "목소리가 잠시 커지는 반응 단서가 들려요.",
       whyGoodClipKo: "발화와 소리 변화가 가까워 먼저 확인할 만해요.",
       uncertaintiesKo: ["화자와 화면 사건은 오디오만으로 알 수 없어요."],
+      participantPresence: "insufficient-evidence",
+      participantSummaryKo: "대표 화면이 없어 등장인물을 확인하지 못했습니다.",
+      identifiedParticipants: [],
     };
     const fetchMock = vi
       .fn<(_input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>()
@@ -290,6 +293,9 @@ describe("candidatePassB.worker remote lifecycle", () => {
       reactionSummaryKo: "스트리머 반응 요약",
       whyGoodClipKo: "반응이 분명한 후보",
       uncertaintiesKo: ["화면 맥락은 재생 확인이 필요합니다."],
+      participantPresence: "insufficient-evidence",
+      participantSummaryKo: "대표 화면이 없어 등장인물을 확인하지 못했습니다.",
+      identifiedParticipants: [],
     };
     const fetchMock = vi.fn(
       () =>

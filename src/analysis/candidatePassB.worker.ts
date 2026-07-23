@@ -53,6 +53,7 @@ import {
   type CandidatePassBWorkerResponse,
   type CandidatePassBWorkerResponsePayload,
 } from "./candidatePassBWorkerProtocol";
+import { isAnalysisLanguage } from "../domain/analysisLanguage";
 import { isCandidatePassBCastRosterId } from "./participantRoster";
 
 declare const self: DedicatedWorkerGlobalScope;
@@ -232,16 +233,15 @@ function isValidTarget(
 ): value is CandidatePassBTarget {
   if (
     !isRecord(value) ||
-    (!hasExactKeys(value, ["candidateId", "startMs", "endMs"]) &&
-      !hasExactKeys(value, ["candidateId", "startMs", "endMs", "videoFrames"]) &&
-      !hasExactKeys(value, ["candidateId", "startMs", "endMs", "castRosterId"]) &&
-      !hasExactKeys(value, [
-        "candidateId",
-        "startMs",
-        "endMs",
-        "videoFrames",
-        "castRosterId",
-      ]))
+    !["candidateId", "startMs", "endMs"].every((key) => key in value) ||
+    Object.keys(value).some((key) => ![
+      "candidateId",
+      "startMs",
+      "endMs",
+      "videoFrames",
+      "castRosterId",
+      "outputLanguage",
+    ].includes(key))
   ) {
     return false;
   }
@@ -265,6 +265,12 @@ function isValidTarget(
   if (
     "castRosterId" in value &&
     !isCandidatePassBCastRosterId(value.castRosterId)
+  ) {
+    return false;
+  }
+  if (
+    "outputLanguage" in value &&
+    !isAnalysisLanguage(value.outputLanguage)
   ) {
     return false;
   }
@@ -644,6 +650,7 @@ async function analyzeCandidateWithRemoteAi(
         target.endMs - target.startMs,
         target.videoFrames ?? [],
         target.castRosterId ?? null,
+        target.outputLanguage ?? "ko",
       ),
     );
 
@@ -722,6 +729,7 @@ async function analyzeCandidateWithRemoteAi(
       responsePayload,
       target.endMs - target.startMs,
       target.castRosterId ?? null,
+      target.outputLanguage ?? "ko",
     );
     if (!parsed.ok) {
       throw new ProxyWorkerFailure("PROXY_INVALID_RESPONSE");

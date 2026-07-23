@@ -1,4 +1,5 @@
 import type { CandidatePassBCastRosterId } from "./participantRoster";
+import type { AnalysisLanguage } from "../domain/analysisLanguage";
 
 /** Provider-specific IDs plus the currently deployed default. */
 export const CANDIDATE_PASS_B_GEMINI_MODEL_ID = "gemini-3.6-flash" as const;
@@ -6,8 +7,10 @@ export const CANDIDATE_PASS_B_OLDER_GEMINI_MODEL_REVISION =
   "gemini-3.6-flash-grounded-frames-v3-2026-07-22" as const;
 export const CANDIDATE_PASS_B_PREVIOUS_GEMINI_MODEL_REVISION =
   "gemini-3.6-flash-grounded-frames-cast-v4-2026-07-22" as const;
-export const CANDIDATE_PASS_B_GEMINI_MODEL_REVISION =
+export const CANDIDATE_PASS_B_PRIOR_GEMINI_MODEL_REVISION =
   "gemini-3.6-flash-grounded-frames-cast-v5-2026-07-22" as const;
+export const CANDIDATE_PASS_B_GEMINI_MODEL_REVISION =
+  "gemini-3.6-flash-grounded-frames-participants-language-v7-2026-07-23" as const;
 export const CANDIDATE_PASS_B_LEGACY_GEMINI_MODEL_ID =
   "gemini-3.5-flash" as const;
 export const CANDIDATE_PASS_B_LEGACY_GEMINI_MODEL_REVISION =
@@ -17,8 +20,10 @@ export const CANDIDATE_PASS_B_OLDER_QWEN_MODEL_REVISION =
   "qwen3.5-omni-flash-grounded-frames-v2-2026-07-22" as const;
 export const CANDIDATE_PASS_B_PREVIOUS_QWEN_MODEL_REVISION =
   "qwen3.5-omni-flash-grounded-frames-cast-v3-2026-07-22" as const;
-export const CANDIDATE_PASS_B_QWEN_MODEL_REVISION =
+export const CANDIDATE_PASS_B_PRIOR_QWEN_MODEL_REVISION =
   "qwen3.5-omni-flash-grounded-frames-cast-v4-2026-07-22" as const;
+export const CANDIDATE_PASS_B_QWEN_MODEL_REVISION =
+  "qwen3.5-omni-flash-grounded-frames-participants-language-v6-2026-07-23" as const;
 export const CANDIDATE_PASS_B_MODEL_ID = CANDIDATE_PASS_B_QWEN_MODEL_ID;
 export const CANDIDATE_PASS_B_MODEL_REVISION = CANDIDATE_PASS_B_QWEN_MODEL_REVISION;
 export const CANDIDATE_PASS_B_ROUTING_MODEL_ID =
@@ -27,8 +32,10 @@ export const CANDIDATE_PASS_B_PREVIOUS_ROUTING_MODEL_REVISION =
   "qwen3.5-omni-flash_then_gemini-3.6-flash_bounded-cast-v4" as const;
 export const CANDIDATE_PASS_B_OLDER_ROUTING_MODEL_REVISION =
   "qwen3.5-omni-flash_then_gemini-3.6-flash_bounded-v3" as const;
-export const CANDIDATE_PASS_B_ROUTING_MODEL_REVISION =
+export const CANDIDATE_PASS_B_PRIOR_ROUTING_MODEL_REVISION =
   "qwen3.5-omni-flash_then_gemini-3.6-flash_bounded-cast-v5" as const;
+export const CANDIDATE_PASS_B_ROUTING_MODEL_REVISION =
+  "qwen3.5-omni-flash_then_gemini-3.6-flash_bounded-participants-language-v7" as const;
 export const CANDIDATE_PASS_B_LEGACY_ROUTING_MODEL_REVISION =
   "qwen3.5-omni-flash_then_gemini-3.5-flash_bounded-v2" as const;
 
@@ -37,11 +44,13 @@ export function isCompatibleCandidatePassBRoutingModelRevision(
   value: unknown,
 ): value is
   | typeof CANDIDATE_PASS_B_ROUTING_MODEL_REVISION
+  | typeof CANDIDATE_PASS_B_PRIOR_ROUTING_MODEL_REVISION
   | typeof CANDIDATE_PASS_B_PREVIOUS_ROUTING_MODEL_REVISION
   | typeof CANDIDATE_PASS_B_OLDER_ROUTING_MODEL_REVISION
   | typeof CANDIDATE_PASS_B_LEGACY_ROUTING_MODEL_REVISION {
   return (
     value === CANDIDATE_PASS_B_ROUTING_MODEL_REVISION ||
+    value === CANDIDATE_PASS_B_PRIOR_ROUTING_MODEL_REVISION ||
     value === CANDIDATE_PASS_B_PREVIOUS_ROUTING_MODEL_REVISION ||
     value === CANDIDATE_PASS_B_OLDER_ROUTING_MODEL_REVISION ||
     value === CANDIDATE_PASS_B_LEGACY_ROUTING_MODEL_REVISION
@@ -93,6 +102,8 @@ export interface CandidatePassBTarget {
   readonly videoFrames?: readonly CandidatePassBVideoFrame[];
   /** Optional server-known closed-set VTuber roster; never an open text prompt. */
   readonly castRosterId?: CandidatePassBCastRosterId;
+  /** Language for generated editorial narration; source speech stays verbatim. */
+  readonly outputLanguage?: AnalysisLanguage;
 }
 
 /**
@@ -145,9 +156,19 @@ export interface CandidatePassBInsight {
   readonly reactionSummaryKo: string;
   readonly whyGoodClipKo: string;
   readonly uncertaintiesKo: readonly string[];
+  /** Required for current results; absent only on sessions saved before 0.3.44. */
+  readonly participantPresence?: CandidatePassBParticipantPresence;
+  /** Human-readable participant grounding that is reused by context and UI. */
+  readonly participantSummaryKo?: string;
   /** Absent only on sessions saved before insight schema 1.2.0. */
   readonly identifiedParticipants?: readonly CandidatePassBParticipantAttribution[];
 }
+
+export type CandidatePassBParticipantPresence =
+  | "identified"
+  | "present-unidentified"
+  | "none-present"
+  | "insufficient-evidence";
 
 export type CandidatePassBParticipantRole = "streamer" | "guest" | "unknown";
 export type CandidatePassBParticipantEvidenceBasis =
@@ -162,6 +183,8 @@ export interface CandidatePassBParticipantAttribution {
   readonly evidenceKo: string;
   readonly confidence: number;
   readonly relativeTimestampMs: number;
+  /** Zero-based indices into the exact four-frame AI bundle. */
+  readonly observedFrameIndices?: readonly number[];
 }
 
 export interface CandidatePassBTranscriptResult {

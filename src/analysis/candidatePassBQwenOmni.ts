@@ -14,6 +14,7 @@ import {
   type CandidatePassBVideoFrame,
 } from "./candidatePassBWorkerProtocol";
 import type { CandidatePassBCastRosterId } from "./participantRoster";
+import type { AnalysisLanguage } from "../domain/analysisLanguage";
 
 const MAX_BASE64_WAV_LENGTH = 8 * 1024 * 1024;
 
@@ -40,14 +41,22 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function normalizedKorean(value: unknown, maximumLength: number): string | null {
+function normalizedNarrative(
+  value: unknown,
+  maximumLength: number,
+  outputLanguage: AnalysisLanguage,
+): string | null {
   if (typeof value !== "string") return null;
   const normalized = value
     .normalize("NFKC")
     .replace(/[\p{Cc}\p{Cf}]/gu, " ")
     .replace(/\s+/gu, " ")
     .trim();
-  if (normalized.length === 0 || !/\p{Script=Hangul}/u.test(normalized)) return null;
+  if (
+    normalized.length === 0 ||
+    !(outputLanguage === "ko" ? /\p{Script=Hangul}/u : /\p{Script=Latin}/u).test(normalized) ||
+    /\p{Script=Han}/u.test(normalized)
+  ) return null;
   return Array.from(normalized).slice(0, maximumLength).join("").trim();
 }
 
@@ -66,7 +75,11 @@ function normalizedName(value: unknown): string | null {
   return bounded.length > 0 ? bounded : null;
 }
 
-function normalizedQwenJson(text: string, candidateDurationMs: number): string | null {
+function normalizedQwenJson(
+  text: string,
+  candidateDurationMs: number,
+  outputLanguage: AnalysisLanguage,
+): string | null {
   const unfenced = text
     .trim()
     .replace(/^```(?:json)?\s*/iu, "")
@@ -79,10 +92,25 @@ function normalizedQwenJson(text: string, candidateDurationMs: number): string |
     return null;
   }
   if (!isRecord(value) || !Array.isArray(value.segments)) return null;
-  const eventSummaryKo = normalizedKorean(value.eventSummaryKo, 600);
-  const reactionSummaryKo = normalizedKorean(value.reactionSummaryKo, 600);
-  const whyGoodClipKo = normalizedKorean(value.whyGoodClipKo, 600);
-  if (eventSummaryKo === null || reactionSummaryKo === null || whyGoodClipKo === null) {
+  const eventSummaryKo = normalizedNarrative(value.eventSummaryKo, 600, outputLanguage);
+  const reactionSummaryKo = normalizedNarrative(value.reactionSummaryKo, 600, outputLanguage);
+  const whyGoodClipKo = normalizedNarrative(value.whyGoodClipKo, 600, outputLanguage);
+  const participantPresence = [
+    "identified",
+    "present-unidentified",
+    "none-present",
+    "insufficient-evidence",
+  ].includes(value.participantPresence as string)
+    ? value.participantPresence as string
+    : null;
+  const participantSummaryKo = normalizedNarrative(value.participantSummaryKo, 600, outputLanguage);
+  if (
+    eventSummaryKo === null ||
+    reactionSummaryKo === null ||
+    whyGoodClipKo === null ||
+    participantPresence === null ||
+    participantSummaryKo === null
+  ) {
     return null;
   }
   const segments: Array<{
@@ -100,7 +128,7 @@ function normalizedQwenJson(text: string, candidateDurationMs: number): string |
       : null;
     const textValue = raw.text === "[불명]"
       ? "[불명]"
-      : normalizedKorean(raw.text, 240);
+      : normalizedNarrative(raw.text, 240, "ko");
     if (start === null || end === null || textValue === null) continue;
     const relativeStartMs = Math.max(0, Math.min(candidateDurationMs - 1, start));
     const relativeEndMs = Math.max(
@@ -119,7 +147,7 @@ function normalizedQwenJson(text: string, candidateDurationMs: number): string |
   const uncertaintiesKo: string[] = [];
   if (Array.isArray(value.uncertaintiesKo)) {
     for (const raw of value.uncertaintiesKo.slice(0, 6)) {
-      const normalized = normalizedKorean(raw, 300);
+      const normalized = normalizedNarrative(raw, 300, outputLanguage);
       if (normalized !== null && !uncertaintiesKo.includes(normalized)) {
         uncertaintiesKo.push(normalized);
       }
@@ -138,6 +166,7 @@ function normalizedQwenJson(text: string, candidateDurationMs: number): string |
     readonly evidenceKo: string;
     readonly confidence: number;
     readonly relativeTimestampMs: number;
+    readonly observedFrameIndices: readonly number[];
   }> = [];
   const seenParticipantNames = new Set<string>();
   if (Array.isArray(value.identifiedParticipants)) {
@@ -147,9 +176,10 @@ function normalizedQwenJson(text: string, candidateDurationMs: number): string |
     )) {
       if (!isRecord(raw)) continue;
       const displayName = normalizedName(raw.displayName);
-      const evidenceKo = normalizedKorean(
+      const evidenceKo = normalizedNarrative(
         raw.evidenceKo,
         MAX_CANDIDATE_PASS_B_PARTICIPANT_EVIDENCE_LENGTH,
+        outputLanguage,
       );
       const role = ["streamer", "guest", "unknown"].includes(raw.role as string)
         ? (raw.role as "streamer" | "guest" | "unknown")
@@ -170,6 +200,18 @@ function normalizedQwenJson(text: string, candidateDurationMs: number): string |
       const timestamp = typeof raw.relativeTimestampMs === "number" && Number.isFinite(raw.relativeTimestampMs)
         ? Math.round(Math.max(0, Math.min(candidateDurationMs, raw.relativeTimestampMs)))
         : null;
+      const observedFrameIndices = Array.isArray(raw.observedFrameIndices)
+        ? [
+            ...new Set(
+              raw.observedFrameIndices.filter(
+                (frameIndex): frameIndex is number =>
+                  Number.isSafeInteger(frameIndex) &&
+                  frameIndex >= 0 &&
+                  frameIndex < MAX_CANDIDATE_PASS_B_VIDEO_FRAMES,
+              ),
+            ),
+          ].sort((left, right) => left - right)
+        : null;
       const nameKey = displayName?.toLocaleLowerCase("ko-KR") ?? "";
       if (
         displayName === null ||
@@ -178,6 +220,7 @@ function normalizedQwenJson(text: string, candidateDurationMs: number): string |
         evidenceBasis === null ||
         confidence === null ||
         timestamp === null ||
+        observedFrameIndices === null ||
         seenParticipantNames.has(nameKey)
       ) {
         continue;
@@ -190,6 +233,7 @@ function normalizedQwenJson(text: string, candidateDurationMs: number): string |
         evidenceKo,
         confidence,
         relativeTimestampMs: timestamp,
+        observedFrameIndices,
       });
     }
   }
@@ -199,6 +243,8 @@ function normalizedQwenJson(text: string, candidateDurationMs: number): string |
     reactionSummaryKo,
     whyGoodClipKo,
     uncertaintiesKo,
+    participantPresence,
+    participantSummaryKo,
     identifiedParticipants,
   });
 }
@@ -230,6 +276,7 @@ export function buildCandidatePassBQwenOmniRequestBody(
   candidateDurationMs: number,
   videoFrames: readonly CandidatePassBVideoFrame[] = [],
   castRosterId: CandidatePassBCastRosterId | null = null,
+  outputLanguage: AnalysisLanguage = "ko",
 ): CandidatePassBQwenOmniRequestBody {
   if (
     typeof audioBase64 !== "string" ||
@@ -245,7 +292,7 @@ export function buildCandidatePassBQwenOmniRequestBody(
   const qwenGroundingRules = frames.length === 0
     ? "\n대표 화면이 제공되지 않았습니다. 화면 내용, 비명의 원인, 표정, 몸짓, 게임 상황을 추측하지 말고 시각 정보가 없다고 uncertaintiesKo에 적으세요."
     : "\n대표 화면에서 실제로 확인되는 것만 서술하세요. 작아서 선명하게 읽히지 않는 글자는 인용하지 말고, 아바타 이미지의 프레임별 차이만으로 몸짓·행동·감정을 단정하지 마세요. 프레임 사이의 움직임과 인과관계는 보이지 않으므로 대사와 화면 양쪽에서 확인되지 않으면 uncertaintiesKo에 남기세요.";
-  const responseShape = `\n\n다음 JSON 형식만 출력하세요:\n{"segments":[{"relativeStartMs":0,"relativeEndMs":1000,"text":"실제 한국어 발화"}],"eventSummaryKo":"화면 장면·사건·반응 200~300자","reactionSummaryKo":"관찰한 반응 과정","whyGoodClipKo":"클립 가치 또는 제외 이유","uncertaintiesKo":[],"identifiedParticipants":[{"displayName":"화면이나 호명으로 확인한 이름","role":"streamer","evidenceBasis":"on-screen-name","evidenceKo":"화면 자막에 이름이 표시됨","confidence":0.9,"relativeTimestampMs":5000}]}`;
+  const responseShape = `\n\n다음 JSON 형식만 출력하세요:\n{"segments":[{"relativeStartMs":0,"relativeEndMs":1000,"text":"실제 한국어 발화"}],"eventSummaryKo":"화면 장면·사건·반응 200~300자","reactionSummaryKo":"관찰한 반응 과정","whyGoodClipKo":"클립 가치 또는 제외 이유","uncertaintiesKo":[],"participantPresence":"identified","participantSummaryKo":"확인된 인물 또는 등장인물 없음","identifiedParticipants":[{"displayName":"화면이나 호명으로 확인한 이름","role":"streamer","evidenceBasis":"on-screen-name","evidenceKo":"화면 자막에 이름이 표시됨","confidence":0.9,"relativeTimestampMs":5000,"observedFrameIndices":[0,1]}]}`;
   return {
     model: CANDIDATE_PASS_B_QWEN_MODEL_ID,
     messages: [{
@@ -272,7 +319,7 @@ export function buildCandidatePassBQwenOmniRequestBody(
         ]),
         {
           type: "text",
-          text: `${buildCandidatePassBPrompt(candidateDurationMs, frames.length, castRosterId)}${qwenGroundingRules}\n한국어 설명에는 불필요한 중국어·일본어 문자를 섞지 말고 자연스러운 한국어만 사용하세요.${responseShape}`,
+          text: `${buildCandidatePassBPrompt(candidateDurationMs, frames.length, castRosterId, outputLanguage)}${qwenGroundingRules}\nDo not mix Chinese or Japanese characters into narrative text.${responseShape}`,
         },
       ],
     }],
@@ -291,6 +338,7 @@ export function extractCandidatePassBQwenOmniSseResponse(
   value: string,
   candidateDurationMs: number,
   castRosterId: CandidatePassBCastRosterId | null = null,
+  outputLanguage: AnalysisLanguage = "ko",
 ): Record<string, unknown> | null {
   if (typeof value !== "string" || value.length === 0) return null;
   let text = "";
@@ -319,7 +367,7 @@ export function extractCandidatePassBQwenOmniSseResponse(
     }
   }
   if (!sawStop) return null;
-  const normalized = normalizedQwenJson(text, candidateDurationMs);
+  const normalized = normalizedQwenJson(text, candidateDurationMs, outputLanguage);
   if (normalized === null) return null;
   const envelope = {
     candidates: [{
@@ -331,6 +379,7 @@ export function extractCandidatePassBQwenOmniSseResponse(
     envelope,
     candidateDurationMs,
     castRosterId,
+    outputLanguage,
   ).ok
     ? envelope
     : null;

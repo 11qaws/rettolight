@@ -37,6 +37,8 @@ describe("candidatePassBQwenOmni", () => {
       reactionSummaryKo: "스트리머가 잠시 멈춘 뒤 당황하며 잘못을 인정한다.",
       whyGoodClipKo: "사건의 원인과 스트리머의 반응이 짧은 구간 안에서 완결된다.",
       uncertaintiesKo: ["대표 화면 사이의 움직임은 재생 확인이 필요하다."],
+      participantPresence: "identified",
+      participantSummaryKo: "화면 이름표로 유레카가 진행자인 것을 확인했다.",
       identifiedParticipants: [
         {
           displayName: "유레카",
@@ -45,6 +47,7 @@ describe("candidatePassBQwenOmni", () => {
           evidenceKo: "소개 자막에 유레카라는 이름이 표시된다.",
           confidence: 0.94,
           relativeTimestampMs: 1_000,
+          observedFrameIndices: [0],
         },
       ],
     };

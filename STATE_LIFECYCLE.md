@@ -1,7 +1,7 @@
 # ExClipper 상태·생애주기 명세
 
-- 문서 버전: 0.3.43
-- 기준 제품 계획: PRODUCT_PLAN.md 0.3.43
+- 문서 버전: 0.3.44
+- 기준 제품 계획: PRODUCT_PLAN.md 0.3.44
 - 기준일: 2026-07-23 (Asia/Seoul)
 - 적용 범위: GitHub Pages에서 실행되는 개인 편집 어시스턴트와 선택형 CHZZK 동반 수집기
 - 문서 지위: 구현 전 상태 모델의 기준 문서
@@ -58,6 +58,22 @@
 - 최대 20개 caption refinement 요청은 3개 bounded pool에서 안정된 입력 순서로 정착한다. 호출 하나가 transport failure면 해당 parent lead만 기존 source-fenced cue matcher로 내려가고, 성공했지만 빈 결과인 호출은 모델의 의도적 abstention으로 유지한다.
 - context annotation은 canonical candidate를 삭제하지 않는다. `recommended | needs-review | deprioritized | insufficient-evidence` projection과 유료 상세 queue eligibility만 갱신하며, 사용자의 `approved | rejected`, boundary revision, 원본 candidate ID와 source range는 계속 우선한다.
 
+## `0.3.44` 후보 화면 생산 큐와 AI 소비 fence
+
+- `analysisLanguage`는 `ko | en`인 세션 준비 상태다. source/run이 아직 시작되지 않았을 때만 전이할 수 있고, 분석 시작 fence 뒤에는 잠긴다. AI 요청과 cache input signature는 이 값을 포함하며 원문 대사 evidence는 선택 언어와 무관하게 원문을 보존한다.
+- 현재 진행 projection은 단계마다 새 객체를 쌓지 않는다. `fast-scan | whole-context | candidate-synthesis | editor-selection` 중 하나가 중앙 단계이며 1~3단계 모두 동일 progress slot을 소유한다. 빠른 탐색은 화면·오디오 worker ratio, 전체 맥락은 transcript→restore/model subphase, 후보 종합은 topic reveal→Pass B ratio에서 값을 얻는다. 단계 전환은 이전 막대를 제거한 뒤 다른 위치에 새로 만드는 presentation event가 아니다.
+- 한국어 AI 결과에 비의도 한자 script가 있거나 영어 결과가 라틴 서술 계약을 충족하지 않으면 성공 상태로 저장하지 않는다. fallback 가능 오류면 허용된 다음 provider로 한 번 전이하고, 그렇지 않으면 기존 canonical 후보와 사용자 판단을 보존한 gap terminal로 끝낸다.
+- 후보 화면 작업은 candidate ID별 `queued → extracting → ready | failed → consumed` projection을 가진다. canonical candidate의 review state·boundary·score와 독립이며 화면 작업 상태가 후보 순위나 최종 선택을 바꾸지 않는다.
+- 한 run에는 화면 producer 하나만 활성화한다. producer는 source binding과 operation epoch를 고정한 단일 video/Blob URL/canvas session에서 target 순서대로 최대 네 frame을 만들고, 후보 하나가 끝날 때마다 해당 ID의 promise를 정확히 한 번 정착한다.
+- 최대 두 AI consumer는 자기 candidate ID의 frame promise가 `ready`가 될 때까지만 기다린다. 다른 모든 후보의 화면 준비를 기다리지 않으며, 먼저 반환된 AI 응답도 자기 ID의 evidence slot만 갱신한다. `RUN_COMPLETED`는 producer와 모든 consumer가 terminal인 뒤 한 번만 허용한다.
+- `ready` 조건은 계획한 서로 다른 source timestamp의 JPEG frame 4장이 모두 유효한 상태다. 한 장이라도 없으면 consumer는 Worker/API를 호출하지 않고 해당 candidate에 `visual_evidence_incomplete` terminal event를 기록한다. canonical fast 후보·사람의 승인·경계는 보존하고 화면·게임·인물·인과 AI 설명은 만들지 않는다.
+- frame bundle 전체가 AI 요청의 `videoFrames`이며, 반응 정점에 가장 가까운 한 frame이 같은 시점에 UI thumbnail과 durable `thumbnailById`에 기록된다. 별도 캡처 실행이나 먼저 배열에 들어온 frame을 임의로 섬네일로 쓰지 않는다.
+- 화면 묶음이 `ready`인 후보의 인물 projection은 `identified | present-unidentified | none-present | insufficient-evidence` 중 정확히 하나다. `identified`는 한 명 이상의 bounded attribution을, `present-unidentified`와 `none-present`는 빈 식별 목록을 요구한다. `insufficient-evidence`는 화면 네 장이 존재하더라도 전환·가림 등으로 존재 여부를 판단할 수 없는 경우이며 화면 추출 실패 상태와 혼동하지 않는다.
+- appearance 기반 attribution은 서로 다른 frame index 둘 이상을 요구하고, 화면 이름·실제 호명은 적어도 하나의 frame index와 상대 시각을 요구한다. 인물 projection과 사건·반응 맥락은 하나의 원자적 AI 결과로 commit하며, UI와 전체 맥락 입력은 동일한 `participantSummaryKo`를 사용한다.
+- 채널 catalog revision은 run의 불변 snapshot이다. 교환학생 메인 채널 scope만 세라 교수님을 허용하고 개인 채널 scope는 해당 채널 주인만 owner reference로 제공한다. 채널을 확인하지 못했으면 open-world 외형 추측으로 확대하지 않고 이름 자막·호명 또는 `present-unidentified`로 남긴다.
+- `selectedCandidateId`는 하나의 검토 작업면 안에서 타임라인 marker·미니 카드, 일시정지 영상, 우측 후보 판정·근거를 함께 투영한다. 후보 선택은 재생을 시작하지 않으며 우측 열의 세 projection을 원자적으로 같은 candidate ID로 교체한다. 상세 정보는 작업면 바깥의 별도 카드로 복제하지 않는다.
+- 새 source, cancel, recovery 교체, unmount는 producer AbortController와 모든 대기 promise를 terminal로 정리한다. 뒤늦은 frame callback은 operation epoch와 passBRunId가 다르면 화면 state·thumbnail·AI queue를 변경하지 못한다.
+
 ## `0.3.35` 검증된 전사 transport·청크 checkpoint·닫힌 출연진
 
 - 방송 전사 transport 상한은 실운영 성공을 확인한 90초이며, 최대 12시간의 균등·사건 표본을 모두 표현하는 Worker 상한은 240개다. 청크 수 증가는 duration 과금 총량을 바꾸지 않으며 ASR budget은 `$0.42`로 유지한다.
@@ -66,7 +82,7 @@
 - `0.3.34`의 호환 가능한 210초 Qwen chapter는 원래 model identity와 source fence를 보존해 재사용한다. 겹치지 않는 uncovered range만 새 revision으로 채우며, 과거 chapter를 새 모델 결과로 relabel하지 않는다.
 - 후보의 `castRosterId`는 서버가 알고 있는 `chzzk-video-13996057-v1` 하나만 허용하며, source filename이 replay `13996057` 또는 검토된 `교환학생/합격생/장학생` 제목과 맞을 때만 target에 붙인다. 임의 텍스트 roster와 다른 방송의 자동 명단 상속은 Worker 경계를 넘지 못한다. `provided-cast-reference`는 등록 이름, 같은 프레임의 서로 다른 특징 2개 이상, confidence 0.88 이상을 모두 만족해야 한다.
 - 출연자 projection은 카드 표시 증거만 소유한다. 점수, 후보 생성·삭제, 경계, 승인·제외, 전체 맥락 판정을 변경하는 전이는 없다. 화면이 없으면 등록 출연진 식별도 audio-only 안전 projection에서 제거한다.
-- 대표 화면 채집은 최대 2개 디코더만 병렬로 열며 후보 AI 요청의 bounded parallel pool과 분리된다. 화면 채집 실패는 후보를 지우지 않고 audio-only gap projection으로 낮춘다.
+- `0.3.35` 당시 대표 화면 채집 실패는 audio-only gap으로 낮췄다. `0.3.44`부터는 단일 producer가 네 장을 모두 준비한 후보만 AI queue에 넣고, 불완전 묶음은 후보를 보존하되 화면·인물·사건 해석 요청 자체를 보내지 않는 더 강한 fence가 이 규칙을 대체한다.
 - 전체 맥락 tier fallback은 `timeout | unavailable | rate-limited | model-unavailable | response-format | invalid-response`에서만 Qwen 3.7과 3.6 사이를 한 번 전환한다. `auth | invalid-argument | rejected`는 결정적 실패로 남기며 두 번째 유료 요청을 만들지 않는다. 성공 응답은 fallback reason을, 두 tier 모두 실패한 응답은 두 실패 class만 기록한다.
 
 ## `0.3.34` Gemini 후보 폴백 identity와 유료 결과 보존

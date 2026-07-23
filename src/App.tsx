@@ -111,11 +111,19 @@ import {
 } from "./analysis/youtubeCaptionTrack";
 import { requestYouTubeCaptionTrack } from "./analysis/youtubeCaptionClient";
 import {
+  chzzkVideoNoFromSourceName,
+  requestChzzkVideoChannel,
+} from "./analysis/chzzkVideoChannel";
+import type { AnalysisLanguage } from "./domain/analysisLanguage";
+import {
   captionTextForRange,
   chapterTextForRange,
   isExplicitMusicOnlyCaption,
 } from "./analysis/captionCandidateEvidence";
-import { sampleCandidateVideoFrames } from "./analysis/candidateVideoFrames";
+import {
+  produceCandidateVideoFrameBundles,
+  type CandidateVideoFrameBundleResult,
+} from "./analysis/candidateVideoFrames";
 import {
   candidatePassBCastRosterIdForSourceName,
   canonicalCandidatePassBCastDisplayName,
@@ -335,7 +343,7 @@ interface AudioAnalysisOutcome {
   readonly coverageComplete: boolean;
 }
 
-const APP_VERSION = "0.3.43";
+const APP_VERSION = "0.3.44";
 const PERSISTENCE_SCHEMA_VERSION = "0.3.0";
 const SIGNAL_ENGINE_VERSION =
   "streamer-reaction-fast-pass-v5-chat-fallback-music-confirmation";
@@ -347,7 +355,7 @@ type CandidateGeminiInsightById = Readonly<Record<string, CandidateGeminiInsight
 type CandidatePassBModelById = Readonly<
   Record<string, StoredCandidatePassBModelIdentity>
 >;
-type CandidateTimelineFrame = Awaited<ReturnType<typeof sampleCandidateVideoFrames>>[number];
+type CandidateTimelineFrame = CandidatePassBVideoFrame;
 type CandidateTimelineFramesById = Readonly<
   Record<string, readonly CandidateTimelineFrame[]>
 >;
@@ -772,6 +780,16 @@ function initialTheme(): Theme {
     : "light";
 }
 
+function initialAnalysisLanguage(): AnalysisLanguage {
+  try {
+    const stored = globalThis.localStorage?.getItem("exclipper-language");
+    if (stored === "ko" || stored === "en") return stored;
+  } catch {
+    // Language persistence is optional when storage is unavailable.
+  }
+  return "ko";
+}
+
 function sourceCheckLabel(state: SourceCheckState | null): string {
   if (state === null) {
     return "원본을 기다리는 중";
@@ -953,23 +971,36 @@ type TimelineInspectionTarget =
 
 function App() {
   const [theme, setTheme] = useState<Theme>(initialTheme);
+  const [analysisLanguage, setAnalysisLanguage] = useState<AnalysisLanguage>(
+    initialAnalysisLanguage,
+  );
+  const ui = (ko: string, en: string): string =>
+    analysisLanguage === "ko" ? ko : en;
   const [isDragging, setIsDragging] = useState(false);
   const [pendingFileName, setPendingFileName] = useState<string | null>(null);
   const [sourceFile, setSourceFile] = useState<File | null>(null);
+  const [sourceUrl, setSourceUrl] = useState("");
+  const [resolvedSourceChannelId, setResolvedSourceChannelId] = useState<
+    string | null
+  >(null);
+  const sourceDescriptor = `${sourceFile?.name ?? pendingFileName ?? ""} ${sourceUrl}`;
+  const sourceChzzkVideoNo = useMemo(
+    () => chzzkVideoNoFromSourceName(sourceDescriptor),
+    [sourceDescriptor],
+  );
   const sourceCastRosterId = useMemo(
     () => sourceFile === null && pendingFileName === null
       ? null
       : candidatePassBCastRosterIdForSourceName(
-        sourceFile?.name ?? pendingFileName ?? "",
+        `${sourceDescriptor} ${resolvedSourceChannelId ?? ""}`,
       ),
-    [pendingFileName, sourceFile],
+    [pendingFileName, resolvedSourceChannelId, sourceDescriptor, sourceFile],
   );
   const [sourcePreviewUrl, setSourcePreviewUrl] = useState<string | null>(null);
   const [sourceCheck, setSourceCheck] = useState<SourceCheckState | null>(null);
   const [preflight, setPreflight] = useState<LocalMediaPreflightResult | null>(null);
   const [sourceContentFingerprint, setSourceContentFingerprint] = useState<string | null>(null);
   const [sourceError, setSourceError] = useState<string | null>(null);
-  const [sourceUrl, setSourceUrl] = useState("");
   const [linkNotice, setLinkNotice] = useState<string | null>(null);
   const [chatImport, setChatImport] = useState<ChatImportResult | null>(null);
   const [chatContentFingerprint, setChatContentFingerprint] = useState<string | null>(null);
@@ -1151,6 +1182,32 @@ function App() {
       // Keep the selected theme for this tab even when persistence is blocked.
     }
   }, [theme]);
+
+  useEffect(() => {
+    document.documentElement.lang = analysisLanguage;
+    try {
+      globalThis.localStorage?.setItem("exclipper-language", analysisLanguage);
+    } catch {
+      // Keep the selected language for this tab when persistence is blocked.
+    }
+  }, [analysisLanguage]);
+
+  useEffect(() => {
+    setResolvedSourceChannelId(null);
+    if (sourceChzzkVideoNo === null) return undefined;
+    const controller = new AbortController();
+    void requestChzzkVideoChannel(sourceChzzkVideoNo, {
+      signal: controller.signal,
+    })
+      .then((channelId) => {
+        if (!controller.signal.aborted) setResolvedSourceChannelId(channelId);
+      })
+      .catch(() => {
+        // Channel grounding improves identity precision but must never block a
+        // local analysis when CHZZK metadata is temporarily unavailable.
+      });
+    return () => controller.abort();
+  }, [sourceChzzkVideoNo]);
 
   useEffect(
     () => {
@@ -1707,6 +1764,9 @@ function App() {
           eventSummaryKo: insight?.eventSummaryKo.trim() || narrative.event,
           reactionSummaryKo:
             insight?.reactionSummaryKo.trim() || narrative.streamerReaction,
+          participantContextKo:
+            insight?.participantSummaryKo?.trim() ||
+            "이 후보의 대표 화면 등장인물은 아직 확인하지 못했습니다.",
           chatReactionSummaryKo:
             chat === undefined
               ? null
@@ -1969,37 +2029,73 @@ function App() {
   const contextualCandidatePublicationReady =
     finalSelectionPhaseReady && timelineTopicRevealComplete;
   const liveAnalysisStageNumber =
-    !wholeContextPhaseComplete && !wholeContextPhaseFailed
+    !analysisComplete
+      ? 1
+      : !wholeContextPhaseComplete && !wholeContextPhaseFailed
       ? 2
       : !contextualCandidatePublicationReady
         ? 3
         : 4;
   const liveAnalysisStageTitle =
-    liveAnalysisStageNumber === 2
-      ? "방송 전역에서 맥락을 탐색하고 있어요"
+    liveAnalysisStageNumber === 1
+      ? ui("방송 전체에서 반응 신호를 빠르게 탐색하고 있어요", "Scanning the broadcast for reaction signals")
+      : liveAnalysisStageNumber === 2
+      ? ui("방송 전역에서 맥락을 탐색하고 있어요", "Exploring context across the broadcast")
       : liveAnalysisStageNumber === 3
         ? timelineTopicRevealComplete
-          ? "발견한 맥락으로 후보를 다시 보고 있어요"
-          : "방송 주제 지도를 하나씩 조합하고 있어요"
+          ? ui("발견한 맥락으로 후보를 다시 보고 있어요", "Rechecking candidates against discovered context")
+          : ui("방송 주제 지도를 하나씩 조합하고 있어요", "Building the broadcast topic map")
         : reviewCompleted
-          ? "편집자 검토가 끝났어요"
-          : "최종 후보를 확인할 차례예요";
+          ? ui("편집자 검토가 끝났어요", "Editor review is complete")
+          : ui("최종 후보를 확인할 차례예요", "Final candidates are ready for review");
   const liveAnalysisStageDetail =
-    liveAnalysisStageNumber === 2
-      ? broadcastTranscriptStatusText
+    liveAnalysisStageNumber === 1
+      ? analysisCommitPending
+        ? ui("찾은 탐색 구간과 확인 기록을 저장하는 중", "Saving discovered ranges and evidence")
+        : audioAnalysisProgress?.stage === "decoding-audio"
+          ? ui(
+              `방송 오디오 ${audioAnalysisProgress.analyzedWindowCount.toLocaleString("ko-KR")}개 구간 확인 중`,
+              `Checked ${audioAnalysisProgress.analyzedWindowCount.toLocaleString("en-US")} audio windows`,
+            )
+          : analysisProgress?.stage === "sampling"
+            ? ui(
+                `영상 맥락 ${analysisProgress.completedSampleCount.toLocaleString("ko-KR")}/${analysisProgress.totalSampleCount.toLocaleString("ko-KR")} 확인 중`,
+                `Checking visual context ${analysisProgress.completedSampleCount.toLocaleString("en-US")}/${analysisProgress.totalSampleCount.toLocaleString("en-US")}`,
+              )
+            : ui("영상과 방송 오디오를 짧은 조각으로 나눠 준비 중", "Preparing short visual and audio windows")
+      : liveAnalysisStageNumber === 2
+      ? analysisLanguage === "ko"
+        ? broadcastTranscriptStatusText
+        : broadcastTranscriptStatus === "running"
+          ? `Mapping transcript context · ${Math.round(broadcastTranscriptProgressRatio * 100)}%`
+          : broadcastContextStatus === "running"
+            ? "Interpreting topics, events, and host behavior"
+            : "Preparing full-context analysis"
       : liveAnalysisStageNumber === 3
         ? !timelineTopicRevealComplete
-          ? `주제 ${Math.min(
+          ? ui(`주제 ${Math.min(
               timelineSemanticChapterRevealCount,
               timelineSemanticChapters.length,
-            )}/${timelineSemanticChapters.length}개를 타임라인에 배치하는 중`
-          : detailedReviewPhaseLabel
-        : finalSelectionPhaseLabel;
-  const liveAnalysisProgressValue: number | null =
-    liveAnalysisStageNumber === 2
+            )}/${timelineSemanticChapters.length}개를 타임라인에 배치하는 중`, `Placing ${Math.min(
+              timelineSemanticChapterRevealCount,
+              timelineSemanticChapters.length,
+            )}/${timelineSemanticChapters.length} topics on the timeline`)
+          : analysisLanguage === "ko" ? detailedReviewPhaseLabel : "Reviewing candidate visuals, dialogue, and participants"
+        : analysisLanguage === "ko" ? finalSelectionPhaseLabel : `${remainingReviewCount} candidates awaiting review · ${approvedCount} selected`;
+  const liveAnalysisProgressValue: number =
+    liveAnalysisStageNumber === 1
+      ? (analysisProgress !== null || audioAnalysisProgress !== null)
+        ? ((analysisProgress?.ratio ?? 0) + (audioAnalysisProgress?.ratio ?? 0)) /
+          ((analysisProgress === null ? 0 : 1) + (audioAnalysisProgress === null ? 0 : 1))
+        : 0.02
+      : liveAnalysisStageNumber === 2
       ? broadcastTranscriptStatus === "running"
-        ? broadcastTranscriptProgressRatio
-        : null
+        ? 0.05 + broadcastTranscriptProgressRatio * 0.65
+        : broadcastContextStatus === "restoring"
+          ? 0.76
+          : broadcastContextStatus === "running"
+            ? 0.84
+            : 0.72
       : liveAnalysisStageNumber === 3
         ? !timelineTopicRevealComplete && timelineSemanticChapters.length > 0
           ? Math.min(
@@ -2009,15 +2105,19 @@ function App() {
             )
           : candidatePassBBusy
             ? candidatePassBProgressRatio
-            : null
+            : 0.08
         : candidates.length === 0
           ? 1
           : reviewedCount / candidates.length;
   const liveAnalysisPhaseSteps = [
-    { number: 1, label: "빠른 탐색", state: "complete" },
+    {
+      number: 1,
+      label: ui("빠른 탐색", "Fast scan"),
+      state: liveAnalysisStageNumber === 1 ? "active" : "complete",
+    },
     {
       number: 2,
-      label: "전체 맥락",
+      label: ui("전체 맥락", "Full context"),
       state: wholeContextPhaseActive
         ? "active"
         : wholeContextPhaseComplete
@@ -2028,7 +2128,7 @@ function App() {
     },
     {
       number: 3,
-      label: "후보 종합",
+      label: ui("후보 종합", "Candidate synthesis"),
       state:
         !timelineTopicRevealComplete && finalSelectionPhaseReady
           ? "active"
@@ -2036,7 +2136,7 @@ function App() {
     },
     {
       number: 4,
-      label: "편집자 선택",
+      label: ui("편집자 선택", "Editor selection"),
       state: contextualCandidatePublicationReady
         ? finalSelectionPhaseState
         : "pending",
@@ -3560,7 +3660,7 @@ function App() {
     setCandidatePassBError(null);
     const videoFramesByCandidateId = new Map<
       string,
-      Awaited<ReturnType<typeof sampleCandidateVideoFrames>>
+      readonly CandidatePassBVideoFrame[]
     >();
     const identity: CandidatePassBWorkerIdentity = {
       sessionId: appSessionId,
@@ -3622,7 +3722,7 @@ function App() {
       operationEpoch === candidatePassBOperationEpoch.current &&
       candidatePassBIdentity.current?.passBRunId === identity.passBRunId;
     const targetById = new Map(targets.map((target) => [target.candidateId, target]));
-    const castRosterId = candidatePassBCastRosterIdForSourceName(sourceFile.name);
+    const castRosterId = sourceCastRosterId;
     const applyCurrentWorkerEvent = (
       event: CandidatePassBWorkerEventPayload,
     ): boolean => {
@@ -3637,6 +3737,57 @@ function App() {
     };
 
     try {
+      const frameBundleResolvers = new Map<
+        string,
+        {
+          readonly promise: Promise<CandidateVideoFrameBundleResult>;
+          readonly resolve: (result: CandidateVideoFrameBundleResult) => void;
+          readonly reject: (error: unknown) => void;
+          settled: boolean;
+        }
+      >();
+      for (const target of targets) {
+        let resolveBundle!: (result: CandidateVideoFrameBundleResult) => void;
+        let rejectBundle!: (error: unknown) => void;
+        const promise = new Promise<CandidateVideoFrameBundleResult>((resolve, reject) => {
+          resolveBundle = resolve;
+          rejectBundle = reject;
+        });
+        frameBundleResolvers.set(target.candidateId, {
+          promise,
+          resolve: resolveBundle,
+          reject: rejectBundle,
+          settled: false,
+        });
+      }
+      const frameProducer = produceCandidateVideoFrameBundles(
+        sourceFile,
+        targets.map((target) => ({
+          candidateId: target.candidateId,
+          startMs: target.decodeStartMs,
+          endMs: target.decodeEndMs,
+          focusMs: target.reactionPeakMs,
+        })),
+        {
+          signal: controller.signal,
+          onBundle: (result) => {
+            const slot = frameBundleResolvers.get(result.candidateId);
+            if (slot === undefined || slot.settled) return;
+            slot.settled = true;
+            slot.resolve(result);
+          },
+        },
+      ).catch((error: unknown) => {
+        const producerError = error instanceof Error
+          ? error
+          : new Error("대표 화면 준비 중 알 수 없는 오류가 발생했습니다.");
+        for (const slot of frameBundleResolvers.values()) {
+          if (slot.settled) continue;
+          slot.settled = true;
+          slot.reject(producerError);
+        }
+        return [];
+      });
       const workerResults = await mapWithConcurrency(
         targets,
         2,
@@ -3647,14 +3798,17 @@ function App() {
               : [...current, target.candidateId],
           );
           try {
-            const frames = await sampleCandidateVideoFrames(
-              sourceFile,
-              target.decodeStartMs,
-              target.decodeEndMs,
-              { signal: controller.signal, focusMs: target.reactionPeakMs },
-            );
+            const frameBundle = await frameBundleResolvers.get(target.candidateId)?.promise;
+            if (frameBundle === undefined) {
+              throw new Error("The candidate frame queue lost its target slot.");
+            }
+            const frames = frameBundle.frames;
             videoFramesByCandidateId.set(target.candidateId, frames);
-            if (!controller.signal.aborted && isMounted.current) {
+            if (
+              frameBundle.status === "ready" &&
+              !controller.signal.aborted &&
+              isMounted.current
+            ) {
               const relativePeakMs = target.reactionPeakMs - target.decodeStartMs;
               const timelineFrame = [...frames].sort(
                 (left, right) =>
@@ -3673,6 +3827,25 @@ function App() {
                 firstTimelineFrameById(candidateTimelineFramesRef.current),
               );
             }
+            if (frameBundle.status !== "ready") {
+              if (
+                !applyCurrentWorkerEvent({
+                  type: "CANDIDATE_FAILED",
+                  candidateId: target.candidateId,
+                  expectedProposalRevision: 0,
+                  reasonCode: "visual_evidence_incomplete",
+                })
+              ) {
+                throw new Error("The incomplete frame bundle was rejected.");
+              }
+              return {
+                summary: {
+                  requestedCount: 1,
+                  completedCount: 0,
+                  gapCount: 1,
+                },
+              };
+            }
             return await runCandidatePassBWorker(sourceFile, {
         identity,
         sourceDurationMs,
@@ -3682,6 +3855,7 @@ function App() {
           startMs: target.decodeStartMs,
           endMs: target.decodeEndMs,
           videoFrames: videoFramesByCandidateId.get(target.candidateId) ?? [],
+          outputLanguage: analysisLanguage,
           ...(castRosterId === null ? {} : { castRosterId }),
         }],
         signal: controller.signal,
@@ -3847,6 +4021,7 @@ function App() {
           }
         },
       );
+      await frameProducer;
       await flushCandidatePassBInsightPersistence();
       if (!isCurrentOperation()) {
         return;
@@ -5311,6 +5486,7 @@ function App() {
       sourceDurationMs: boundarySourceDurationMs,
       chapters: boundedBroadcastContextChapters,
       candidates: broadcastContextCandidateInputs,
+      outputLanguage: analysisLanguage,
       ...(sourceCastRosterId === null ? {} : { castRosterId: sourceCastRosterId }),
     };
     const applyContextResult = (
@@ -5410,6 +5586,7 @@ function App() {
                 sourceDurationMs: boundarySourceDurationMs,
                 chapters: slice.chapters,
                 candidates: [],
+                outputLanguage: analysisLanguage,
                 ...(sourceCastRosterId === null
                   ? {}
                   : { castRosterId: sourceCastRosterId }),
@@ -5449,6 +5626,7 @@ function App() {
               sourceDurationMs: boundarySourceDurationMs,
               chapters: juryPlan.chapters,
               candidates: juryPlan.candidates,
+              outputLanguage: analysisLanguage,
               ...(sourceCastRosterId === null
                 ? {}
                 : { castRosterId: sourceCastRosterId }),
@@ -5557,6 +5735,7 @@ function App() {
     resetCandidateRanking,
     sourceContentFingerprint,
     sourceCastRosterId,
+    analysisLanguage,
   ]);
 
   useEffect(() => {
@@ -5722,6 +5901,7 @@ function App() {
                 sourceDurationMs: boundarySourceDurationMs,
                 chapters,
                 candidates: [],
+                outputLanguage: analysisLanguage,
                 ...(sourceCastRosterId === null
                   ? {}
                   : { castRosterId: sourceCastRosterId }),
@@ -5864,6 +6044,7 @@ function App() {
     sourceCastRosterId,
     sourceFile,
     youtubeCaptionTrack,
+    analysisLanguage,
   ]);
 
   useEffect(() => {
@@ -6285,13 +6466,33 @@ function App() {
             <span className="rh-brand-mark" aria-hidden="true">E</span>
             Ex<span>Clipper</span>
           </h1>
-          <h2 id="page-title" className="rh-header-title">클립 분석 AI</h2>
+          <h2 id="page-title" className="rh-header-title">
+            {ui("클립 분석 AI", "Clip Analysis AI")}
+          </h2>
           <div className="rh-header-actions">
-            <span className="rh-privacy-pill">개인 편집 어시스턴트</span>
+            <span className="rh-privacy-pill">
+              {ui("개인 편집 어시스턴트", "Personal editing assistant")}
+            </span>
+            <div className="rh-language-switch" role="group" aria-label={ui("언어 선택", "Language")}>
+              {(["ko", "en"] as const).map((language) => (
+                <button
+                  key={language}
+                  type="button"
+                  data-active={analysisLanguage === language}
+                  aria-pressed={analysisLanguage === language}
+                  disabled={sourceFile !== null || pendingFileName !== null || analysisRun !== null}
+                  onClick={() => setAnalysisLanguage(language)}
+                >
+                  {language === "ko" ? "한국어" : "English"}
+                </button>
+              ))}
+            </div>
             <button
               className="theme-btn"
               type="button"
-              aria-label={theme === "light" ? "어두운 화면으로 바꾸기" : "밝은 화면으로 바꾸기"}
+              aria-label={theme === "light"
+                ? ui("어두운 화면으로 바꾸기", "Use dark theme")
+                : ui("밝은 화면으로 바꾸기", "Use light theme")}
               onClick={() => setTheme((current) => (current === "light" ? "dark" : "light"))}
             >
               <span aria-hidden="true">{theme === "light" ? "☾" : "☀"}</span>
@@ -6329,14 +6530,14 @@ function App() {
       )}
 
       <main className="rh-shell">
-        <ol className="rh-stepper" aria-label="작업 순서">
+        <ol className="rh-stepper" aria-label={ui("작업 순서", "Workflow")}>
           {[
             openedRecoveredResult !== null && !sourceReady && candidates.length > 0
-              ? "원본 연결(선택)"
-              : "원본 고르기",
-            "AI가 먼저 찾기",
-            "후보 검토",
-            "결과 받기",
+              ? ui("원본 연결(선택)", "Connect source (optional)")
+              : ui("원본 고르기", "Choose source"),
+            ui("AI가 먼저 찾기", "AI discovery"),
+            ui("후보 검토", "Review candidates"),
+            ui("결과 받기", "Export results"),
           ].map((label, index) => {
             const step = index + 1;
             return (
@@ -6348,7 +6549,7 @@ function App() {
                 key={label}
               >
                 {label}
-                {step < currentStep && <span className="rh-screen-reader-only"> 완료</span>}
+                {step < currentStep && <span className="rh-screen-reader-only">{ui(" 완료", " complete")}</span>}
               </li>
             );
           })}
@@ -6450,11 +6651,11 @@ function App() {
         </details>
         )}
 
-        {(analysisBusy || (selectionResult === null && openedRecoveredResult !== null)) && (
-          <section className="rh-project-context" aria-label="현재 편집 작업">
+        {selectionResult === null && (analysisBusy || openedRecoveredResult !== null) && (
+          <section className="rh-project-context rh-analysis-entry-workspace" aria-label="현재 편집 작업">
             <div className="rh-project-context-copy">
               <p className="rh-eyebrow">
-                {selectionResult !== null ? "현재 편집 작업" : "선택한 방송"}
+                {ui(selectionResult !== null ? "현재 편집 작업" : "선택한 방송", selectionResult !== null ? "Current edit" : "Selected broadcast")}
               </p>
               <strong>
                 {preflight?.metadata.name ?? "저장된 AI 분석 결과"}
@@ -6462,8 +6663,8 @@ function App() {
               <span>
                 {formatDuration(boundarySourceDurationMs)}
                 {selectionResult !== null
-                  ? ` · 후보 ${candidates.length}개 · ${reviewedCount}개 검토`
-                  : " · 분석 준비 완료"}
+                  ? ui(` · 후보 ${candidates.length}개 · ${reviewedCount}개 검토`, ` · ${candidates.length} candidates · ${reviewedCount} reviewed`)
+                  : ui(" · 분석 준비 완료", " · Ready to analyze")}
               </span>
             </div>
             {selectionResult !== null && (
@@ -6495,6 +6696,54 @@ function App() {
                 </button>
               </div>
             )}
+            {analysisBusy && (
+              <section
+                className="rh-live-analysis-panel"
+                data-state="active"
+                aria-label="현재 AI 분석 진행 상황"
+                aria-live="polite"
+              >
+                <div className="rh-live-analysis-current">
+                  <span className="rh-live-analysis-number" aria-hidden="true">
+                    {liveAnalysisStageNumber}
+                  </span>
+                  <div>
+                    <p className="rh-eyebrow">{ui("현재 진행", "Current progress")} · {liveAnalysisStageNumber}/4</p>
+                    <strong>{liveAnalysisStageTitle}</strong>
+                    <small>{liveAnalysisStageDetail}</small>
+                  </div>
+                  <span className="rh-live-analysis-mode">{ui("자동 진행", "Automatic")}</span>
+                </div>
+                <progress
+                  className="rh-live-analysis-progress"
+                  max={1}
+                  value={liveAnalysisProgressValue}
+                  aria-label={ui("현재 분석 단계 진행률", "Current analysis stage progress")}
+                />
+                <ol className="rh-live-analysis-rail" aria-label={ui("전체 분석 순서", "Analysis workflow")}>
+                  {liveAnalysisPhaseSteps.map((step) => (
+                    <li key={step.number} data-state={step.state}>
+                      <span aria-hidden="true">{step.number}</span>
+                      <strong>{step.label}</strong>
+                      <small>
+                        {step.state === "complete"
+                          ? ui("완료", "Complete")
+                          : step.state === "active"
+                            ? ui("진행 중", "In progress")
+                            : step.state === "error"
+                              ? ui("확인 필요", "Needs attention")
+                              : ui("다음 단계", "Next")}
+                      </small>
+                    </li>
+                  ))}
+                </ol>
+                {analysisCanBeCancelled && (
+                  <button className="btn btn-secondary rh-live-analysis-cancel" type="button" onClick={cancelAnalysis}>
+                    {ui("안전하게 취소", "Cancel safely")}
+                  </button>
+                )}
+              </section>
+            )}
           </section>
         )}
 
@@ -6510,22 +6759,22 @@ function App() {
             <div className="rh-section-heading">
               <div>
                 <p className="rh-eyebrow">
-                  {sourceReady ? "1단계 · 원본 확인 완료" : "1단계"}
+                  {sourceReady ? ui("1단계 · 원본 확인 완료", "Step 1 · Source verified") : ui("1단계", "Step 1")}
                 </p>
                 <h3 id="source-title" ref={sourceHeading} tabIndex={-1}>
                   {openedRecoveredResult === null
                     ? sourceReady
-                      ? "선택한 방송 원본"
-                      : "방송 원본을 골라 주세요"
+                      ? ui("선택한 방송 원본", "Selected broadcast source")
+                      : ui("방송 원본을 골라 주세요", "Choose a broadcast source")
                     : candidates.length === 0
-                      ? "이번 결과는 원본 재연결이 필요하지 않아요"
-                      : "미리볼 원래 방송 파일을 다시 골라 주세요"}
+                      ? ui("이번 결과는 원본 재연결이 필요하지 않아요", "This result does not require the source file")
+                      : ui("미리볼 원래 방송 파일을 다시 골라 주세요", "Reconnect the original broadcast for preview")}
                 </h3>
               </div>
               <p className="rh-help">
                 {sourceReady && preflight !== null
                   ? `${formatDuration(preflight.metadata.durationMs)} · ${formatBytes(preflight.metadata.sizeBytes)}`
-                  : "MP4·WebM 권장 · 최대 12시간"}
+                  : ui("MP4·WebM 권장 · 최대 12시간", "MP4 or WebM · up to 12 hours")}
               </p>
             </div>
 
@@ -6550,21 +6799,21 @@ function App() {
                 >
                   <div className="rh-drop-zone-copy">
                     <p className="rh-eyebrow">
-                      {sourceReady ? "분석할 원본" : "추천 · 가장 정확함"}
+                      {sourceReady ? ui("분석할 원본", "Analysis source") : ui("추천 · 가장 정확함", "Recommended · most accurate")}
                     </p>
-                    <strong>{pendingFileName ?? "영상 파일을 여기에 놓아도 돼요"}</strong>
+                    <strong>{pendingFileName ?? ui("영상 파일을 여기에 놓아도 돼요", "Drop a video file here")}</strong>
                     <p className="rh-help">
                       {sourceReady
-                        ? "이 파일의 전체 시간을 기준으로 분석 지도와 클립 후보를 만들어요."
-                        : "MP4·WebM 권장 · 최대 12시간 · 선택하면 길이와 분석 가능 여부를 바로 확인해요."}
+                        ? ui("이 파일의 전체 시간을 기준으로 분석 지도와 클립 후보를 만들어요.", "The complete file is used to build the timeline and clip candidates.")
+                        : ui("MP4·WebM 권장 · 최대 12시간 · 선택하면 길이와 분석 가능 여부를 바로 확인해요.", "MP4 or WebM · up to 12 hours · compatibility is checked immediately.")}
                     </p>
                     <span className="btn btn-primary rh-drop-zone-button">
-                      {sourceFileActionLabel}
+                      {analysisLanguage === "ko" ? sourceFileActionLabel : sourceReady ? "Choose another video" : "Choose video"}
                     </span>
                     <span className="rh-drop-zone-hint">
                       {sourceReady
-                        ? "파일을 바꾸면 새 원본 기준으로 다시 확인합니다."
-                        : "또는 영상 파일을 여기로 끌어놓기"}
+                        ? ui("파일을 바꾸면 새 원본 기준으로 다시 확인합니다.", "Changing the file starts a new source check.")
+                        : ui("또는 영상 파일을 여기로 끌어놓기", "or drag a video file here")}
                     </span>
                   </div>
                 </label>
@@ -6579,20 +6828,20 @@ function App() {
               </div>
 
               {sourceReady && preflight !== null && (
-                <dl className="rh-source-facts" aria-label="선택한 원본 정보">
+                <dl className="rh-source-facts" aria-label={ui("선택한 원본 정보", "Selected source details")}>
                   <div>
-                    <dt>전체 길이</dt>
+                    <dt>{ui("전체 길이", "Duration")}</dt>
                     <dd>{formatDuration(preflight.metadata.durationMs)}</dd>
                   </div>
                   <div>
-                    <dt>파일 형식</dt>
+                    <dt>{ui("파일 형식", "Format")}</dt>
                     <dd>
                       {preflight.metadata.extension?.replace(/^\./u, "").toUpperCase() ??
                         preflight.metadata.kind.toUpperCase()}
                     </dd>
                   </div>
                   <div>
-                    <dt>파일 크기</dt>
+                    <dt>{ui("파일 크기", "File size")}</dt>
                     <dd>{formatBytes(preflight.metadata.sizeBytes)}</dd>
                   </div>
                 </dl>
@@ -6600,9 +6849,9 @@ function App() {
 
               {!sourceReady && (
               <details className="rh-link-details">
-                <summary>영상 파일 없이 YouTube·CHZZK 링크만 있나요?</summary>
+                <summary>{ui("영상 파일 없이 YouTube·CHZZK 링크만 있나요?", "Only have a YouTube or CHZZK link?")}</summary>
                 <p className="rh-help">
-                  현재 기본판은 링크의 방송 전체를 직접 읽을 수 없어요. 내려받을 권한이 있는 영상 파일을 먼저 준비해 주세요.
+                  {ui("현재 기본판은 링크의 방송 전체를 직접 읽을 수 없어요. 내려받을 권한이 있는 영상 파일을 먼저 준비해 주세요.", "This version cannot read an entire broadcast from a link. Prepare a video file you are authorized to download.")}
                 </p>
                 <form className="rh-input-row" onSubmit={handleLinkSubmit}>
                   <label className="rh-screen-reader-only" htmlFor="source-url">방송 링크</label>
@@ -6613,7 +6862,7 @@ function App() {
                     value={sourceUrl}
                     onChange={(event) => setSourceUrl(event.currentTarget.value)}
                   />
-                  <button className="btn btn-secondary" type="submit">확인</button>
+                  <button className="btn btn-secondary" type="submit">{ui("확인", "Check")}</button>
                 </form>
                 {linkNotice !== null && <p className="rh-notice" role="status">{linkNotice}</p>}
               </details>
@@ -6660,13 +6909,13 @@ function App() {
             <section className="rh-panel rh-analysis-launchpad" aria-labelledby="analysis-title">
               <div className="rh-launchpad-heading">
                 <div>
-                  <p className="rh-eyebrow">2단계 · 분석 설계</p>
-                  <h3 id="analysis-title">전체 방송 타임라인을 만들 준비가 됐어요</h3>
+                  <p className="rh-eyebrow">{ui("2단계 · 분석 설계", "Step 2 · Analysis setup")}</p>
+                  <h3 id="analysis-title">{ui("전체 방송 타임라인을 만들 준비가 됐어요", "Ready to build the full broadcast timeline")}</h3>
                   <p className="rh-help">
-                    처음부터 끝까지 여러 위치를 먼저 살피고, 맥락이 생기는 구간을 넓혀 클립 후보로 정리합니다.
+                    {ui("처음부터 끝까지 여러 위치를 먼저 살피고, 맥락이 생기는 구간을 넓혀 클립 후보로 정리합니다.", "The AI samples across the full broadcast, expands meaningful regions, and organizes multiple clip candidates.")}
                   </p>
                 </div>
-                <span className="rh-ready-badge">시작 가능</span>
+                <span className="rh-ready-badge">{ui("시작 가능", "Ready")}</span>
               </div>
 
               <div
@@ -6675,7 +6924,7 @@ function App() {
                 aria-label={`분석할 원본 범위 00:00부터 ${formatDuration(preflight.metadata.durationMs)}까지, 30분 단위 눈금`}
               >
                 <div className="rh-source-range-title">
-                  <span>분석할 방송 범위</span>
+                  <span>{ui("분석할 방송 범위", "Broadcast range")}</span>
                   <strong>00:00–{formatDuration(preflight.metadata.durationMs)}</strong>
                 </div>
                 <div className="rh-source-range-track" aria-hidden="true">
@@ -6709,22 +6958,22 @@ function App() {
                 <li>
                   <span>1</span>
                   <div>
-                    <strong>방송 전체 훑기</strong>
-                    <small>여러 시각을 고르게 확인</small>
+                    <strong>{ui("방송 전체 훑기", "Scan the full broadcast")}</strong>
+                    <small>{ui("여러 시각을 고르게 확인", "Sample evenly across time")}</small>
                   </div>
                 </li>
                 <li>
                   <span>2</span>
                   <div>
-                    <strong>맥락 구간 넓히기</strong>
-                    <small>사건 전후의 대사·화면 연결</small>
+                    <strong>{ui("맥락 구간 넓히기", "Expand context")}</strong>
+                    <small>{ui("사건 전후의 대사·화면 연결", "Connect dialogue and visuals around events")}</small>
                   </div>
                 </li>
                 <li>
                   <span>3</span>
                   <div>
-                    <strong>클립 후보 정리</strong>
-                    <small>30초~1분 장면을 여러 개 제안</small>
+                    <strong>{ui("클립 후보 정리", "Organize clip candidates")}</strong>
+                    <small>{ui("30초~1분 장면을 여러 개 제안", "Suggest multiple 30–60 second moments")}</small>
                   </div>
                 </li>
               </ol>
@@ -6765,9 +7014,9 @@ function App() {
                 >
                   {chatImportStatus === "reading"
                     ? "채팅 읽는 중…"
-                    : "AI로 하이라이트 찾기"}
+                    : ui("AI로 하이라이트 찾기", "Find highlights with AI")}
                 </button>
-                <p>분석이 시작되면 위 시간축에 탐색 범위와 주제가 차례로 나타납니다.</p>
+                <p>{ui("분석이 시작되면 위 시간축에 탐색 범위와 주제가 차례로 나타납니다.", "Once analysis starts, explored ranges and topics appear on the timeline.")}</p>
               </div>
             </section>
           )}
@@ -6875,42 +7124,11 @@ function App() {
           </section>
           )}
 
-          {(analysisProgress !== null || audioAnalysisProgress !== null || analysisError !== null) && (
+          {analysisError !== null && (
             <div className="rh-engine-note" aria-live="polite">
-              <span aria-hidden="true">{analysisError === null ? "…" : "!"}</span>
+              <span aria-hidden="true">!</span>
               <div>
-                {(analysisProgress !== null || audioAnalysisProgress !== null) && (
-                  <>
-                    <strong>
-                      {analysisCommitPending
-                        ? "찾은 후보와 확인 기록을 안전하게 저장하는 중"
-                        : analysisCancelPending
-                          ? "분석을 안전하게 멈추고 기록을 정리하는 중"
-                          : audioAnalysisProgress?.stage === "decoding-audio"
-                            ? `방송 오디오 반응 신호 ${audioAnalysisProgress.analyzedWindowCount.toLocaleString("ko-KR")}개 구간 확인 중`
-                            : audioAnalysisProgress?.stage === "scoring"
-                              ? "오디오 반응과 채팅·화면 맥락을 정리하는 중"
-                              : analysisProgress?.stage === "sampling"
-                                ? `영상 맥락 ${analysisProgress.completedSampleCount.toLocaleString("ko-KR")}/${analysisProgress.totalSampleCount.toLocaleString("ko-KR")} 확인 중`
-                                : "영상과 방송 오디오 반응 분석 준비 중"}
-                    </strong>
-                    <p className="rh-help">
-                      몇 시간짜리 파일도 짧은 조각으로 나눠 순서대로 확인합니다.
-                    </p>
-                    <progress
-                      className="rh-analysis-progress"
-                      max={1}
-                      value={
-                        ((analysisProgress?.ratio ?? 0) +
-                          (audioAnalysisProgress?.ratio ?? 0)) /
-                        ((analysisProgress === null ? 0 : 1) +
-                          (audioAnalysisProgress === null ? 0 : 1))
-                      }
-                      aria-label="영상과 오디오 반응 분석 진행률"
-                    />
-                  </>
-                )}
-                {analysisError !== null && <p role="alert">{analysisError}</p>}
+                <p role="alert">{analysisError}</p>
               </div>
               {analysisCanBeCancelled && (
                 <button className="btn btn-secondary" type="button" onClick={cancelAnalysis}>
@@ -7002,40 +7220,38 @@ function App() {
                   </span>
                   <div>
                     <p className="rh-eyebrow">
-                      현재 진행 · {liveAnalysisStageNumber}/4
+                      {ui("현재 진행", "Current progress")} · {liveAnalysisStageNumber}/4
                     </p>
                     <strong>{liveAnalysisStageTitle}</strong>
                     <small>{liveAnalysisStageDetail}</small>
                   </div>
                   <span className="rh-live-analysis-mode">
                     {liveAnalysisStageNumber < 4
-                      ? "자동 진행"
+                      ? ui("자동 진행", "Automatic")
                       : reviewCompleted
-                        ? "완료"
-                        : `${reviewedCount}/${candidates.length} 검토`}
+                        ? ui("완료", "Complete")
+                        : ui(`${reviewedCount}/${candidates.length} 검토`, `${reviewedCount}/${candidates.length} reviewed`)}
                   </span>
                 </div>
                 <progress
                   className="rh-live-analysis-progress"
                   max={1}
-                  {...(liveAnalysisProgressValue === null
-                    ? {}
-                    : { value: liveAnalysisProgressValue })}
-                  aria-label="현재 분석 단계 진행률"
+                  value={liveAnalysisProgressValue}
+                  aria-label={ui("현재 분석 단계 진행률", "Current analysis stage progress")}
                 />
-                <ol className="rh-live-analysis-rail" aria-label="전체 분석 순서">
+                <ol className="rh-live-analysis-rail" aria-label={ui("전체 분석 순서", "Analysis workflow")}>
                   {liveAnalysisPhaseSteps.map((step) => (
                     <li key={step.number} data-state={step.state}>
                       <span aria-hidden="true">{step.number}</span>
                       <strong>{step.label}</strong>
                       <small>
                         {step.state === "complete"
-                          ? "완료"
+                          ? ui("완료", "Complete")
                           : step.state === "active"
-                            ? "진행 중"
+                            ? ui("진행 중", "In progress")
                             : step.state === "error"
-                              ? "확인 필요"
-                              : "다음 단계"}
+                              ? ui("확인 필요", "Needs attention")
+                              : ui("다음 단계", "Next")}
                       </small>
                     </li>
                   ))}
@@ -7081,33 +7297,34 @@ function App() {
                 <section className="rh-context-summary" aria-labelledby="broadcast-context-title">
                   <header className="rh-context-summary-heading">
                     <div>
-                      <p className="rh-eyebrow">AI 방송 맥락</p>
-                      <h4 id="broadcast-context-title">방송 흐름과 진행자 이해</h4>
+                      <p className="rh-eyebrow">{ui("AI 방송 맥락", "AI broadcast context")}</p>
+                      <h4 id="broadcast-context-title">{ui("방송과 진행자 프로필", "Broadcast and host profile")}</h4>
                     </div>
-                    <span>방송 근거 기반</span>
+                    <span>{ui("방송 근거 기반", "Grounded in broadcast evidence")}</span>
                   </header>
                   <div className="rh-context-summary-grid">
-                    <article className="rh-context-narrative-card">
-                      <div className="rh-context-card-heading">
-                        <strong>방송 전체 서술</strong>
-                        <small>{Array.from(broadcastContextResult.broadcastSummaryKo).length}자</small>
-                      </div>
-                      <p>{broadcastContextResult.broadcastSummaryKo}</p>
-                    </article>
-                    <article className="rh-context-host-card">
-                      <div className="rh-context-card-heading">
-                        <strong>AI가 파악한 주 진행 스트리머</strong>
-                        <small>근거 기반 추정</small>
-                      </div>
+                    <article className="rh-context-profile-card">
+                      <section className="rh-context-narrative-card">
+                        <div className="rh-context-card-heading">
+                          <strong>{ui("방송 흐름", "Broadcast flow")}</strong>
+                          <small>{Array.from(broadcastContextResult.broadcastSummaryKo).length}{ui("자", " chars")}</small>
+                        </div>
+                        <p>{broadcastContextResult.broadcastSummaryKo}</p>
+                      </section>
+                      <section className="rh-context-host-card">
+                        <div className="rh-context-card-heading">
+                          <strong>{ui("주 진행자의 진행 방식", "How the host runs the broadcast")}</strong>
+                          <small>{ui("방송 속 행동 근거", "Observed behavior")}</small>
+                        </div>
                       {broadcastContextResult.hostStreamerProfile === null ? (
                         <div className="rh-context-host-unavailable">
-                          <strong>이 저장 결과에는 진행자 프로필이 없어요.</strong>
-                          <p>이전 분석을 꾸며내지 않았습니다. 새 분석부터 방송 속 근거와 함께 기록합니다.</p>
+                          <strong>{ui("이 저장 결과에는 진행 방식 분석이 없어요.", "This saved result has no host-style analysis.")}</strong>
+                          <p>{ui("새 분석부터 방송 내용과 겹치지 않게 말투·상호작용·반응 방식만 근거와 함께 기록합니다.", "New analyses describe speaking style, interaction, and reaction patterns separately from the event timeline.")}</p>
                         </div>
                       ) : (
                         <>
                           <div className="rh-context-host-name">
-                            {broadcastContextResult.hostStreamerProfile.displayNameKo ?? "주 진행 스트리머"}
+                            {broadcastContextResult.hostStreamerProfile.displayNameKo ?? ui("주 진행 스트리머", "Primary host")}
                           </div>
                           <p>{broadcastContextResult.hostStreamerProfile.profileSummaryKo}</p>
                           <div className="rh-context-host-evidence" aria-label="진행자 이해 근거">
@@ -7117,11 +7334,12 @@ function App() {
                           </div>
                           {broadcastContextResult.hostStreamerProfile.uncertaintiesKo.length > 0 && (
                             <p className="rh-context-host-uncertainty">
-                              확인 한계 · {broadcastContextResult.hostStreamerProfile.uncertaintiesKo.join(" · ")}
+                              {ui("확인 한계", "Limits")} · {broadcastContextResult.hostStreamerProfile.uncertaintiesKo.join(" · ")}
                             </p>
                           )}
                         </>
                       )}
+                      </section>
                     </article>
                   </div>
                   <div className="rh-context-summary-meta">
@@ -8230,7 +8448,10 @@ function App() {
                     )}
                   </section>
                   {contextualCandidatePublicationReady && (
-                  <>
+                  <section
+                    className="rh-review-rail"
+                    aria-label="선택한 후보 영상과 편집 판단"
+                  >
                   <div className="rh-review-editor">
                     <nav className="rh-candidate-navigation" aria-label="후보 이동">
                       <button
@@ -8383,9 +8604,12 @@ function App() {
                             : "대사 확인 실패 · 빠른 근거 유지"
                           : `${narrative.passBStatusLabel} · 기존 단서 유지`
                         : candidatePassBOutcome?.status === "failed"
-                        ? candidatePassBEvidence === undefined
-                          ? "추가 대사 분석 건너뜀 · 빠른 근거 유지"
-                          : `${narrative.passBStatusLabel} · 재확인 실패, 기존 단서 유지`
+                        ? candidatePassBOutcome.reasonCode ===
+                          "visual_evidence_incomplete"
+                          ? "대표 화면 4장 미완성 · AI 해석 안 함"
+                          : candidatePassBEvidence === undefined
+                            ? "추가 대사 분석 건너뜀 · 빠른 근거 유지"
+                            : `${narrative.passBStatusLabel} · 재확인 실패, 기존 단서 유지`
                         : candidatePassBOutcome?.status === "pending" && candidatePassBBusy
                           ? candidatePassBEvidence === undefined
                             ? candidatePassBRun?.status === "transcribing" &&
@@ -8575,19 +8799,20 @@ function App() {
                               <span>재생 확인 필요</span>
                             </div>
                             <p>{candidateGeminiInsight.eventSummaryKo}</p>
-                            {(candidateGeminiInsight.identifiedParticipants?.length ?? 0) > 0 && (
-                              <p className="rh-identified-participant-line">
-                                <strong>이름 근거</strong>
-                                {candidateGeminiInsight.identifiedParticipants
-                                  ?.map((participant) =>
-                                    canonicalCandidatePassBCastDisplayName(
-                                      sourceCastRosterId,
-                                      participant.displayName,
-                                    ),
-                                  )
-                                  .join(" · ")}
-                              </p>
-                            )}
+                            <p className="rh-identified-participant-line">
+                              <strong>등장인물</strong>
+                              {candidateGeminiInsight.participantSummaryKo ??
+                                ((candidateGeminiInsight.identifiedParticipants?.length ?? 0) > 0
+                                  ? candidateGeminiInsight.identifiedParticipants
+                                      ?.map((participant) =>
+                                        canonicalCandidatePassBCastDisplayName(
+                                          sourceCastRosterId,
+                                          participant.displayName,
+                                        ),
+                                      )
+                                      .join(" · ")
+                                  : "이 저장 결과에는 등장인물 상태가 기록되지 않았습니다.")}
+                            </p>
                             <p>
                               <strong>클립으로 먼저 볼 이유</strong>
                               {candidateGeminiInsight.whyGoodClipKo}
@@ -8658,9 +8883,21 @@ function App() {
                                   <dd>{candidateGeminiInsight.whyGoodClipKo || "아래 대사 위치와 반응 정점을 직접 재생해 판단해 주세요."}</dd>
                                 </div>
                               </dl>
-                              {(candidateGeminiInsight.identifiedParticipants?.length ?? 0) > 0 && (
-                                <div className="rh-identified-participants">
-                                  <strong>확인 가능한 출연자 이름</strong>
+                              <div className="rh-identified-participants">
+                                  <strong>
+                                    {candidateGeminiInsight.participantPresence === "identified"
+                                      ? "확인 가능한 출연자 이름"
+                                      : candidateGeminiInsight.participantPresence === "present-unidentified"
+                                        ? "화면에는 인물이 있지만 이름은 확인되지 않음"
+                                        : candidateGeminiInsight.participantPresence === "none-present"
+                                          ? "대표 화면에 등장인물 없음"
+                                          : "등장인물 확인 상태"}
+                                  </strong>
+                                  <p>
+                                    {candidateGeminiInsight.participantSummaryKo ??
+                                      "이전 버전의 저장 결과라 등장인물 상태가 별도로 남아 있지 않습니다."}
+                                  </p>
+                                  {(candidateGeminiInsight.identifiedParticipants?.length ?? 0) > 0 && (
                                   <ul>
                                     {candidateGeminiInsight.identifiedParticipants?.map((participant) => {
                                       const participantDisplayName =
@@ -8678,14 +8915,19 @@ function App() {
                                               ? "실제 호명"
                                               : "방송 출연진 기준"}
                                           {` · ${Math.round(participant.confidence * 100)}% · 후보 +${formatDuration(participant.relativeTimestampMs)}`}
+                                          {(participant.observedFrameIndices?.length ?? 0) > 0
+                                            ? ` · 화면 ${participant.observedFrameIndices
+                                                ?.map((frameIndex) => frameIndex + 1)
+                                                .join("·")}`
+                                            : ""}
                                         </small>
                                         <p>{participant.evidenceKo}</p>
                                       </li>
                                       );
                                     })}
                                   </ul>
+                                  )}
                                 </div>
-                              )}
                               {candidateGeminiInsight.uncertaintiesKo.length > 0 && (
                                 <div className="rh-gemini-uncertainties">
                                   <strong>AI도 확실히 알 수 없었던 점</strong>
@@ -9071,7 +9313,7 @@ function App() {
                   })}
                   </div>
                   </div>
-                  </>
+                  </section>
                   )}
                   </div>
                 </>

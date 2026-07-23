@@ -1,6 +1,7 @@
 import {
   MAX_CANDIDATE_PASS_B_TARGET_DURATION_MS,
   MAX_CANDIDATE_PASS_B_VIDEO_FRAME_BASE64_LENGTH,
+  MAX_CANDIDATE_PASS_B_VIDEO_FRAMES,
   type CandidatePassBVideoFrame,
 } from "./candidatePassBWorkerProtocol";
 
@@ -16,6 +17,48 @@ export interface CandidateVideoFrameSamplingOptions {
   readonly document?: Document;
   readonly createObjectUrl?: (file: File) => string;
   readonly revokeObjectUrl?: (url: string) => void;
+}
+
+export interface CandidateVideoFrameBundleTarget {
+  readonly candidateId: string;
+  readonly startMs: number;
+  readonly endMs: number;
+  readonly focusMs?: number;
+}
+
+export type ReadyCandidateVideoFrameBundle = readonly [
+  CandidatePassBVideoFrame,
+  CandidatePassBVideoFrame,
+  CandidatePassBVideoFrame,
+  CandidatePassBVideoFrame,
+];
+
+export type CandidateVideoFrameBundleResult =
+  | {
+      readonly candidateId: string;
+      readonly status: "ready";
+      readonly frames: ReadyCandidateVideoFrameBundle;
+    }
+  | {
+      readonly candidateId: string;
+      readonly status: "failed";
+      readonly frames: readonly CandidatePassBVideoFrame[];
+      readonly reason: "invalid-range" | "decoder-unavailable" | "incomplete-bundle";
+    };
+
+export interface CandidateVideoFrameProducerOptions
+  extends Omit<CandidateVideoFrameSamplingOptions, "focusMs"> {
+  readonly onBundle?: (result: CandidateVideoFrameBundleResult) => void;
+}
+
+interface CandidateVideoFrameSamplerSession {
+  readonly video: HTMLVideoElement;
+  readonly canvas: HTMLCanvasElement;
+  readonly context: CanvasRenderingContext2D;
+  readonly width: number;
+  readonly height: number;
+  readonly url: string;
+  readonly revokeUrl: (url: string) => void;
 }
 
 export function candidateVideoFrameTimestamps(
@@ -34,16 +77,35 @@ export function candidateVideoFrameTimestamps(
   }
   const durationMs = endMs - startMs;
   if (Number.isFinite(focusMs)) {
-    const relativeFocusMs = Math.min(durationMs, Math.max(0, Math.round((focusMs ?? startMs) - startMs)));
-    const offsets = [
+    const relativeFocusMs = Math.min(
+      durationMs - 1,
+      Math.max(0, Math.round((focusMs ?? startMs) - startMs)),
+    );
+    const preferredOffsets = [
       relativeFocusMs - 6_000,
       relativeFocusMs - 1_500,
       relativeFocusMs + 1_500,
       relativeFocusMs + 6_000,
     ];
-    return [...new Set(offsets.map((offset) => Math.min(durationMs - 1, Math.max(0, offset))))];
+    const fallbackOffsets = CANDIDATE_VIDEO_FRAME_SAMPLE_RATIOS.map((ratio) =>
+      Math.round((durationMs - 1) * ratio),
+    );
+    const distinct = [
+      ...new Set(
+        [...preferredOffsets, ...fallbackOffsets, 0, durationMs - 1].map(
+          (offset) => Math.min(durationMs - 1, Math.max(0, offset)),
+        ),
+      ),
+    ];
+    return distinct.slice(0, MAX_CANDIDATE_PASS_B_VIDEO_FRAMES).sort((a, b) => a - b);
   }
-  return CANDIDATE_VIDEO_FRAME_SAMPLE_RATIOS.map((ratio) => Math.round(durationMs * ratio));
+  return [
+    ...new Set(
+      CANDIDATE_VIDEO_FRAME_SAMPLE_RATIOS.map((ratio) =>
+        Math.min(durationMs - 1, Math.round(durationMs * ratio)),
+      ),
+    ),
+  ];
 }
 
 function abortIfRequested(signal: AbortSignal | undefined): void {
@@ -140,6 +202,210 @@ function dataUrlToBase64(dataUrl: string): string | null {
     : null;
 }
 
+async function createSamplerSession(
+  file: File,
+  options: CandidateVideoFrameSamplingOptions,
+): Promise<CandidateVideoFrameSamplerSession> {
+  abortIfRequested(options.signal);
+  const documentImplementation = options.document ?? document;
+  const createUrl = options.createObjectUrl ?? ((input: File) => URL.createObjectURL(input));
+  const revokeUrl = options.revokeObjectUrl ?? ((input: string) => URL.revokeObjectURL(input));
+  const url = createUrl(file);
+  const video = documentImplementation.createElement("video");
+  try {
+    video.preload = "metadata";
+    video.muted = true;
+    video.playsInline = true;
+    video.setAttribute("aria-hidden", "true");
+    video.style.position = "fixed";
+    video.style.width = "1px";
+    video.style.height = "1px";
+    video.style.opacity = "0";
+    video.style.pointerEvents = "none";
+    video.style.inset = "0 auto auto 0";
+    video.src = url;
+    documentImplementation.body?.append(video);
+    video.load();
+    await new Promise<void>((resolve, reject) => {
+      const timeout = window.setTimeout(
+        () => finish(new Error("Video metadata timed out.")),
+        SEEK_TIMEOUT_MS,
+      );
+      const cleanup = (): void => {
+        window.clearTimeout(timeout);
+        video.removeEventListener("loadedmetadata", onLoaded);
+        video.removeEventListener("error", onError);
+        options.signal?.removeEventListener("abort", onAbort);
+      };
+      const finish = (error?: Error): void => {
+        cleanup();
+        if (error === undefined) resolve();
+        else reject(error);
+      };
+      const onLoaded = (): void => finish();
+      const onError = (): void => finish(new Error("Video metadata failed."));
+      const onAbort = (): void =>
+        finish(new DOMException("The frame sampling was cancelled.", "AbortError"));
+      video.addEventListener("loadedmetadata", onLoaded, { once: true });
+      video.addEventListener("error", onError, { once: true });
+      options.signal?.addEventListener("abort", onAbort, { once: true });
+    });
+    const canvas = documentImplementation.createElement("canvas");
+    const width = Math.max(1, Math.min(MAX_FRAME_WIDTH, video.videoWidth || MAX_FRAME_WIDTH));
+    const height = Math.max(
+      1,
+      Math.round(width * ((video.videoHeight || 9) / (video.videoWidth || 16))),
+    );
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext("2d");
+    if (context === null) throw new Error("Canvas 2D context unavailable.");
+    return { video, canvas, context, width, height, url, revokeUrl };
+  } catch (error) {
+    video.pause();
+    video.removeAttribute("src");
+    video.load();
+    video.remove();
+    revokeUrl(url);
+    throw error;
+  }
+}
+
+function disposeSamplerSession(session: CandidateVideoFrameSamplerSession): void {
+  session.video.pause();
+  session.video.removeAttribute("src");
+  session.video.load();
+  session.video.remove();
+  session.revokeUrl(session.url);
+}
+
+async function captureFramesWithSession(
+  session: CandidateVideoFrameSamplerSession,
+  startMs: number,
+  timestamps: readonly number[],
+  signal: AbortSignal | undefined,
+): Promise<readonly CandidatePassBVideoFrame[]> {
+  const frames: CandidatePassBVideoFrame[] = [];
+  for (const timestampMs of timestamps) {
+    abortIfRequested(signal);
+    try {
+      await waitForVideoSeek(session.video, (startMs + timestampMs) / 1_000, signal);
+      await waitForCurrentVideoFrame(session.video, signal);
+      session.context.drawImage(session.video, 0, 0, session.width, session.height);
+      const data = dataUrlToBase64(
+        session.canvas.toDataURL("image/jpeg", JPEG_QUALITY),
+      );
+      if (data !== null) {
+        frames.push({ timestampMs, mimeType: "image/jpeg", dataBase64: data });
+      }
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") throw error;
+    }
+  }
+  return frames;
+}
+
+function asReadyBundle(
+  frames: readonly CandidatePassBVideoFrame[],
+): ReadyCandidateVideoFrameBundle | null {
+  if (
+    frames.length !== MAX_CANDIDATE_PASS_B_VIDEO_FRAMES ||
+    new Set(frames.map(({ timestampMs }) => timestampMs)).size !==
+      MAX_CANDIDATE_PASS_B_VIDEO_FRAMES
+  ) {
+    return null;
+  }
+  return frames as ReadyCandidateVideoFrameBundle;
+}
+
+/**
+ * Opens one decoder for the source and settles each candidate bundle in source
+ * order. Consumers may start as soon as their own four-frame bundle is ready.
+ */
+export async function produceCandidateVideoFrameBundles(
+  file: File,
+  targets: readonly CandidateVideoFrameBundleTarget[],
+  options: CandidateVideoFrameProducerOptions = {},
+): Promise<readonly CandidateVideoFrameBundleResult[]> {
+  if (targets.length === 0) return [];
+  const results: CandidateVideoFrameBundleResult[] = [];
+  const settle = (result: CandidateVideoFrameBundleResult): void => {
+    results.push(result);
+    options.onBundle?.(result);
+  };
+  if (typeof window === "undefined") {
+    for (const target of targets) {
+      settle({
+        candidateId: target.candidateId,
+        status: "failed",
+        frames: [],
+        reason: "decoder-unavailable",
+      });
+    }
+    return results;
+  }
+
+  let session: CandidateVideoFrameSamplerSession;
+  try {
+    session = await createSamplerSession(file, options);
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") throw error;
+    for (const target of targets) {
+      settle({
+        candidateId: target.candidateId,
+        status: "failed",
+        frames: [],
+        reason: "decoder-unavailable",
+      });
+    }
+    return results;
+  }
+
+  try {
+    for (const target of targets) {
+      abortIfRequested(options.signal);
+      const timestamps = candidateVideoFrameTimestamps(
+        target.startMs,
+        target.endMs,
+        target.focusMs,
+      );
+      if (timestamps.length !== MAX_CANDIDATE_PASS_B_VIDEO_FRAMES) {
+        settle({
+          candidateId: target.candidateId,
+          status: "failed",
+          frames: [],
+          reason: "invalid-range",
+        });
+        continue;
+      }
+      const frames = await captureFramesWithSession(
+        session,
+        target.startMs,
+        timestamps,
+        options.signal,
+      );
+      const readyFrames = asReadyBundle(frames);
+      settle(
+        readyFrames === null
+          ? {
+              candidateId: target.candidateId,
+              status: "failed",
+              frames,
+              reason: "incomplete-bundle",
+            }
+          : {
+              candidateId: target.candidateId,
+              status: "ready",
+              frames: readyFrames,
+            },
+      );
+    }
+  } finally {
+    disposeSamplerSession(session);
+  }
+  return results;
+}
+
 /**
  * Samples four small screenshots around the reaction peak when available;
  * otherwise it falls back to evenly distributed representative screenshots.
@@ -154,77 +420,18 @@ export async function sampleCandidateVideoFrames(
 ): Promise<readonly CandidatePassBVideoFrame[]> {
   const timestamps = candidateVideoFrameTimestamps(startMs, endMs, options.focusMs);
   if (timestamps.length === 0 || typeof window === "undefined") return [];
-  const documentImplementation = options.document ?? document;
-  const createUrl = options.createObjectUrl ?? ((input: File) => URL.createObjectURL(input));
-  const revokeUrl = options.revokeObjectUrl ?? ((input: string) => URL.revokeObjectURL(input));
-  let url: string | null = null;
-  let video: HTMLVideoElement | null = null;
+  let session: CandidateVideoFrameSamplerSession | null = null;
   try {
-    abortIfRequested(options.signal);
-    url = createUrl(file);
-    video = documentImplementation.createElement("video");
-    video.preload = "metadata";
-    video.muted = true;
-    video.playsInline = true;
-    video.setAttribute("aria-hidden", "true");
-    video.style.position = "fixed";
-    video.style.width = "1px";
-    video.style.height = "1px";
-    video.style.opacity = "0";
-    video.style.pointerEvents = "none";
-    video.style.inset = "0 auto auto 0";
-    video.src = url;
-    // Chromium may defer decoding for a detached media element. Keeping a
-    // one-pixel invisible element attached during sampling makes metadata,
-    // seeking, and canvas capture deterministic without entering layout.
-    documentImplementation.body?.append(video);
-    video.load();
-    await new Promise<void>((resolve, reject) => {
-      const timeout = window.setTimeout(() => reject(new Error("Video metadata timed out.")), SEEK_TIMEOUT_MS);
-      const cleanup = (): void => {
-        window.clearTimeout(timeout);
-        if (video !== null) {
-          video.removeEventListener("loadedmetadata", onLoaded);
-          video.removeEventListener("error", onError);
-        }
-      };
-      const onLoaded = (): void => { cleanup(); resolve(); };
-      const onError = (): void => { cleanup(); reject(new Error("Video metadata failed.")); };
-      if (video !== null) {
-        video.addEventListener("loadedmetadata", onLoaded, { once: true });
-        video.addEventListener("error", onError, { once: true });
-      }
-    });
-    const canvas = documentImplementation.createElement("canvas");
-    const width = Math.max(1, Math.min(MAX_FRAME_WIDTH, video.videoWidth || MAX_FRAME_WIDTH));
-    const height = Math.max(1, Math.round(width * ((video.videoHeight || 9) / (video.videoWidth || 16))));
-    canvas.width = width;
-    canvas.height = height;
-    const context = canvas.getContext("2d");
-    if (context === null) return [];
-    const frames: CandidatePassBVideoFrame[] = [];
-    for (const timestampMs of timestamps) {
-      abortIfRequested(options.signal);
-      try {
-        await waitForVideoSeek(video, (startMs + timestampMs) / 1_000, options.signal);
-        await waitForCurrentVideoFrame(video, options.signal);
-        context.drawImage(video, 0, 0, width, height);
-        const data = dataUrlToBase64(canvas.toDataURL("image/jpeg", JPEG_QUALITY));
-        if (data !== null) frames.push({ timestampMs, mimeType: "image/jpeg", dataBase64: data });
-      } catch (error) {
-        if (error instanceof DOMException && error.name === "AbortError") throw error;
-      }
-    }
-    return frames;
+    session = await createSamplerSession(file, options);
+    return await captureFramesWithSession(
+      session,
+      startMs,
+      timestamps,
+      options.signal,
+    );
   } catch {
     return [];
   } finally {
-    if (video !== null) {
-      video.pause();
-      video.removeAttribute("src");
-      video.load();
-      video.remove();
-    }
-    if (url !== null) revokeUrl(url);
+    if (session !== null) disposeSamplerSession(session);
   }
 }

@@ -31,6 +31,8 @@ function validAnalysis() {
     reactionSummaryKo: "목소리의 음량과 속도가 잠시 커지는 반응 단서가 들려요.",
     whyGoodClipKo: "짧은 시간 안에 소리 변화와 발화가 이어져 먼저 확인할 만해요.",
     uncertaintiesKo: ["화자가 누구인지와 화면에서 일어난 사건은 확인할 수 없어요."],
+    participantPresence: "identified",
+    participantSummaryKo: "대표 화면의 이름표로 유레카가 진행 중임을 확인했어요.",
     identifiedParticipants: [
       {
         displayName: " 유레카 ",
@@ -39,12 +41,39 @@ function validAnalysis() {
         evidenceKo: "대표 화면의 소개 자막에 유레카라고 표시돼요.",
         confidence: 0.96,
         relativeTimestampMs: 1_200,
+        observedFrameIndices: [0],
       },
     ],
   };
 }
 
 describe("candidatePassBGemini", () => {
+  it("accepts English editorial narration only when English was requested", () => {
+    const englishAnalysis = {
+      ...validAnalysis(),
+      eventSummaryKo: "A sudden sound interrupts the conversation and the host immediately pauses to inspect what happened.",
+      reactionSummaryKo: "The host raises her voice, pauses, and then explains the unexpected result to viewers.",
+      whyGoodClipKo: "The cause and the host response are close together, making the moment easy to understand as a short clip.",
+      uncertaintiesKo: ["The motion between the four frames still needs direct playback."],
+      participantSummaryKo: "Eureka is identified from the visible on-screen name label.",
+      identifiedParticipants: validAnalysis().identifiedParticipants.map((participant) => ({
+        ...participant,
+        evidenceKo: "The on-screen label visibly reads Eureka.",
+      })),
+    };
+    expect(parseCandidatePassBGeminiAnalysis(englishAnalysis, 45_000, null, "en").ok).toBe(true);
+    expect(parseCandidatePassBGeminiAnalysis(englishAnalysis, 45_000, null, "ko").ok).toBe(false);
+    expect(buildCandidatePassBGeminiRequestBody("aGVsbG8=", 45_000, [], null, "en")
+      .contents[0].parts[0].text).toContain("English only");
+  });
+
+  it("rejects AI narration containing unintended Han characters", () => {
+    expect(parseCandidatePassBGeminiAnalysis({
+      ...validAnalysis(),
+      eventSummaryKo: "갑자기 큰 소리가 난 뒤 主人이 놀랐어요.",
+    }, 45_000).ok).toBe(false);
+  });
+
   it("encodes deterministic mono PCM16 WAV bytes and base64", () => {
     const wav = encodeCandidatePassBPcm16Wav(
       new Float32Array([-1, -0.5, 0, 0.5, 1, Number.NaN]),
@@ -84,6 +113,8 @@ describe("candidatePassBGemini", () => {
           "reactionSummaryKo",
           "whyGoodClipKo",
           "uncertaintiesKo",
+          "participantPresence",
+          "participantSummaryKo",
           "identifiedParticipants",
         ],
       },
@@ -170,6 +201,7 @@ describe("candidatePassBGemini", () => {
       evidenceKo: "긴 은분홍색 머리와 고양이형 귀가 같은 화면에서 함께 확인돼요.",
       confidence: 0.93,
       relativeTimestampMs: 1_200,
+      observedFrameIndices: [0, 1],
     }];
     const grounded = parseCandidatePassBGeminiAnalysis(
       analysis,
@@ -185,7 +217,7 @@ describe("candidatePassBGemini", () => {
       }),
     ]);
     const unregistered = parseCandidatePassBGeminiAnalysis(analysis, 45_000);
-    expect(unregistered.ok && unregistered.analysis.insight.identifiedParticipants).toEqual([]);
+    expect(unregistered).toEqual({ ok: false });
   });
 
   it("removes invented screen and game claims when no representative frame survived", () => {
@@ -239,6 +271,8 @@ describe("candidatePassBGemini", () => {
           uncertaintiesKo: [
             "화자가 누구인지와 화면에서 일어난 사건은 확인할 수 없어요.",
           ],
+          participantPresence: "identified",
+          participantSummaryKo: "대표 화면의 이름표로 유레카가 진행 중임을 확인했어요.",
           identifiedParticipants: [
             {
               displayName: "유레카",
@@ -247,10 +281,36 @@ describe("candidatePassBGemini", () => {
               evidenceKo: "대표 화면의 소개 자막에 유레카라고 표시돼요.",
               confidence: 0.96,
               relativeTimestampMs: 1_200,
+              observedFrameIndices: [0],
             },
           ],
         },
       },
+    });
+  });
+
+  it("separates no visible participant from an unidentified visible avatar", () => {
+    const nonePresent = validAnalysis();
+    nonePresent.participantPresence = "none-present";
+    nonePresent.participantSummaryKo = "화면에는 게임 결과만 보이고 사람은 없다.";
+    nonePresent.identifiedParticipants = [];
+    const parsedNone = parseCandidatePassBGeminiAnalysis(nonePresent, 45_000);
+    expect(parsedNone.ok).toBe(true);
+    if (parsedNone.ok) {
+      expect(parsedNone.analysis.insight.participantPresence).toBe("none-present");
+      expect(parsedNone.analysis.insight.participantSummaryKo).toContain("등장인물이 없습니다");
+    }
+
+    const unknownVisible = validAnalysis();
+    unknownVisible.participantPresence = "present-unidentified";
+    unknownVisible.participantSummaryKo = "오른쪽에 아바타가 보이지만 이름은 확인할 수 없다.";
+    unknownVisible.identifiedParticipants = [];
+    expect(parseCandidatePassBGeminiAnalysis(unknownVisible, 45_000).ok).toBe(true);
+
+    const contradictory = validAnalysis();
+    contradictory.participantPresence = "none-present";
+    expect(parseCandidatePassBGeminiAnalysis(contradictory, 45_000)).toEqual({
+      ok: false,
     });
   });
 
@@ -310,6 +370,7 @@ describe("candidatePassBGemini", () => {
         evidenceKo: "아바타가 닮아 보여요.",
         confidence: 0.7,
         relativeTimestampMs: 1_000,
+        observedFrameIndices: [0],
       },
     ];
     expect(parseCandidatePassBGeminiAnalysis(appearanceGuess, 45_000)).toEqual({

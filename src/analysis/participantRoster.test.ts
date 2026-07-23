@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  AMORETTO_CHANNEL_CAST_ROSTER_ID,
   DEFAULT_CANDIDATE_PASS_B_CAST_ROSTER_ID,
   LEGACY_CANDIDATE_PASS_B_CAST_ROSTER_ID,
   candidatePassBCastReferenceForName,
@@ -62,5 +63,26 @@ describe("participantRoster", () => {
     expect(
       candidatePassBCastRosterIdForSourceName("139960570.mp4"),
     ).toBeNull();
+  });
+
+  it("uses a personal-channel owner roster without leaking 세라 교수님", () => {
+    expect(
+      candidatePassBCastRosterIdForSourceName(
+        "https://chzzk.naver.com/33bc7a29b771728cf9378604973b620b",
+      ),
+    ).toBe(AMORETTO_CHANNEL_CAST_ROSTER_ID);
+    expect(
+      candidatePassBCastRosterIdForSourceName("[아모레또] 음식 토크.mp4"),
+    ).toBe(AMORETTO_CHANNEL_CAST_ROSTER_ID);
+
+    const references = candidatePassBCastReferences(
+      AMORETTO_CHANNEL_CAST_ROSTER_ID,
+    );
+    expect(references).toHaveLength(1);
+    expect(references[0]).toMatchObject({
+      displayName: "아모레또",
+      role: "streamer",
+    });
+    expect(references.some(({ displayName }) => displayName === "세라 교수님")).toBe(false);
   });
 });

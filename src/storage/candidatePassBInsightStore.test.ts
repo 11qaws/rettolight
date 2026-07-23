@@ -43,6 +43,8 @@ const record: CandidatePassBInsightsRecord = {
       reactionSummaryKo: "스트리머가 웃으며 즉시 반응했어요.",
       whyGoodClipKo: "사건과 반응이 짧은 구간 안에서 완결돼요.",
       uncertaintiesKo: [],
+      participantPresence: "identified",
+      participantSummaryKo: "화면 이름표로 유레카가 진행 중임을 확인했어요.",
       identifiedParticipants: [
         {
           displayName: "유레카",
@@ -51,6 +53,7 @@ const record: CandidatePassBInsightsRecord = {
           evidenceKo: "화면 소개 자막에 이름이 표시돼요.",
           confidence: 0.96,
           relativeTimestampMs: 1_500,
+          observedFrameIndices: [0],
         },
       ],
     },

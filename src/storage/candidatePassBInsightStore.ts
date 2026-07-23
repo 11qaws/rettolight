@@ -4,23 +4,27 @@ import {
   CANDIDATE_PASS_B_GEMINI_MODEL_REVISION,
   CANDIDATE_PASS_B_OLDER_GEMINI_MODEL_REVISION,
   CANDIDATE_PASS_B_PREVIOUS_GEMINI_MODEL_REVISION,
+  CANDIDATE_PASS_B_PRIOR_GEMINI_MODEL_REVISION,
   CANDIDATE_PASS_B_LEGACY_GEMINI_MODEL_ID,
   CANDIDATE_PASS_B_LEGACY_GEMINI_MODEL_REVISION,
   CANDIDATE_PASS_B_QWEN_MODEL_ID,
   CANDIDATE_PASS_B_QWEN_MODEL_REVISION,
   CANDIDATE_PASS_B_OLDER_QWEN_MODEL_REVISION,
   CANDIDATE_PASS_B_PREVIOUS_QWEN_MODEL_REVISION,
+  CANDIDATE_PASS_B_PRIOR_QWEN_MODEL_REVISION,
   MAX_CANDIDATE_PASS_B_VIDEO_FRAME_BASE64_LENGTH,
   type CandidatePassBParticipantAttribution,
+  type CandidatePassBParticipantPresence,
   type CandidatePassBVideoFrame,
 } from "../analysis/candidatePassBWorkerProtocol";
 
-export const CANDIDATE_PASS_B_INSIGHT_SCHEMA_VERSION = "1.3.0" as const;
+export const CANDIDATE_PASS_B_INSIGHT_SCHEMA_VERSION = "1.4.0" as const;
 export type CandidatePassBInsightSchemaVersion =
   | "1.0.0"
   | "1.1.0"
   | "1.2.0"
-  | "1.3.0";
+  | "1.3.0"
+  | "1.4.0";
 
 const SUPPORTED_INSIGHT_SCHEMA_VERSIONS = new Set<CandidatePassBInsightSchemaVersion>([
   "1.0.0",
@@ -34,6 +38,8 @@ export interface StoredCandidatePassBInsight {
   readonly reactionSummaryKo: string;
   readonly whyGoodClipKo: string;
   readonly uncertaintiesKo: readonly string[];
+  readonly participantPresence?: CandidatePassBParticipantPresence;
+  readonly participantSummaryKo?: string;
   readonly identifiedParticipants?: readonly CandidatePassBParticipantAttribution[];
 }
 
@@ -45,9 +51,11 @@ export interface StoredCandidatePassBModelIdentity {
   readonly revision:
     | typeof CANDIDATE_PASS_B_QWEN_MODEL_REVISION
     | typeof CANDIDATE_PASS_B_PREVIOUS_QWEN_MODEL_REVISION
+    | typeof CANDIDATE_PASS_B_PRIOR_QWEN_MODEL_REVISION
     | typeof CANDIDATE_PASS_B_OLDER_QWEN_MODEL_REVISION
     | typeof CANDIDATE_PASS_B_GEMINI_MODEL_REVISION
     | typeof CANDIDATE_PASS_B_PREVIOUS_GEMINI_MODEL_REVISION
+    | typeof CANDIDATE_PASS_B_PRIOR_GEMINI_MODEL_REVISION
     | typeof CANDIDATE_PASS_B_OLDER_GEMINI_MODEL_REVISION
     | typeof CANDIDATE_PASS_B_LEGACY_GEMINI_MODEL_REVISION;
 }
@@ -86,6 +94,8 @@ function isStoredInsight(value: unknown): value is StoredCandidatePassBInsight {
     return false;
   }
   const participants = value.identifiedParticipants;
+  const participantPresence = value.participantPresence;
+  const participantSummaryKo = value.participantSummaryKo;
   return (
     isBoundedString(value.eventSummaryKo, 1_000) &&
     isBoundedString(value.reactionSummaryKo, 1_000) &&
@@ -93,6 +103,14 @@ function isStoredInsight(value: unknown): value is StoredCandidatePassBInsight {
     Array.isArray(value.uncertaintiesKo) &&
     value.uncertaintiesKo.length <= 8 &&
     value.uncertaintiesKo.every((item) => isBoundedString(item, 500)) &&
+    ((participantPresence === undefined && participantSummaryKo === undefined) ||
+      ([
+        "identified",
+        "present-unidentified",
+        "none-present",
+        "insufficient-evidence",
+      ].includes(participantPresence as string) &&
+        isNonEmptyBoundedString(participantSummaryKo, 1_000))) &&
     (participants === undefined ||
       (Array.isArray(participants) &&
         participants.length <= 6 &&
@@ -117,7 +135,15 @@ function isStoredParticipantAttribution(
     value.confidence <= 1 &&
     Number.isSafeInteger(value.relativeTimestampMs) &&
     (value.relativeTimestampMs as number) >= 0 &&
-    (value.relativeTimestampMs as number) <= 60_000
+    (value.relativeTimestampMs as number) <= 60_000 &&
+    (value.observedFrameIndices === undefined ||
+      (Array.isArray(value.observedFrameIndices) &&
+        value.observedFrameIndices.length <= 4 &&
+        new Set(value.observedFrameIndices).size === value.observedFrameIndices.length &&
+        value.observedFrameIndices.every(
+          (frameIndex) =>
+            Number.isSafeInteger(frameIndex) && frameIndex >= 0 && frameIndex < 4,
+        )))
   );
 }
 
@@ -172,10 +198,12 @@ function isStoredModelIdentity(
     ((value.id === CANDIDATE_PASS_B_QWEN_MODEL_ID &&
       (value.revision === CANDIDATE_PASS_B_QWEN_MODEL_REVISION ||
         value.revision === CANDIDATE_PASS_B_PREVIOUS_QWEN_MODEL_REVISION ||
+        value.revision === CANDIDATE_PASS_B_PRIOR_QWEN_MODEL_REVISION ||
         value.revision === CANDIDATE_PASS_B_OLDER_QWEN_MODEL_REVISION)) ||
       (value.id === CANDIDATE_PASS_B_GEMINI_MODEL_ID &&
         (value.revision === CANDIDATE_PASS_B_GEMINI_MODEL_REVISION ||
           value.revision === CANDIDATE_PASS_B_PREVIOUS_GEMINI_MODEL_REVISION ||
+          value.revision === CANDIDATE_PASS_B_PRIOR_GEMINI_MODEL_REVISION ||
           value.revision === CANDIDATE_PASS_B_OLDER_GEMINI_MODEL_REVISION)) ||
       (value.id === CANDIDATE_PASS_B_LEGACY_GEMINI_MODEL_ID &&
         value.revision === CANDIDATE_PASS_B_LEGACY_GEMINI_MODEL_REVISION))

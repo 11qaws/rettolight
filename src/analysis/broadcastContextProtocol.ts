@@ -2,6 +2,10 @@ import {
   isCandidatePassBCastRosterId,
   type CandidatePassBCastRosterId,
 } from "./participantRoster";
+import {
+  isAnalysisLanguage,
+  type AnalysisLanguage,
+} from "../domain/analysisLanguage";
 
 export const BROADCAST_CONTEXT_SCHEMA_VERSION = "1.6.0" as const;
 export const MAX_BROADCAST_CONTEXT_SOURCE_DURATION_MS = 12 * 60 * 60_000;
@@ -36,6 +40,8 @@ export interface BroadcastContextCandidateInput {
   readonly transcriptKo: string;
   readonly eventSummaryKo: string;
   readonly reactionSummaryKo: string;
+  /** Grounded candidate-level participant state; legacy callers may omit it. */
+  readonly participantContextKo?: string;
   readonly chatReactionSummaryKo: string | null;
 }
 
@@ -45,6 +51,7 @@ export interface BroadcastContextRequestInput {
   readonly candidates: readonly BroadcastContextCandidateInput[];
   /** Server-known closed roster only; arbitrary prompt text is never accepted. */
   readonly castRosterId?: CandidatePassBCastRosterId;
+  readonly outputLanguage?: AnalysisLanguage;
 }
 
 export interface BroadcastContextRequest {
@@ -53,6 +60,7 @@ export interface BroadcastContextRequest {
   readonly chapters: readonly BroadcastContextChapterInput[];
   readonly candidates: readonly BroadcastContextCandidateInput[];
   readonly castRosterId: CandidatePassBCastRosterId | null;
+  readonly outputLanguage: AnalysisLanguage;
 }
 
 export type BroadcastContextCandidateCategory =
@@ -317,6 +325,15 @@ export function createBroadcastContextRequest(
   input: BroadcastContextRequestInput,
 ): BroadcastContextRequest {
   if (
+    input.outputLanguage !== undefined &&
+    !isAnalysisLanguage(input.outputLanguage)
+  ) {
+    throw new BroadcastContextInputError(
+      "INVALID_TEXT",
+      "Broadcast context output language must be ko or en.",
+    );
+  }
+  if (
     input.castRosterId !== undefined &&
     !isCandidatePassBCastRosterId(input.castRosterId)
   ) {
@@ -424,6 +441,13 @@ export function createBroadcastContextRequest(
       MAX_BROADCAST_CONTEXT_SUMMARY_LENGTH,
       candidate.candidateId,
     );
+    if (candidate.participantContextKo !== undefined) {
+      assertText(
+        candidate.participantContextKo,
+        MAX_BROADCAST_CONTEXT_SUMMARY_LENGTH,
+        candidate.candidateId,
+      );
+    }
     if (candidate.chatReactionSummaryKo !== null) {
       assertText(
         candidate.chatReactionSummaryKo,
@@ -439,6 +463,9 @@ export function createBroadcastContextRequest(
       transcriptKo: candidate.transcriptKo,
       eventSummaryKo: candidate.eventSummaryKo,
       reactionSummaryKo: candidate.reactionSummaryKo,
+      participantContextKo:
+        candidate.participantContextKo ??
+        "이 후보의 화면 등장인물은 아직 확인하지 못했습니다.",
       chatReactionSummaryKo: candidate.chatReactionSummaryKo,
     };
   });
@@ -449,6 +476,7 @@ export function createBroadcastContextRequest(
     chapters,
     candidates,
     castRosterId: input.castRosterId ?? null,
+    outputLanguage: input.outputLanguage ?? "ko",
   };
 }
 

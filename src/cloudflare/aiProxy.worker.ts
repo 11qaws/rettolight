@@ -24,6 +24,10 @@ import {
   type CandidatePassBCastRosterId,
 } from "../analysis/participantRoster";
 import {
+  isAnalysisLanguage,
+  type AnalysisLanguage,
+} from "../domain/analysisLanguage";
+import {
   MAX_BROADCAST_CONTEXT_DEEPSEEK_RESPONSE_BYTES,
   buildBroadcastContextDeepseekRequestBody,
   buildBroadcastContextQwenRequestBody,
@@ -84,6 +88,7 @@ const ENDPOINT_PATH = "/v1/candidate-insights";
 const BROADCAST_CONTEXT_ENDPOINT_PATH = "/v1/broadcast-context";
 const BROADCAST_TRANSCRIPT_ENDPOINT_PATH = "/v1/broadcast-transcript";
 const YOUTUBE_CAPTIONS_ENDPOINT_PATH = "/v1/youtube-captions";
+const CHZZK_VIDEO_CHANNEL_ENDPOINT_PATH = "/v1/chzzk-video-channel";
 const HEALTH_PATH = "/healthz";
 const PRODUCTION_ORIGIN = "https://11qaws.github.io";
 const WAV_HEADER_BYTES = 44;
@@ -112,6 +117,7 @@ const RATE_LIMIT_KEY = "candidate-insights";
 const BROADCAST_CONTEXT_RATE_LIMIT_KEY = "broadcast-context";
 const BROADCAST_TRANSCRIPT_RATE_LIMIT_KEY = "broadcast-transcript";
 const YOUTUBE_CAPTIONS_RATE_LIMIT_KEY = "youtube-captions";
+const CHZZK_VIDEO_CHANNEL_RATE_LIMIT_KEY = "chzzk-video-channel";
 // YouTube embeds this public Android bootstrap key in its clients. It is not a
 // user credential; it only selects the public Innertube surface.
 const YOUTUBE_INNERTUBE_API_KEY = "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8";
@@ -128,6 +134,9 @@ const EXCLIPPER_PRIMARY_FAILURE_HEADER = "X-ExClipper-Primary-Failure";
 const EXCLIPPER_FALLBACK_FAILURE_HEADER = "X-ExClipper-Fallback-Failure";
 const MAX_YOUTUBE_WATCH_PAGE_BYTES = 2 * 1024 * 1024;
 const MAX_YOUTUBE_CAPTION_BYTES = 8 * 1024 * 1024;
+const MAX_CHZZK_VIDEO_METADATA_BYTES = 256 * 1024;
+const CHZZK_VIDEO_NO_PATTERN = /^\d{7,12}$/u;
+const CHZZK_CHANNEL_ID_PATTERN = /^[0-9a-f]{32}$/u;
 
 interface RateLimitBinding {
   readonly limit: (
@@ -145,6 +154,7 @@ interface CandidateInsightRequest {
   readonly candidateDurationMs: number;
   readonly videoFrames: readonly CandidatePassBVideoFrame[];
   readonly castRosterId: CandidatePassBCastRosterId | null;
+  readonly outputLanguage: AnalysisLanguage;
 }
 
 type FetchImplementation = (
@@ -330,15 +340,14 @@ function parseCandidateRequest(bytes: Uint8Array): CandidateInsightRequest | nul
   }
   if (
     !isRecord(value) ||
-    (!hasExactKeys(value, ["audioBase64", "candidateDurationMs"]) &&
-      !hasExactKeys(value, ["audioBase64", "candidateDurationMs", "videoFrames"]) &&
-      !hasExactKeys(value, ["audioBase64", "candidateDurationMs", "castRosterId"]) &&
-      !hasExactKeys(value, [
-        "audioBase64",
-        "candidateDurationMs",
-        "videoFrames",
-        "castRosterId",
-      ])) ||
+    !["audioBase64", "candidateDurationMs"].every((key) => key in value) ||
+    Object.keys(value).some((key) => ![
+      "audioBase64",
+      "candidateDurationMs",
+      "videoFrames",
+      "castRosterId",
+      "outputLanguage",
+    ].includes(key)) ||
     typeof value.audioBase64 !== "string" ||
     value.audioBase64.length === 0 ||
     value.audioBase64.length > MAX_AUDIO_BASE64_LENGTH ||
@@ -378,11 +387,14 @@ function parseCandidateRequest(bytes: Uint8Array): CandidateInsightRequest | nul
   if (castRosterId !== null && !isCandidatePassBCastRosterId(castRosterId)) {
     return null;
   }
+  const outputLanguage = "outputLanguage" in value ? value.outputLanguage : "ko";
+  if (!isAnalysisLanguage(outputLanguage)) return null;
   return {
     audioBase64: value.audioBase64,
     candidateDurationMs: value.candidateDurationMs as number,
     videoFrames,
     castRosterId,
+    outputLanguage,
   };
 }
 
@@ -751,12 +763,14 @@ async function attemptCandidateProvider(
             candidateRequest.candidateDurationMs,
             candidateRequest.videoFrames,
             candidateRequest.castRosterId,
+            candidateRequest.outputLanguage,
           )
         : buildCandidatePassBGeminiRequestBody(
             candidateRequest.audioBase64,
             candidateRequest.candidateDurationMs,
             candidateRequest.videoFrames,
             candidateRequest.castRosterId,
+            candidateRequest.outputLanguage,
           ),
     );
   } catch {
@@ -860,6 +874,7 @@ async function attemptCandidateProvider(
         text,
         candidateRequest.candidateDurationMs,
         candidateRequest.castRosterId,
+        candidateRequest.outputLanguage,
       );
     } else {
       upstreamPayload = JSON.parse(text);
@@ -873,6 +888,7 @@ async function attemptCandidateProvider(
     upstreamPayload,
     candidateRequest.candidateDurationMs,
     candidateRequest.castRosterId,
+    candidateRequest.outputLanguage,
   );
   if (!parsed.ok) {
     return {
@@ -2055,6 +2071,150 @@ async function attemptBroadcastContextProvider(
   };
 }
 
+/** Resolves only a public CHZZK replay number to its source channel ID. */
+export async function handleChzzkVideoChannelRequest(
+  request: Request,
+  environment: AiProxyEnvironment,
+  dependencies: AiProxyDependencies = {},
+): Promise<Response> {
+  const origin = request.headers.get("Origin");
+  if (!isAllowedOrigin(origin)) {
+    return jsonResponse(
+      403,
+      "ORIGIN_NOT_ALLOWED",
+      "이 페이지에서는 CHZZK 영상 채널을 확인할 수 없어요.",
+      origin,
+    );
+  }
+  if (request.method === "OPTIONS") {
+    return preflightResponse(origin, "GET, OPTIONS");
+  }
+  if (request.method !== "GET") {
+    return jsonResponse(
+      405,
+      "METHOD_NOT_ALLOWED",
+      "지원하지 않는 요청 방식이에요.",
+      origin,
+      { Allow: "GET, OPTIONS" },
+    );
+  }
+  const url = new URL(request.url);
+  if ([...url.searchParams.keys()].some((key) => key !== "v")) {
+    return jsonResponse(400, "INVALID_REQUEST", "CHZZK 영상 번호를 확인해 주세요.", origin);
+  }
+  const videoNo = url.searchParams.get("v") ?? "";
+  if (!CHZZK_VIDEO_NO_PATTERN.test(videoNo)) {
+    return jsonResponse(400, "INVALID_REQUEST", "CHZZK 영상 번호를 확인해 주세요.", origin);
+  }
+  if (environment.RATE_LIMITER === undefined || environment.IP_RATE_LIMITER === undefined) {
+    return jsonResponse(
+      503,
+      "PROXY_NOT_CONFIGURED",
+      "CHZZK 채널 확인 연결을 준비하지 못했어요.",
+      origin,
+    );
+  }
+  try {
+    const clientLimit = await environment.IP_RATE_LIMITER.limit({
+      key: scopedClientRateLimitKey(request, CHZZK_VIDEO_CHANNEL_RATE_LIMIT_KEY),
+    });
+    const globalLimit = await environment.RATE_LIMITER.limit({
+      key: CHZZK_VIDEO_CHANNEL_RATE_LIMIT_KEY,
+    });
+    if (!clientLimit.success || !globalLimit.success) {
+      return jsonResponse(
+        429,
+        "RATE_LIMITED",
+        "잠시 요청이 많아요. 1분 뒤 다시 시도해 주세요.",
+        origin,
+        { "Retry-After": "60" },
+      );
+    }
+  } catch {
+    return jsonResponse(
+      503,
+      "RATE_LIMIT_UNAVAILABLE",
+      "요청 보호 장치를 확인하지 못했어요.",
+      origin,
+    );
+  }
+
+  const fetchImplementation = dependencies.fetchImplementation ?? fetch;
+  let upstream: Response;
+  try {
+    upstream = await fetchWithTimeout(
+      fetchImplementation,
+      `https://api.chzzk.naver.com/service/v2/videos/${videoNo}`,
+      {
+        method: "GET",
+        headers: {
+          Accept: "application/json",
+          "Accept-Language": "ko-KR,ko;q=0.9",
+          "User-Agent": "Mozilla/5.0 (compatible; ExClipper/0.3)",
+        },
+        cache: "no-store",
+        credentials: "omit",
+        referrerPolicy: "no-referrer",
+      },
+      Math.min(dependencies.upstreamTimeoutMs ?? UPSTREAM_TIMEOUT_MS, 15_000),
+    );
+  } catch {
+    return jsonResponse(
+      502,
+      "UPSTREAM_UNAVAILABLE",
+      "CHZZK 영상 정보를 확인하지 못했어요.",
+      origin,
+    );
+  }
+  if (!upstream.ok) {
+    return jsonResponse(
+      upstream.status === 404 ? 404 : 502,
+      upstream.status === 404 ? "VIDEO_NOT_FOUND" : "UPSTREAM_REJECTED",
+      "CHZZK 영상 정보를 확인하지 못했어요.",
+      origin,
+    );
+  }
+
+  let payload: unknown;
+  try {
+    const bytes = await readBodyWithLimit(
+      upstream.body,
+      MAX_CHZZK_VIDEO_METADATA_BYTES,
+    );
+    payload = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+  } catch {
+    return jsonResponse(
+      502,
+      "UPSTREAM_INVALID_RESPONSE",
+      "CHZZK 영상 정보를 확인하지 못했어요.",
+      origin,
+    );
+  }
+  const content = isRecord(payload) && isRecord(payload.content)
+    ? payload.content
+    : null;
+  const channel = content !== null && isRecord(content.channel)
+    ? content.channel
+    : null;
+  const channelId = channel?.channelId;
+  if (typeof channelId !== "string" || !CHZZK_CHANNEL_ID_PATTERN.test(channelId)) {
+    return jsonResponse(
+      502,
+      "UPSTREAM_INVALID_RESPONSE",
+      "CHZZK 영상 채널을 확인하지 못했어요.",
+      origin,
+    );
+  }
+  const headers = corsHeaders(origin);
+  headers.set("Content-Type", JSON_CONTENT_TYPE);
+  headers.set("Cache-Control", "public, max-age=3600");
+  headers.set("X-Content-Type-Options", "nosniff");
+  return new Response(JSON.stringify({ videoNo, channelId }), {
+    status: 200,
+    headers,
+  });
+}
+
 export async function handleBroadcastContextRequest(
   request: Request,
   environment: AiProxyEnvironment,
@@ -2269,6 +2429,9 @@ export default {
     }
     if (url.pathname === YOUTUBE_CAPTIONS_ENDPOINT_PATH) {
       return handleYouTubeCaptionsRequest(request, environment);
+    }
+    if (url.pathname === CHZZK_VIDEO_CHANNEL_ENDPOINT_PATH) {
+      return handleChzzkVideoChannelRequest(request, environment);
     }
     return handleCandidateInsightRequest(request, environment);
   },

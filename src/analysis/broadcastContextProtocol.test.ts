@@ -58,6 +58,7 @@ describe("broadcastContextProtocol", () => {
       "transcriptKo",
       "eventSummaryKo",
       "reactionSummaryKo",
+      "participantContextKo",
       "chatReactionSummaryKo",
     ]);
     expect(JSON.stringify(request)).not.toMatch(
