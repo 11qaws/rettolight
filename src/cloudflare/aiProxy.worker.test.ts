@@ -1198,6 +1198,9 @@ describe("aiProxy.worker", () => {
       JSON.parse(responsePayload.candidates[0].content.parts[0].text),
     ).toEqual({
       ...JSON.parse(analysisText),
+      clipDecision: "uncertain",
+      contextConsistency: "insufficient",
+      programMaterial: "routine-or-unclear",
       identifiedParticipants: [],
     });
     expect(upstreamFetch).toHaveBeenCalledTimes(1);
@@ -1338,7 +1341,7 @@ describe("aiProxy.worker", () => {
       "gemini-3.6-flash",
     );
     expect(response.headers.get("X-ExClipper-Model-Revision")).toBe(
-      "gemini-3.6-flash-grounded-frames-participants-language-v7-2026-07-23",
+      "gemini-3.6-flash-context-verified-frames-v8-2026-07-23",
     );
     expect(response.headers.get("X-ExClipper-Fallback-Used")).toBe("true");
     expect(response.headers.get("X-ExClipper-Fallback-Reason")).toBe(

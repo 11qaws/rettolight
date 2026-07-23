@@ -116,6 +116,9 @@ describe("candidatePassBGemini", () => {
           "participantPresence",
           "participantSummaryKo",
           "identifiedParticipants",
+          "clipDecision",
+          "contextConsistency",
+          "programMaterial",
         ],
       },
     });

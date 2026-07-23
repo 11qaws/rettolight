@@ -156,9 +156,14 @@ import {
 } from "./analysis/contextAwareCandidateSelection";
 import {
   finalizeContextQualifiedCandidates,
-  selectCandidateDetailCandidateIds,
   type CandidateAiProjectionById,
 } from "./analysis/contextQualifiedFinalSelection";
+import { buildCandidatePassBContextPackets } from "./analysis/candidateContextPackets";
+import {
+  createCandidatePassBVerificationReceipt,
+  finalizeFullyVerifiedCandidates,
+} from "./analysis/candidateFinalVerification";
+import { buildBroadcastSummaryCitationPresentation } from "./analysis/broadcastSummaryCitations";
 import type {
   BroadcastContextCandidateInput,
   BroadcastContextChapterInput,
@@ -230,7 +235,6 @@ import {
 import {
   candidateRankingViewHasSessionWork,
   createCandidateRankingViewState,
-  projectCandidateOrder,
   transitionCandidateRankingView,
 } from "./domain/candidateRankingView";
 import {
@@ -306,7 +310,10 @@ import {
   type CandidatePassBInsightsRecord,
   type StoredCandidatePassBModelIdentity,
 } from "./storage/candidatePassBInsightStore";
-import type { CandidatePassBVideoFrame } from "./analysis/candidatePassBWorkerProtocol";
+import type {
+  CandidatePassBVerificationReceipt,
+  CandidatePassBVideoFrame,
+} from "./analysis/candidatePassBWorkerProtocol";
 
 type Theme = "light" | "dark";
 type CandidateReviewState = "unreviewed" | "approved" | "rejected";
@@ -343,7 +350,7 @@ interface AudioAnalysisOutcome {
   readonly coverageComplete: boolean;
 }
 
-const APP_VERSION = "0.3.44";
+const APP_VERSION = "0.3.45";
 const PERSISTENCE_SCHEMA_VERSION = "0.3.0";
 const SIGNAL_ENGINE_VERSION =
   "streamer-reaction-fast-pass-v5-chat-fallback-music-confirmation";
@@ -361,6 +368,9 @@ type CandidateTimelineFramesById = Readonly<
 >;
 type CandidateTimelineThumbnailById = Readonly<
   Record<string, CandidatePassBVideoFrame>
+>;
+type CandidatePassBVerificationReceiptById = Readonly<
+  Record<string, CandidatePassBVerificationReceipt>
 >;
 type CandidateTimelineSignalKind = "audio" | "chat" | "visual" | "fused";
 interface CandidateTimelineScorePoint {
@@ -1036,6 +1046,8 @@ function App() {
     useState<CandidateGeminiInsightById>({});
   const [candidateTimelineFramesById, setCandidateTimelineFramesById] =
     useState<CandidateTimelineFramesById>({});
+  const [candidatePassBVerificationReceiptById, setCandidatePassBVerificationReceiptById] =
+    useState<CandidatePassBVerificationReceiptById>({});
   const [candidateTimelineScorePoints, setCandidateTimelineScorePoints] =
     useState<readonly CandidateTimelineScorePoint[]>([]);
   const [timelineSemanticChapters, setTimelineSemanticChapters] =
@@ -1077,6 +1089,8 @@ function App() {
   const candidateGeminiInsightRef = useRef<CandidateGeminiInsightById>({});
   const candidatePassBModelByIdRef = useRef<CandidatePassBModelById>({});
   const candidateTimelineFramesRef = useRef<CandidateTimelineFramesById>({});
+  const candidatePassBVerificationReceiptRef =
+    useRef<CandidatePassBVerificationReceiptById>({});
   const candidatePassBInsightWriteChainRef = useRef<Promise<void>>(Promise.resolve());
   const candidatePassBInsightWriteEpochRef = useRef(0);
   const [candidatePassBModelProgress, setCandidatePassBModelProgress] =
@@ -1271,6 +1285,8 @@ function App() {
     clipRenderAbortController.current = null;
     candidateTimelineFramesRef.current = {};
     setCandidateTimelineFramesById({});
+    candidatePassBVerificationReceiptRef.current = {};
+    setCandidatePassBVerificationReceiptById({});
     setCandidateTimelineScorePoints([]);
     setTimelineSemanticChapters([]);
     setTimelineSemanticChapterRevealCount(0);
@@ -1405,7 +1421,7 @@ function App() {
                   ? `AI 단서 ${candidatePassBSummary?.clueFoundCount ?? 0}개 후보 · 분명한 대사 없음 ${candidatePassBSummary?.noClearSpeechCount ?? 0}개 · 건너뜀 ${candidatePassBSummary?.failedCount ?? 0}개로 마쳤어요.`
                   : candidatePassBRun.status === "cancelled"
                     ? "AI 후보 분석을 멈췄어요. 이미 찾은 단서는 그대로 남아 있어요."
-                     : "AI 후보 분석을 마치지 못했어요. 기존 후보는 그대로 검토할 수 있어요.";
+                     : "AI 후보 분석을 마치지 못했어요. 잠재 후보와 근거는 보존했지만 완전 검증 전에는 최종 목록에 올리지 않아요.";
   const candidatePassBDetailAnalysisLabel =
     candidatePassBStartPending
       ? "AI 준비 중"
@@ -1544,12 +1560,71 @@ function App() {
     candidateRankingView.evidenceFingerprint ===
       candidateRankingFingerprints.evidenceFingerprint;
 
+  const boundarySourceDurationMs = Math.round(
+    preflight?.metadata.durationMs ??
+      openedRecoveredResult?.finalResult.result.input.source.durationMs ??
+      0,
+  );
+  const candidatePassBContextById = useMemo(
+    () =>
+      broadcastContextStatus === "completed" &&
+      semanticLeadRefinementStatus === "completed"
+        ? buildCandidatePassBContextPackets({
+            candidates,
+            sourceDurationMs: boundarySourceDurationMs,
+            broadcastContext: broadcastContextResult,
+            transcriptChapters: broadcastTranscriptChapters,
+            youtubeCaptionTrack,
+          })
+        : {},
+    [
+      boundarySourceDurationMs,
+      broadcastContextResult,
+      broadcastContextStatus,
+      broadcastTranscriptChapters,
+      candidates,
+      semanticLeadRefinementStatus,
+      youtubeCaptionTrack,
+    ],
+  );
+  const finalCandidateVerification = useMemo(
+    () =>
+      finalizeFullyVerifiedCandidates({
+        candidates,
+        contextByCandidateId: candidatePassBContextById,
+        insightByCandidateId: candidateGeminiInsightById,
+        receiptByCandidateId: candidatePassBVerificationReceiptById,
+      }),
+    [
+      candidateGeminiInsightById,
+      candidatePassBContextById,
+      candidatePassBVerificationReceiptById,
+      candidates,
+    ],
+  );
   const orderedCandidates = useMemo(
-    () => {
-      const projected = projectCandidateOrder(candidates, candidateRankingView);
-      return [...projected].sort((a, b) => a.peakMs - b.peakMs);
-    },
-    [candidateRankingView, candidates],
+    () => [...finalCandidateVerification.candidates].sort(
+      (left, right) => left.peakMs - right.peakMs,
+    ),
+    [finalCandidateVerification.candidates],
+  );
+  const broadcastSummaryCitationPresentation = useMemo(
+    () =>
+      broadcastContextResult === null
+        ? null
+        : buildBroadcastSummaryCitationPresentation(
+            broadcastContextResult.broadcastSummaryKo,
+            orderedCandidates.map((candidate, index) => {
+              const context = candidatePassBContextById[candidate.id]!;
+              return {
+                candidateId: candidate.id,
+                candidateNumber: index + 1,
+                situationKo: context.contextVerdictKo,
+                topicContextKo: context.topicContextKo,
+              };
+            }),
+          ),
+    [broadcastContextResult, candidatePassBContextById, orderedCandidates],
   );
   const focusedCandidateId =
     previewCandidateId !== null &&
@@ -1568,11 +1643,6 @@ function App() {
     (openedRecoveredResult !== null ||
       recoveryCatalog.status === "failed" ||
       (recoveryCatalog.status === "ready" && recoveryCatalog.audit.results.length > 0));
-  const boundarySourceDurationMs = Math.round(
-    preflight?.metadata.durationMs ??
-      openedRecoveredResult?.finalResult.result.input.source.durationMs ??
-      0,
-  );
   const timelineAxisTicks = useMemo(() => {
     const intervalMs = 30 * 60_000;
     if (boundarySourceDurationMs <= intervalMs) return [];
@@ -1806,25 +1876,32 @@ function App() {
   );
   const candidateDetailCandidateIds = useMemo(
     () =>
-      selectCandidateDetailCandidateIds(
-        candidates,
-        candidateAiProjectionById,
-        explicitMusicOnlyCandidateIds,
-      ),
-    [candidateAiProjectionById, candidates, explicitMusicOnlyCandidateIds],
+      candidates
+        .filter(
+          (candidate) =>
+            candidatePassBContextById[candidate.id] !== undefined &&
+            !explicitMusicOnlyCandidateIds.has(candidate.id),
+        )
+        .sort(
+          (left, right) =>
+            right.score - left.score ||
+            left.peakMs - right.peakMs ||
+            left.id.localeCompare(right.id),
+        )
+        .slice(0, 12)
+        .map(({ id }) => id),
+    [candidatePassBContextById, candidates, explicitMusicOnlyCandidateIds],
   );
   const automaticCandidateDetailIds = useMemo(() => {
-    const alreadyHandledIds = new Set([
-      ...Object.keys(candidatePassBEvidenceById),
-      ...Object.keys(candidateGeminiInsightById),
-    ]);
+    const alreadyHandledIds = new Set(
+      Object.keys(candidatePassBVerificationReceiptById),
+    );
     return candidateDetailCandidateIds.filter(
       (candidateId) => !alreadyHandledIds.has(candidateId),
     );
   }, [
     candidateDetailCandidateIds,
-    candidateGeminiInsightById,
-    candidatePassBEvidenceById,
+    candidatePassBVerificationReceiptById,
   ]);
   const candidateDetailCostEstimate = useMemo(() => {
     const detailIds = new Set(candidateDetailCandidateIds.slice(0, 12));
@@ -1922,7 +1999,7 @@ function App() {
       analysisBudgetEnvelope?.projectedMaximumUsd ?? 1,
     )}`;
   })();
-  const approvedCandidates = candidates.filter(
+  const approvedCandidates = orderedCandidates.filter(
     ({ reviewState }) => reviewState === "approved",
   );
   const approvedExportCandidates: readonly ApprovedHighlightExportCandidate[] =
@@ -1931,11 +2008,11 @@ function App() {
       boundaryRevision: boundaryRevisions[proposal.id] ?? null,
     }));
   const approvedCount = approvedCandidates.length;
-  const rejectedCount = candidates.filter(
+  const rejectedCount = orderedCandidates.filter(
     ({ reviewState }) => reviewState === "rejected",
   ).length;
   const reviewedCount = approvedCount + rejectedCount;
-  const remainingReviewCount = Math.max(0, candidates.length - reviewedCount);
+  const remainingReviewCount = Math.max(0, orderedCandidates.length - reviewedCount);
   const previewCandidateNumber =
     focusedCandidateId === null
       ? 0
@@ -1948,7 +2025,7 @@ function App() {
     previewCandidateNumber > 0 && previewCandidateNumber < orderedCandidates.length
       ? orderedCandidates[previewCandidateNumber] ?? null
       : null;
-  const reviewStarted = candidates.some(({ reviewState }) => reviewState !== "unreviewed");
+  const reviewStarted = orderedCandidates.some(({ reviewState }) => reviewState !== "unreviewed");
   const boundaryWorkStarted = Object.values(boundaryRevisions).some(
     ({ revision }) => revision > 0,
   );
@@ -1964,7 +2041,8 @@ function App() {
     candidateAudioEventWorkStarted ||
     candidateRankingWorkStarted;
   const reviewCompleted =
-    candidates.length > 0 && candidates.every(({ reviewState }) => reviewState !== "unreviewed");
+    orderedCandidates.length > 0 &&
+    orderedCandidates.every(({ reviewState }) => reviewState !== "unreviewed");
   const wholeContextPhaseActive =
     broadcastTranscriptStatus === "running" ||
     broadcastContextStatus === "restoring" ||
@@ -2014,14 +2092,14 @@ function App() {
   const finalSelectionPhaseReady =
     detailedReviewPhaseComplete || detailedReviewPhaseFailed;
   const finalSelectionPhaseState =
-    reviewCompleted || (candidates.length === 0 && finalSelectionPhaseReady)
+    reviewCompleted || (orderedCandidates.length === 0 && finalSelectionPhaseReady)
       ? "complete"
       : finalSelectionPhaseReady
         ? "active"
         : "pending";
   const finalSelectionPhaseLabel = reviewCompleted
     ? `검토 완료 · 사용 ${approvedCount}개`
-    : candidates.length === 0 && finalSelectionPhaseReady
+    : orderedCandidates.length === 0 && finalSelectionPhaseReady
       ? "선택할 후보 없음 · 정상"
       : finalSelectionPhaseReady
         ? `편집자 확인 대기 ${remainingReviewCount}개 · 사용 ${approvedCount}개`
@@ -2106,9 +2184,9 @@ function App() {
           : candidatePassBBusy
             ? candidatePassBProgressRatio
             : 0.08
-        : candidates.length === 0
+        : orderedCandidates.length === 0
           ? 1
-          : reviewedCount / candidates.length;
+          : reviewedCount / orderedCandidates.length;
   const liveAnalysisPhaseSteps = [
     {
       number: 1,
@@ -2289,8 +2367,10 @@ function App() {
     candidatePassBEvidenceRef.current = {};
     candidateGeminiInsightRef.current = {};
     candidatePassBModelByIdRef.current = {};
+    candidatePassBVerificationReceiptRef.current = {};
     setCandidatePassBEvidenceById({});
     setCandidateGeminiInsightById({});
+    setCandidatePassBVerificationReceiptById({});
     setCandidatePassBStartPending(false);
     setCandidatePassBModelProgress(null);
     setCandidatePassBCandidateProgress(null);
@@ -3551,6 +3631,8 @@ function App() {
     ),
     modelByCandidateId: CandidatePassBModelById =
       candidatePassBModelByIdRef.current,
+    verificationReceiptById: CandidatePassBVerificationReceiptById =
+      candidatePassBVerificationReceiptRef.current,
   ): void => {
     const runId = currentAnalysisRunId;
     const inputSignature =
@@ -3571,6 +3653,9 @@ function App() {
       insightById,
       ...(Object.keys(modelByCandidateId).length > 0 ? { modelByCandidateId } : {}),
       ...(Object.keys(thumbnailById).length > 0 ? { thumbnailById } : {}),
+      ...(Object.keys(verificationReceiptById).length > 0
+        ? { verificationReceiptById }
+        : {}),
       recordedAt: new Date().toISOString(),
     };
     candidatePassBInsightWriteChainRef.current = candidatePassBInsightWriteChainRef.current
@@ -3599,10 +3684,13 @@ function App() {
   ): Promise<void> => {
     const requestedCandidateIds =
       targetCandidateIds === undefined ? null : new Set(targetCandidateIds);
-    const candidatePool =
+    const requestedCandidatePool =
       requestedCandidateIds === null
         ? candidates
         : candidates.filter((candidate) => requestedCandidateIds.has(candidate.id));
+    const candidatePool = requestedCandidatePool.filter(
+      (candidate) => candidatePassBContextById[candidate.id] !== undefined,
+    );
     const sourceBindingId =
       sourceContentFingerprint ??
       openedRecoveredResult?.finalResult.result.input.source.contentFingerprint ??
@@ -3855,6 +3943,7 @@ function App() {
           startMs: target.decodeStartMs,
           endMs: target.decodeEndMs,
           videoFrames: videoFramesByCandidateId.get(target.candidateId) ?? [],
+          context: candidatePassBContextById[target.candidateId]!,
           outputLanguage: analysisLanguage,
           ...(castRosterId === null ? {} : { castRosterId }),
         }],
@@ -3913,6 +4002,23 @@ function App() {
             throw new Error("The Pass B candidate result was rejected.");
           }
           if (isCurrentOperation()) {
+            const context = candidatePassBContextById[result.candidateId];
+            const frames = videoFramesByCandidateId.get(result.candidateId) ?? [];
+            const thumbnail =
+              candidateTimelineFramesRef.current[result.candidateId]?.[0];
+            const receipt =
+              context === undefined || thumbnail === undefined
+                ? null
+                : createCandidatePassBVerificationReceipt(
+                    context,
+                    frames,
+                    thumbnail.timestampMs,
+                  );
+            if (receipt === null) {
+              throw new Error(
+                "The candidate result arrived without a complete context, frame and thumbnail receipt.",
+              );
+            }
             const nextEvidence = mergeCandidatePassBEvidence(
               candidatePassBEvidenceRef.current,
               evidence,
@@ -3928,11 +4034,17 @@ function App() {
                 revision: result.model.revision,
               },
             };
+            const nextReceipts = {
+              ...candidatePassBVerificationReceiptRef.current,
+              [result.candidateId]: receipt,
+            };
             candidatePassBEvidenceRef.current = nextEvidence;
             candidateGeminiInsightRef.current = nextInsights;
             candidatePassBModelByIdRef.current = nextModels;
+            candidatePassBVerificationReceiptRef.current = nextReceipts;
             setCandidatePassBEvidenceById(nextEvidence);
             setCandidateGeminiInsightById(nextInsights);
+            setCandidatePassBVerificationReceiptById(nextReceipts);
             queueCandidatePassBInsightPersistence(
               nextEvidence,
               nextInsights,
@@ -4982,13 +5094,20 @@ function App() {
         .filter(([candidateId]) => isRecoverablePassBCandidate(candidateId))
         .map(([candidateId, frame]) => [candidateId, [frame]]),
     ) as CandidateTimelineFramesById;
+    const recoveredVerificationReceipts = Object.fromEntries(
+      Object.entries(
+        recoveredPassBInsights?.verificationReceiptById ?? {},
+      ).filter(([candidateId]) => isRecoverablePassBCandidate(candidateId)),
+    ) as CandidatePassBVerificationReceiptById;
     candidatePassBEvidenceRef.current = recoveredEvidence;
     candidateGeminiInsightRef.current = recoveredGeminiInsights;
     candidatePassBModelByIdRef.current = recoveredModels;
     candidateTimelineFramesRef.current = recoveredTimelineFrames;
+    candidatePassBVerificationReceiptRef.current = recoveredVerificationReceipts;
     setCandidatePassBEvidenceById(recoveredEvidence);
     setCandidateGeminiInsightById(recoveredGeminiInsights);
     setCandidateTimelineFramesById(recoveredTimelineFrames);
+    setCandidatePassBVerificationReceiptById(recoveredVerificationReceipts);
     resetCandidateRanking(recoveredCandidates);
     setLastExportFormat(null);
     setCopyStatus("idle");
@@ -5419,9 +5538,8 @@ function App() {
 
   useEffect(() => {
     const wholeContextGateSettled =
-      broadcastTranscriptStatus === "failed" ||
-      broadcastContextStatus === "completed" ||
-      broadcastContextStatus === "failed";
+      broadcastContextStatus === "completed" &&
+      semanticLeadRefinementStatus === "completed";
     const operationKey =
       sourceContentFingerprint === null
         ? null
@@ -5431,7 +5549,6 @@ function App() {
       automaticCandidateDetailIds.length === 0 ||
       sourceFile === null ||
       operationKey === null ||
-      openedRecoveredResult !== null ||
       !wholeContextGateSettled ||
       candidatePassBBusy ||
       autoCandidatePassBSourceRef.current === operationKey
@@ -5450,7 +5567,7 @@ function App() {
     broadcastTranscriptStatus,
     candidateDetailCandidateIds,
     candidatePassBBusy,
-    openedRecoveredResult,
+    semanticLeadRefinementStatus,
     sourceContentFingerprint,
     sourceFile,
   ]);
@@ -7149,7 +7266,7 @@ function App() {
                   </p>
                   <h3 id="candidate-title" ref={candidateHeading} tabIndex={-1}>
                     {contextualCandidatePublicationReady
-                      ? `최종 검토 후보 ${candidates.length}개`
+                      ? `최종 검토 후보 ${orderedCandidates.length}개`
                       : "방송 전체 맥락을 만들고 있어요"}
                   </h3>
                   <p className="rh-help">
@@ -7186,7 +7303,7 @@ function App() {
                     </p>
                   )}
                 </div>
-                {contextualCandidatePublicationReady && candidates.length > 0 && (
+                {contextualCandidatePublicationReady && orderedCandidates.length > 0 && (
                   <dl className="rh-review-overview" aria-live="polite">
                     <div>
                       <dt>남은 후보</dt>
@@ -7230,7 +7347,7 @@ function App() {
                       ? ui("자동 진행", "Automatic")
                       : reviewCompleted
                         ? ui("완료", "Complete")
-                        : ui(`${reviewedCount}/${candidates.length} 검토`, `${reviewedCount}/${candidates.length} reviewed`)}
+                        : ui(`${reviewedCount}/${orderedCandidates.length} 검토`, `${reviewedCount}/${orderedCandidates.length} reviewed`)}
                   </span>
                 </div>
                 <progress
@@ -7309,7 +7426,43 @@ function App() {
                           <strong>{ui("방송 흐름", "Broadcast flow")}</strong>
                           <small>{Array.from(broadcastContextResult.broadcastSummaryKo).length}{ui("자", " chars")}</small>
                         </div>
-                        <p>{broadcastContextResult.broadcastSummaryKo}</p>
+                        <p className="rh-context-cited-summary">
+                          {(broadcastSummaryCitationPresentation?.parts ?? [{
+                            text: broadcastContextResult.broadcastSummaryKo,
+                            candidateIds: [],
+                            emphasized: false,
+                          }]).map((part, partIndex) => (
+                            <span
+                              className="rh-context-cited-summary-part"
+                              data-cited={part.emphasized ? "true" : "false"}
+                              key={`${partIndex}:${part.text}`}
+                            >
+                              {part.emphasized ? <strong>{part.text}</strong> : part.text}
+                              {part.candidateIds.map((candidateId) => {
+                                const candidateIndex = orderedCandidates.findIndex(
+                                  ({ id }) => id === candidateId,
+                                );
+                                const candidate = orderedCandidates[candidateIndex];
+                                if (candidate === undefined) return null;
+                                return (
+                                  <sup key={candidateId}>
+                                    <button
+                                      type="button"
+                                      aria-label={ui(
+                                        `후보 ${candidateIndex + 1} 검토 위치로 이동`,
+                                        `Open candidate ${candidateIndex + 1}`,
+                                      )}
+                                      onClick={() => focusCandidateForReview(candidate)}
+                                    >
+                                      {candidateIndex + 1}
+                                    </button>
+                                  </sup>
+                                );
+                              })}
+                              {" "}
+                            </span>
+                          ))}
+                        </p>
                       </section>
                       <section className="rh-context-host-card">
                         <div className="rh-context-card-heading">
@@ -7345,7 +7498,7 @@ function App() {
                   <div className="rh-context-summary-meta">
                     <span>
                       {contextualCandidatePublicationReady
-                        ? `최종 검토 후보 ${candidates.length}개`
+                        ? `최종 검토 후보 ${orderedCandidates.length}개`
                         : "맥락 기반 후보 종합 중"}
                     </span>
                     <span>
@@ -7762,10 +7915,10 @@ function App() {
               </details>
               )}
 
-              {contextualCandidatePublicationReady && candidates.length === 0 ? (
+              {contextualCandidatePublicationReady && orderedCandidates.length === 0 ? (
                 <div className="rh-empty-state">
-                  <strong>뚜렷한 방송 오디오·시청자 반응을 찾지 못했어요.</strong>
-                  가짜 후보를 만들지 않고 이번 분석을 마쳤습니다. 오디오가 있는 원본인지 확인하거나 채팅 시간을 맞춰 다시 시도해 주세요.
+                  <strong>완전 검증을 통과한 클립 후보가 없어요.</strong>
+                  전체 방송 흐름, 후보 대사, 대표 화면 네 장, 대표 썸네일과 멀티모달 판정 중 하나라도 빠지거나 서로 충돌한 장면은 최종 목록에 올리지 않았습니다.
                 </div>
               ) : (
                 <>
@@ -8584,6 +8737,8 @@ function App() {
                         : undefined;
                     const candidateGeminiInsight =
                       candidateGeminiInsightById[candidate.id];
+                    const candidateContext =
+                      candidatePassBContextById[candidate.id]!;
                     const narrative = buildCandidatePassBPresentation(
                       candidate.id,
                       buildHighlightNarrative(candidate),
@@ -8600,15 +8755,15 @@ function App() {
                       candidatePassBRunStoppedBeforeOutcome
                         ? candidatePassBEvidence === undefined
                           ? candidatePassBRun?.status === "cancelled"
-                            ? "대사 확인 멈춤 · 빠른 근거 유지"
-                            : "대사 확인 실패 · 빠른 근거 유지"
+                            ? "완전 검증 멈춤 · 최종 후보 제외"
+                            : "완전 검증 실패 · 최종 후보 제외"
                           : `${narrative.passBStatusLabel} · 기존 단서 유지`
                         : candidatePassBOutcome?.status === "failed"
                         ? candidatePassBOutcome.reasonCode ===
                           "visual_evidence_incomplete"
                           ? "대표 화면 4장 미완성 · AI 해석 안 함"
                           : candidatePassBEvidence === undefined
-                            ? "추가 대사 분석 건너뜀 · 빠른 근거 유지"
+                            ? "완전 검증 건너뜀 · 최종 후보 제외"
                             : `${narrative.passBStatusLabel} · 재확인 실패, 기존 단서 유지`
                         : candidatePassBOutcome?.status === "pending" && candidatePassBBusy
                           ? candidatePassBEvidence === undefined
@@ -8789,6 +8944,43 @@ function App() {
                           <strong>먼저 볼 이유</strong>
                           {evidenceExplanation.whyWorthReviewing.text}
                         </p>
+                        <section
+                          className="rh-candidate-context-chain"
+                          aria-label={`후보 ${index + 1}의 전체 방송 맥락과 장면 상황`}
+                        >
+                          <header>
+                            <div>
+                              <strong>전체 방송 안에서 이 장면</strong>
+                              <span>맥락·대사·화면 4장·대표 썸네일 검증 완료</span>
+                            </div>
+                            <span>{candidateContext.topicContextKo}</span>
+                          </header>
+                          <p className="rh-candidate-broadcast-flow">
+                            <strong>전체 방송 흐름</strong>
+                            {candidateContext.broadcastSummaryKo}
+                          </p>
+                          <div className="rh-candidate-context-sequence">
+                            <article>
+                              <span>직전 흐름</span>
+                              <p>{candidateContext.beforeContextKo}</p>
+                            </article>
+                            <article data-current="true">
+                              <span>검증된 후보 상황</span>
+                              <p>
+                                {candidateGeminiInsight?.eventSummaryKo ??
+                                  candidateContext.contextVerdictKo}
+                              </p>
+                            </article>
+                            <article>
+                              <span>직후 흐름</span>
+                              <p>{candidateContext.afterContextKo}</p>
+                            </article>
+                          </div>
+                          <p className="rh-candidate-reference-transcript">
+                            <strong>확인한 대사</strong>
+                            {candidateContext.transcriptKo}
+                          </p>
+                        </section>
                         {candidateGeminiInsight !== undefined && (
                           <div
                             className="rh-gemini-quick-summary"
@@ -9321,7 +9513,7 @@ function App() {
 
               {contextualCandidatePublicationReady && (
                 <p className="rh-screen-reader-only" role="status" aria-live="polite">
-                  {candidates.length}개 중 {reviewedCount}개 검토 · 승인 {approvedCount}개 · 제외 {rejectedCount}개
+                  {orderedCandidates.length}개 중 {reviewedCount}개 검토 · 승인 {approvedCount}개 · 제외 {rejectedCount}개
                 </p>
               )}
               {contextualCandidatePublicationReady && unsavedSessionWorkStarted && (
@@ -9336,7 +9528,7 @@ function App() {
               )}
 
               {contextualCandidatePublicationReady &&
-                candidates.length > 0 &&
+                orderedCandidates.length > 0 &&
                 (approvedCount > 0 || reviewCompleted) && (
                 <section className="rh-export-panel" aria-labelledby="export-title">
                   <div className="rh-export-heading">

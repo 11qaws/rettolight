@@ -1,5 +1,14 @@
 # Development Log
 
+## 2026-07-23 `0.3.45` 전체 맥락 기반 완전 검증과 후보 주석
+
+- 최종 후보의 정의를 데이터 존재 여부에서 완전한 검증 묶음으로 바꿨다. 전체 방송 흐름, 주제, 직전·직후 흐름, 참고 대사, 빠른 근거와 선택형 채팅 반응 요약을 candidate별 bounded context packet으로 만들고, 이 패킷이 없는 reservoir 항목은 후보 멀티모달 큐에 넣지 않는다.
+- Qwen/Gemini 후보 요청에 같은 context packet과 오디오·서로 다른 대표 화면 네 장을 전달한다. 응답 계약은 전체 흐름과 실제 화면·오디오의 일치 여부, 최종 추천 여부, 음악·MV·오프닝·엔딩·휴식/평범한 진행 여부를 별도 필드로 반환한다. 과거 응답은 복구할 수 있지만 새 판정 필드가 없으면 최종 후보를 통과하지 못한다.
+- 같은 화면 묶음에서 결정한 대표 썸네일 timestamp, 네 화면, 오디오 결과와 context schema를 모두 확인한 뒤에만 verification receipt를 발급한다. final publication은 receipt와 `recommend + consistent + streamer-event`를 모두 요구하며 빠른 후보, 의미 후보, 과거 승인 상태가 이 guard를 우회하지 않는다.
+- 후보 상세에 전체 방송 흐름과 `직전 → 검증된 상황 → 직후`, 확인 대사를 고정 정보 구조로 추가했다. 방송 흐름 요약에서는 최종 후보와 연결된 서술을 굵게 표시하고 실제 candidate ID에서 계산한 클릭 가능한 윗첨자 번호를 붙인다. 요약이 사건을 생략한 경우 검증된 후보 상황을 주석 문장으로 보충해 모든 최종 후보가 방송 서술과 양방향으로 연결된다.
+- 후보 insight 저장 schema를 `1.5.0`으로 올려 verification receipt와 새 판정 필드를 보존했다. context-aware Qwen revision은 v7, Gemini revision은 v8, routing revision은 v8로 분리해 이전 유료 결과를 새 완전 검증 결과로 relabel하지 않는다.
+- 최종 release gate는 strict TypeScript, ESLint warning 0, 78개 테스트 파일 807개 테스트, production Vite build와 Wrangler dry-run을 통과했다. main JS는 670.13 kB(193.46 kB gzip), CSS는 118.89 kB(20.08 kB gzip), Worker upload는 239.70 KiB(46.57 KiB gzip)다. 로컬 브라우저에서 v0.3.45, 가로 overflow 0, warning/error 로그 0을 확인했다. 이번 요청에는 배포 지시가 없으므로 commit·push·실제 Worker/Pages 배포는 실행하지 않았다.
+
 ## 2026-07-23 `0.3.44` 화면 필수 AI 큐·통합 검토 작업면·전 단계 진행률
 
 - 후보 화면 준비와 AI 호출의 경계를 다시 정의했다. 한 원본에 후보별 video/Blob URL을 반복 생성하지 않고 한 producer가 candidate source range별로 서로 다른 JPEG 4장을 준비한다. 최대 2개 AI consumer는 자기 후보의 완성 묶음을 기다린 뒤 즉시 실행하며, 네 장 중 하나라도 없으면 유료 멀티모달 호출을 보내지 않는다. 반응 정점에 가장 가까운 같은 묶음의 화면을 섬네일로 저장해 AI가 본 장면과 편집자가 보는 대표 장면을 일치시켰다.

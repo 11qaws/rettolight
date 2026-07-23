@@ -2,6 +2,7 @@ import type { CandidatePassBEvidence } from "../analysis/candidatePassB";
 import {
   CANDIDATE_PASS_B_GEMINI_MODEL_ID,
   CANDIDATE_PASS_B_GEMINI_MODEL_REVISION,
+  CANDIDATE_PASS_B_CONTEXTLESS_GEMINI_MODEL_REVISION,
   CANDIDATE_PASS_B_OLDER_GEMINI_MODEL_REVISION,
   CANDIDATE_PASS_B_PREVIOUS_GEMINI_MODEL_REVISION,
   CANDIDATE_PASS_B_PRIOR_GEMINI_MODEL_REVISION,
@@ -9,27 +10,33 @@ import {
   CANDIDATE_PASS_B_LEGACY_GEMINI_MODEL_REVISION,
   CANDIDATE_PASS_B_QWEN_MODEL_ID,
   CANDIDATE_PASS_B_QWEN_MODEL_REVISION,
+  CANDIDATE_PASS_B_CONTEXTLESS_QWEN_MODEL_REVISION,
   CANDIDATE_PASS_B_OLDER_QWEN_MODEL_REVISION,
   CANDIDATE_PASS_B_PREVIOUS_QWEN_MODEL_REVISION,
   CANDIDATE_PASS_B_PRIOR_QWEN_MODEL_REVISION,
   MAX_CANDIDATE_PASS_B_VIDEO_FRAME_BASE64_LENGTH,
   type CandidatePassBParticipantAttribution,
   type CandidatePassBParticipantPresence,
+  type CandidatePassBVerificationReceipt,
   type CandidatePassBVideoFrame,
 } from "../analysis/candidatePassBWorkerProtocol";
+import { isCandidatePassBVerificationReceipt } from "../analysis/candidateFinalVerification";
 
-export const CANDIDATE_PASS_B_INSIGHT_SCHEMA_VERSION = "1.4.0" as const;
+export const CANDIDATE_PASS_B_INSIGHT_SCHEMA_VERSION = "1.5.0" as const;
 export type CandidatePassBInsightSchemaVersion =
   | "1.0.0"
   | "1.1.0"
   | "1.2.0"
   | "1.3.0"
-  | "1.4.0";
+  | "1.4.0"
+  | "1.5.0";
 
 const SUPPORTED_INSIGHT_SCHEMA_VERSIONS = new Set<CandidatePassBInsightSchemaVersion>([
   "1.0.0",
   "1.1.0",
   "1.2.0",
+  "1.3.0",
+  "1.4.0",
   CANDIDATE_PASS_B_INSIGHT_SCHEMA_VERSION,
 ]);
 
@@ -41,6 +48,12 @@ export interface StoredCandidatePassBInsight {
   readonly participantPresence?: CandidatePassBParticipantPresence;
   readonly participantSummaryKo?: string;
   readonly identifiedParticipants?: readonly CandidatePassBParticipantAttribution[];
+  readonly clipDecision?: "recommend" | "reject" | "uncertain";
+  readonly contextConsistency?: "consistent" | "conflict" | "insufficient";
+  readonly programMaterial?:
+    | "streamer-event"
+    | "music-or-intermission"
+    | "routine-or-unclear";
 }
 
 export interface StoredCandidatePassBModelIdentity {
@@ -50,10 +63,12 @@ export interface StoredCandidatePassBModelIdentity {
     | typeof CANDIDATE_PASS_B_LEGACY_GEMINI_MODEL_ID;
   readonly revision:
     | typeof CANDIDATE_PASS_B_QWEN_MODEL_REVISION
+    | typeof CANDIDATE_PASS_B_CONTEXTLESS_QWEN_MODEL_REVISION
     | typeof CANDIDATE_PASS_B_PREVIOUS_QWEN_MODEL_REVISION
     | typeof CANDIDATE_PASS_B_PRIOR_QWEN_MODEL_REVISION
     | typeof CANDIDATE_PASS_B_OLDER_QWEN_MODEL_REVISION
     | typeof CANDIDATE_PASS_B_GEMINI_MODEL_REVISION
+    | typeof CANDIDATE_PASS_B_CONTEXTLESS_GEMINI_MODEL_REVISION
     | typeof CANDIDATE_PASS_B_PREVIOUS_GEMINI_MODEL_REVISION
     | typeof CANDIDATE_PASS_B_PRIOR_GEMINI_MODEL_REVISION
     | typeof CANDIDATE_PASS_B_OLDER_GEMINI_MODEL_REVISION
@@ -74,6 +89,10 @@ export interface CandidatePassBInsightsRecord {
   >;
   /** One impact thumbnail per candidate, kept with the analysis-session snapshot. */
   readonly thumbnailById?: Readonly<Record<string, CandidatePassBVideoFrame>>;
+  /** Locally issued proof that the saved result saw context, audio and four frames. */
+  readonly verificationReceiptById?: Readonly<
+    Record<string, CandidatePassBVerificationReceipt>
+  >;
   readonly recordedAt: string;
 }
 
@@ -114,7 +133,17 @@ function isStoredInsight(value: unknown): value is StoredCandidatePassBInsight {
     (participants === undefined ||
       (Array.isArray(participants) &&
         participants.length <= 6 &&
-        participants.every(isStoredParticipantAttribution)))
+        participants.every(isStoredParticipantAttribution))) &&
+    (value.clipDecision === undefined ||
+      ["recommend", "reject", "uncertain"].includes(value.clipDecision as string)) &&
+    (value.contextConsistency === undefined ||
+      ["consistent", "conflict", "insufficient"].includes(
+        value.contextConsistency as string,
+      )) &&
+    (value.programMaterial === undefined ||
+      ["streamer-event", "music-or-intermission", "routine-or-unclear"].includes(
+        value.programMaterial as string,
+      ))
   );
 }
 
@@ -197,11 +226,13 @@ function isStoredModelIdentity(
     Object.keys(value).sort().join(",") === "id,revision" &&
     ((value.id === CANDIDATE_PASS_B_QWEN_MODEL_ID &&
       (value.revision === CANDIDATE_PASS_B_QWEN_MODEL_REVISION ||
+        value.revision === CANDIDATE_PASS_B_CONTEXTLESS_QWEN_MODEL_REVISION ||
         value.revision === CANDIDATE_PASS_B_PREVIOUS_QWEN_MODEL_REVISION ||
         value.revision === CANDIDATE_PASS_B_PRIOR_QWEN_MODEL_REVISION ||
         value.revision === CANDIDATE_PASS_B_OLDER_QWEN_MODEL_REVISION)) ||
       (value.id === CANDIDATE_PASS_B_GEMINI_MODEL_ID &&
         (value.revision === CANDIDATE_PASS_B_GEMINI_MODEL_REVISION ||
+          value.revision === CANDIDATE_PASS_B_CONTEXTLESS_GEMINI_MODEL_REVISION ||
           value.revision === CANDIDATE_PASS_B_PREVIOUS_GEMINI_MODEL_REVISION ||
           value.revision === CANDIDATE_PASS_B_PRIOR_GEMINI_MODEL_REVISION ||
           value.revision === CANDIDATE_PASS_B_OLDER_GEMINI_MODEL_REVISION)) ||
@@ -257,6 +288,21 @@ export function assertCandidatePassBInsightsRecord(
     for (const frame of Object.values(value.thumbnailById)) {
       if (!isCandidateVideoFrame(frame)) {
         throw new TypeError("Invalid Candidate Pass B thumbnail entry.");
+      }
+    }
+  }
+  if (value.verificationReceiptById !== undefined) {
+    if (!isRecord(value.verificationReceiptById)) {
+      throw new TypeError("Invalid Candidate Pass B verification receipt map.");
+    }
+    for (const [candidateId, receipt] of Object.entries(
+      value.verificationReceiptById,
+    )) {
+      if (
+        !isNonEmptyBoundedString(candidateId, 256) ||
+        !isCandidatePassBVerificationReceipt(receipt)
+      ) {
+        throw new TypeError("Invalid Candidate Pass B verification receipt entry.");
       }
     }
   }

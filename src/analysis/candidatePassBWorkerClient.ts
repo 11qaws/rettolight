@@ -39,6 +39,8 @@ import {
   MAX_CANDIDATE_PASS_B_UNCERTAINTY_LENGTH,
 } from "./candidatePassBGemini";
 import { isCandidatePassBCastRosterId } from "./participantRoster";
+import { isCandidatePassBContextPacket } from "./candidateFinalVerification";
+import { isAnalysisLanguage } from "../domain/analysisLanguage";
 
 export {
   CANDIDATE_PASS_B_DEVICE,
@@ -336,12 +338,26 @@ function isInsight(value: unknown): boolean {
     "whyGoodClipKo",
     "uncertaintiesKo",
   ] as const;
-  const currentKeys = [...legacyKeys, "identifiedParticipants"] as const;
+  const participantKeys = [
+    ...legacyKeys,
+    "participantPresence",
+    "participantSummaryKo",
+    "identifiedParticipants",
+  ] as const;
+  const currentKeys = [
+    ...participantKeys,
+    "clipDecision",
+    "contextConsistency",
+    "programMaterial",
+  ] as const;
+  const legacyParticipantKeys = [...legacyKeys, "identifiedParticipants"] as const;
   if (
     !isRecord(value) ||
-    (!hasExactKeys(value, legacyKeys) && !hasExactKeys(value, currentKeys)) ||
+    (!hasExactKeys(value, legacyKeys) &&
+      !hasExactKeys(value, legacyParticipantKeys) &&
+      !hasExactKeys(value, participantKeys) &&
+      !hasExactKeys(value, currentKeys)) ||
     !Array.isArray(value.uncertaintiesKo) ||
-    value.uncertaintiesKo.length < 1 ||
     value.uncertaintiesKo.length > MAX_CANDIDATE_PASS_B_UNCERTAINTIES
   ) {
     return false;
@@ -370,22 +386,46 @@ function isInsight(value: unknown): boolean {
       ),
     ) &&
     new Set(uncertainties).size === uncertainties.length &&
+    (value.participantPresence === undefined ||
+      [
+        "identified",
+        "present-unidentified",
+        "none-present",
+        "insufficient-evidence",
+      ].includes(value.participantPresence as string)) &&
+    (value.participantSummaryKo === undefined ||
+      isBoundedKoreanText(
+        value.participantSummaryKo,
+        MAX_CANDIDATE_PASS_B_INSIGHT_TEXT_LENGTH,
+      )) &&
+    (value.clipDecision === undefined ||
+      ["recommend", "reject", "uncertain"].includes(value.clipDecision as string)) &&
+    (value.contextConsistency === undefined ||
+      ["consistent", "conflict", "insufficient"].includes(
+        value.contextConsistency as string,
+      )) &&
+    (value.programMaterial === undefined ||
+      ["streamer-event", "music-or-intermission", "routine-or-unclear"].includes(
+        value.programMaterial as string,
+      )) &&
     participants.length <= MAX_CANDIDATE_PASS_B_IDENTIFIED_PARTICIPANTS &&
     participants.every(isParticipantAttribution)
   );
 }
 
 function isParticipantAttribution(value: unknown): boolean {
+  const legacyKeys = [
+    "displayName",
+    "role",
+    "evidenceBasis",
+    "evidenceKo",
+    "confidence",
+    "relativeTimestampMs",
+  ] as const;
   return (
     isRecord(value) &&
-    hasExactKeys(value, [
-      "displayName",
-      "role",
-      "evidenceBasis",
-      "evidenceKo",
-      "confidence",
-      "relativeTimestampMs",
-    ]) &&
+    (hasExactKeys(value, legacyKeys) ||
+      hasExactKeys(value, [...legacyKeys, "observedFrameIndices"])) &&
     hasBoundedCodePointLength(
       value.displayName,
       MAX_CANDIDATE_PASS_B_PARTICIPANT_NAME_LENGTH,
@@ -402,7 +442,18 @@ function isParticipantAttribution(value: unknown): boolean {
     value.confidence >= 0 &&
     value.confidence <= 1 &&
     isNonNegativeSafeInteger(value.relativeTimestampMs) &&
-    value.relativeTimestampMs <= MAX_CANDIDATE_PASS_B_TARGET_DURATION_MS
+    value.relativeTimestampMs <= MAX_CANDIDATE_PASS_B_TARGET_DURATION_MS &&
+    (value.observedFrameIndices === undefined ||
+      (Array.isArray(value.observedFrameIndices) &&
+        value.observedFrameIndices.length <= MAX_CANDIDATE_PASS_B_VIDEO_FRAMES &&
+        new Set(value.observedFrameIndices).size ===
+          value.observedFrameIndices.length &&
+        value.observedFrameIndices.every(
+          (frameIndex) =>
+            Number.isSafeInteger(frameIndex) &&
+            frameIndex >= 0 &&
+            frameIndex < MAX_CANDIDATE_PASS_B_VIDEO_FRAMES,
+        )))
   );
 }
 
@@ -701,6 +752,27 @@ function normalizeInput(
         : [];
     const castRosterId =
       "castRosterId" in target ? target.castRosterId : undefined;
+    const context = "context" in target ? target.context : undefined;
+    const outputLanguage =
+      "outputLanguage" in target ? target.outputLanguage : undefined;
+    if (
+      context !== undefined &&
+      !isCandidatePassBContextPacket(context)
+    ) {
+      return new CandidatePassBWorkerError(
+        "INVALID_INPUT",
+        "후보의 방송 맥락 근거가 올바르지 않아요.",
+      );
+    }
+    if (
+      outputLanguage !== undefined &&
+      !isAnalysisLanguage(outputLanguage)
+    ) {
+      return new CandidatePassBWorkerError(
+        "INVALID_INPUT",
+        "후보 결과 언어가 올바르지 않아요.",
+      );
+    }
     if (
       castRosterId !== undefined &&
       !isCandidatePassBCastRosterId(castRosterId)
@@ -745,6 +817,8 @@ function normalizeInput(
           }
         : {}),
       ...(castRosterId === undefined ? {} : { castRosterId }),
+      ...(context === undefined ? {} : { context }),
+      ...(outputLanguage === undefined ? {} : { outputLanguage }),
     };
     if (
       normalizedTarget.startMs < 0 ||

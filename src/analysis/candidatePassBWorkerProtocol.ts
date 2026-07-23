@@ -9,8 +9,10 @@ export const CANDIDATE_PASS_B_PREVIOUS_GEMINI_MODEL_REVISION =
   "gemini-3.6-flash-grounded-frames-cast-v4-2026-07-22" as const;
 export const CANDIDATE_PASS_B_PRIOR_GEMINI_MODEL_REVISION =
   "gemini-3.6-flash-grounded-frames-cast-v5-2026-07-22" as const;
-export const CANDIDATE_PASS_B_GEMINI_MODEL_REVISION =
+export const CANDIDATE_PASS_B_CONTEXTLESS_GEMINI_MODEL_REVISION =
   "gemini-3.6-flash-grounded-frames-participants-language-v7-2026-07-23" as const;
+export const CANDIDATE_PASS_B_GEMINI_MODEL_REVISION =
+  "gemini-3.6-flash-context-verified-frames-v8-2026-07-23" as const;
 export const CANDIDATE_PASS_B_LEGACY_GEMINI_MODEL_ID =
   "gemini-3.5-flash" as const;
 export const CANDIDATE_PASS_B_LEGACY_GEMINI_MODEL_REVISION =
@@ -22,8 +24,10 @@ export const CANDIDATE_PASS_B_PREVIOUS_QWEN_MODEL_REVISION =
   "qwen3.5-omni-flash-grounded-frames-cast-v3-2026-07-22" as const;
 export const CANDIDATE_PASS_B_PRIOR_QWEN_MODEL_REVISION =
   "qwen3.5-omni-flash-grounded-frames-cast-v4-2026-07-22" as const;
-export const CANDIDATE_PASS_B_QWEN_MODEL_REVISION =
+export const CANDIDATE_PASS_B_CONTEXTLESS_QWEN_MODEL_REVISION =
   "qwen3.5-omni-flash-grounded-frames-participants-language-v6-2026-07-23" as const;
+export const CANDIDATE_PASS_B_QWEN_MODEL_REVISION =
+  "qwen3.5-omni-flash-context-verified-frames-v7-2026-07-23" as const;
 export const CANDIDATE_PASS_B_MODEL_ID = CANDIDATE_PASS_B_QWEN_MODEL_ID;
 export const CANDIDATE_PASS_B_MODEL_REVISION = CANDIDATE_PASS_B_QWEN_MODEL_REVISION;
 export const CANDIDATE_PASS_B_ROUTING_MODEL_ID =
@@ -34,8 +38,10 @@ export const CANDIDATE_PASS_B_OLDER_ROUTING_MODEL_REVISION =
   "qwen3.5-omni-flash_then_gemini-3.6-flash_bounded-v3" as const;
 export const CANDIDATE_PASS_B_PRIOR_ROUTING_MODEL_REVISION =
   "qwen3.5-omni-flash_then_gemini-3.6-flash_bounded-cast-v5" as const;
-export const CANDIDATE_PASS_B_ROUTING_MODEL_REVISION =
+export const CANDIDATE_PASS_B_CONTEXTLESS_ROUTING_MODEL_REVISION =
   "qwen3.5-omni-flash_then_gemini-3.6-flash_bounded-participants-language-v7" as const;
+export const CANDIDATE_PASS_B_ROUTING_MODEL_REVISION =
+  "qwen3.5-omni-flash_then_gemini-3.6-flash_context-verified-v8" as const;
 export const CANDIDATE_PASS_B_LEGACY_ROUTING_MODEL_REVISION =
   "qwen3.5-omni-flash_then_gemini-3.5-flash_bounded-v2" as const;
 
@@ -47,12 +53,14 @@ export function isCompatibleCandidatePassBRoutingModelRevision(
   | typeof CANDIDATE_PASS_B_PRIOR_ROUTING_MODEL_REVISION
   | typeof CANDIDATE_PASS_B_PREVIOUS_ROUTING_MODEL_REVISION
   | typeof CANDIDATE_PASS_B_OLDER_ROUTING_MODEL_REVISION
+  | typeof CANDIDATE_PASS_B_CONTEXTLESS_ROUTING_MODEL_REVISION
   | typeof CANDIDATE_PASS_B_LEGACY_ROUTING_MODEL_REVISION {
   return (
     value === CANDIDATE_PASS_B_ROUTING_MODEL_REVISION ||
     value === CANDIDATE_PASS_B_PRIOR_ROUTING_MODEL_REVISION ||
     value === CANDIDATE_PASS_B_PREVIOUS_ROUTING_MODEL_REVISION ||
     value === CANDIDATE_PASS_B_OLDER_ROUTING_MODEL_REVISION ||
+    value === CANDIDATE_PASS_B_CONTEXTLESS_ROUTING_MODEL_REVISION ||
     value === CANDIDATE_PASS_B_LEGACY_ROUTING_MODEL_REVISION
   );
 }
@@ -72,12 +80,72 @@ export const MAX_CANDIDATE_PASS_B_SOURCE_DURATION_MS = 12 * 60 * 60_000;
 export const MAX_CANDIDATE_PASS_B_TARGET_DURATION_MS = 60_000;
 export const MAX_CANDIDATE_PASS_B_VIDEO_FRAMES = 4;
 export const MAX_CANDIDATE_PASS_B_VIDEO_FRAME_BASE64_LENGTH = 360_000;
+export const CANDIDATE_PASS_B_CONTEXT_SCHEMA_VERSION = "1.0.0" as const;
+export const MAX_CANDIDATE_PASS_B_CONTEXT_TEXT_LENGTH = 4_000;
 
 export interface CandidatePassBVideoFrame {
   /** Timestamp relative to the candidate range. */
   readonly timestampMs: number;
   readonly mimeType: "image/jpeg";
   readonly dataBase64: string;
+}
+
+export type CandidatePassBReferenceTranscriptSource =
+  | "youtube-caption"
+  | "broadcast-transcript"
+  | "semantic-refinement";
+
+export type CandidatePassBContextDecision = "select" | "review";
+
+export type CandidatePassBContextCategory =
+  | "reaction"
+  | "quiet-achievement"
+  | "setup-and-payoff"
+  | "running-gag"
+  | "context-dependent"
+  | "apology-accountability";
+
+/**
+ * Bounded, source-fenced evidence handed from the whole-broadcast pass to the
+ * candidate multimodal pass. A candidate without this packet is never eligible
+ * for final publication.
+ */
+export interface CandidatePassBContextPacket {
+  readonly schemaVersion: typeof CANDIDATE_PASS_B_CONTEXT_SCHEMA_VERSION;
+  readonly transcriptSource: CandidatePassBReferenceTranscriptSource;
+  readonly transcriptKo: string;
+  readonly beforeContextKo: string;
+  readonly afterContextKo: string;
+  readonly broadcastSummaryKo: string;
+  readonly topicContextKo: string;
+  readonly fastEvidenceKo: string;
+  readonly contextDecision: CandidatePassBContextDecision;
+  readonly contextCategory: CandidatePassBContextCategory;
+  readonly contextVerdictKo: string;
+  readonly chatReactionKo: string | null;
+}
+
+export type CandidatePassBClipDecision = "recommend" | "reject" | "uncertain";
+export type CandidatePassBContextConsistency =
+  | "consistent"
+  | "conflict"
+  | "insufficient";
+export type CandidatePassBProgramMaterial =
+  | "streamer-event"
+  | "music-or-intermission"
+  | "routine-or-unclear";
+
+/** Locally issued only after the actual audio, four frames and context packet succeeded. */
+export interface CandidatePassBVerificationReceipt {
+  readonly schemaVersion: "1.0.0";
+  readonly contextSchemaVersion: typeof CANDIDATE_PASS_B_CONTEXT_SCHEMA_VERSION;
+  readonly transcriptSource: CandidatePassBReferenceTranscriptSource;
+  readonly audioReviewed: true;
+  readonly videoFrameCount: typeof MAX_CANDIDATE_PASS_B_VIDEO_FRAMES;
+  readonly thumbnailPrepared: true;
+  readonly thumbnailTimestampMs: number;
+  readonly referenceTranscriptReviewed: true;
+  readonly broadcastContextReviewed: true;
 }
 
 /**
@@ -100,6 +168,8 @@ export interface CandidatePassBTarget {
   readonly endMs: number;
   /** Optional representative screenshots sampled from this candidate. */
   readonly videoFrames?: readonly CandidatePassBVideoFrame[];
+  /** Required by the final-publication path; omitted only by legacy/test callers. */
+  readonly context?: CandidatePassBContextPacket;
   /** Optional server-known closed-set VTuber roster; never an open text prompt. */
   readonly castRosterId?: CandidatePassBCastRosterId;
   /** Language for generated editorial narration; source speech stays verbatim. */
@@ -162,6 +232,12 @@ export interface CandidatePassBInsight {
   readonly participantSummaryKo?: string;
   /** Absent only on sessions saved before insight schema 1.2.0. */
   readonly identifiedParticipants?: readonly CandidatePassBParticipantAttribution[];
+  /** Required for current results; absent only on legacy saved sessions. */
+  readonly clipDecision?: CandidatePassBClipDecision;
+  /** Whether the candidate audio/video agrees with the supplied broadcast context. */
+  readonly contextConsistency?: CandidatePassBContextConsistency;
+  /** Explicit exclusion fence for songs, MVs, openings, endings and breaks. */
+  readonly programMaterial?: CandidatePassBProgramMaterial;
 }
 
 export type CandidatePassBParticipantPresence =

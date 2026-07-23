@@ -1,10 +1,20 @@
 # ExClipper 상태·생애주기 명세
 
-- 문서 버전: 0.3.44
-- 기준 제품 계획: PRODUCT_PLAN.md 0.3.44
+- 문서 버전: 0.3.45
+- 기준 제품 계획: PRODUCT_PLAN.md 0.3.45
 - 기준일: 2026-07-23 (Asia/Seoul)
 - 적용 범위: GitHub Pages에서 실행되는 개인 편집 어시스턴트와 선택형 CHZZK 동반 수집기
 - 문서 지위: 구현 전 상태 모델의 기준 문서
+
+## `0.3.45` 완전 검증·양방향 맥락 연결 상태
+
+- `candidate reservoir`와 `final candidate projection`은 서로 다른 상태다. fast/semantic discovery는 reservoir membership만 추가한다. 편집자 카드, 번호, 승인·제외, 클립 다운로드가 참조하는 projection은 `finalizeFullyVerifiedCandidates`의 결과만 사용한다.
+- 후보별 맥락 상태는 `context-missing | context-ready`다. `context-ready`는 전체 방송 요약, 주제 구간, 직전·직후 흐름, 참고 대사와 출처, 후보 상황 판정, 빠른 근거가 모두 비어 있지 않은 bounded packet이 commit된 상태다. 전체 맥락 또는 의미 refinement가 실패한 상태를 ready로 간주하지 않는다.
+- 후보 화면·AI 상태는 `context-ready -> frame-preparing -> four-frames-ready + thumbnail-ready -> remote-review -> receipt-issued | gap`이다. AI 요청은 정확히 네 화면이 준비된 뒤에만 시작하고, receipt는 같은 request의 오디오 결과와 네 화면 중 하나인 대표 썸네일 timestamp를 확인한 뒤 발급한다.
+- `receipt-issued`는 데이터 객체가 존재한다는 뜻이 아니다. receipt에는 context schema, 참고 대사 출처, 오디오 확인, 화면 수 4, 대표 썸네일 준비와 timestamp, 전체 방송 맥락 확인이 기록되어야 한다. 과거 insight, 일부 frame, 별도 실행의 thumbnail을 합쳐 receipt를 사후 생성하는 전이는 금지한다.
+- 최종 후보 guard는 `receipt-issued && clipDecision == recommend && contextConsistency == consistent && programMaterial == streamer-event`다. 하나라도 만족하지 않으면 gap 사유를 보존하고 final projection에서 제외한다. 사람의 과거 승인이나 빠른 점수도 이 guard를 우회하지 않는다.
+- 방송 요약 주석은 final projection의 presentation state다. 각 굵은 문장 조각은 candidate ID 목록을 가지며 렌더 시 현재 final 순서의 1-based 번호로 변환한다. 주석 클릭은 해당 후보를 `ready-paused` 검토 위치로 이동할 뿐 재생·승인·경계·후보 membership을 바꾸지 않는다.
+- 저장 schema `1.5.0`은 insight, provider identity, 대표 thumbnail과 함께 verification receipt map을 보존한다. 복구 시 receipt와 candidate ID를 다시 검증하며, context packet을 현재 저장된 방송 맥락·대사 지도에서 재구성할 수 없는 후보는 final projection에 들어가지 않는다.
 
 ## `0.3.43` 맥락 입력·탐색 공개·검토 재생 상태
 

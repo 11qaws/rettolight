@@ -17,8 +17,10 @@ import {
   MAX_CANDIDATE_PASS_B_TARGET_DURATION_MS,
   MAX_CANDIDATE_PASS_B_VIDEO_FRAME_BASE64_LENGTH,
   MAX_CANDIDATE_PASS_B_VIDEO_FRAMES,
+  type CandidatePassBContextPacket,
   type CandidatePassBVideoFrame,
 } from "../analysis/candidatePassBWorkerProtocol";
+import { isCandidatePassBContextPacket } from "../analysis/candidateFinalVerification";
 import {
   isCandidatePassBCastRosterId,
   type CandidatePassBCastRosterId,
@@ -155,6 +157,7 @@ interface CandidateInsightRequest {
   readonly videoFrames: readonly CandidatePassBVideoFrame[];
   readonly castRosterId: CandidatePassBCastRosterId | null;
   readonly outputLanguage: AnalysisLanguage;
+  readonly context: CandidatePassBContextPacket | null;
 }
 
 type FetchImplementation = (
@@ -345,6 +348,7 @@ function parseCandidateRequest(bytes: Uint8Array): CandidateInsightRequest | nul
       "audioBase64",
       "candidateDurationMs",
       "videoFrames",
+      "context",
       "castRosterId",
       "outputLanguage",
     ].includes(key)) ||
@@ -387,6 +391,8 @@ function parseCandidateRequest(bytes: Uint8Array): CandidateInsightRequest | nul
   if (castRosterId !== null && !isCandidatePassBCastRosterId(castRosterId)) {
     return null;
   }
+  const context = "context" in value ? value.context : null;
+  if (context !== null && !isCandidatePassBContextPacket(context)) return null;
   const outputLanguage = "outputLanguage" in value ? value.outputLanguage : "ko";
   if (!isAnalysisLanguage(outputLanguage)) return null;
   return {
@@ -395,6 +401,7 @@ function parseCandidateRequest(bytes: Uint8Array): CandidateInsightRequest | nul
     videoFrames,
     castRosterId,
     outputLanguage,
+    context,
   };
 }
 
@@ -764,6 +771,7 @@ async function attemptCandidateProvider(
             candidateRequest.videoFrames,
             candidateRequest.castRosterId,
             candidateRequest.outputLanguage,
+            candidateRequest.context,
           )
         : buildCandidatePassBGeminiRequestBody(
             candidateRequest.audioBase64,
@@ -771,6 +779,7 @@ async function attemptCandidateProvider(
             candidateRequest.videoFrames,
             candidateRequest.castRosterId,
             candidateRequest.outputLanguage,
+            candidateRequest.context,
           ),
     );
   } catch {

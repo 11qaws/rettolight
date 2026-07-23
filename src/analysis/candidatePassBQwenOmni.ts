@@ -11,6 +11,7 @@ import {
   MAX_CANDIDATE_PASS_B_TARGET_DURATION_MS,
   MAX_CANDIDATE_PASS_B_VIDEO_FRAME_BASE64_LENGTH,
   MAX_CANDIDATE_PASS_B_VIDEO_FRAMES,
+  type CandidatePassBContextPacket,
   type CandidatePassBVideoFrame,
 } from "./candidatePassBWorkerProtocol";
 import type { CandidatePassBCastRosterId } from "./participantRoster";
@@ -104,12 +105,39 @@ function normalizedQwenJson(
     ? value.participantPresence as string
     : null;
   const participantSummaryKo = normalizedNarrative(value.participantSummaryKo, 600, outputLanguage);
+  const clipDecision = value.clipDecision === undefined
+    ? "uncertain"
+    : ["recommend", "reject", "uncertain"].includes(value.clipDecision as string)
+    ? value.clipDecision as "recommend" | "reject" | "uncertain"
+    : null;
+  const contextConsistency = value.contextConsistency === undefined
+    ? "insufficient"
+    : ["consistent", "conflict", "insufficient"].includes(
+        value.contextConsistency as string,
+      )
+    ? value.contextConsistency as "consistent" | "conflict" | "insufficient"
+    : null;
+  const programMaterial = value.programMaterial === undefined
+    ? "routine-or-unclear"
+    : [
+        "streamer-event",
+        "music-or-intermission",
+        "routine-or-unclear",
+      ].includes(value.programMaterial as string)
+    ? value.programMaterial as
+        | "streamer-event"
+        | "music-or-intermission"
+        | "routine-or-unclear"
+    : null;
   if (
     eventSummaryKo === null ||
     reactionSummaryKo === null ||
     whyGoodClipKo === null ||
     participantPresence === null ||
-    participantSummaryKo === null
+    participantSummaryKo === null ||
+    clipDecision === null ||
+    contextConsistency === null ||
+    programMaterial === null
   ) {
     return null;
   }
@@ -246,6 +274,9 @@ function normalizedQwenJson(
     participantPresence,
     participantSummaryKo,
     identifiedParticipants,
+    clipDecision,
+    contextConsistency,
+    programMaterial,
   });
 }
 
@@ -277,6 +308,7 @@ export function buildCandidatePassBQwenOmniRequestBody(
   videoFrames: readonly CandidatePassBVideoFrame[] = [],
   castRosterId: CandidatePassBCastRosterId | null = null,
   outputLanguage: AnalysisLanguage = "ko",
+  context: CandidatePassBContextPacket | null = null,
 ): CandidatePassBQwenOmniRequestBody {
   if (
     typeof audioBase64 !== "string" ||
@@ -292,7 +324,7 @@ export function buildCandidatePassBQwenOmniRequestBody(
   const qwenGroundingRules = frames.length === 0
     ? "\n대표 화면이 제공되지 않았습니다. 화면 내용, 비명의 원인, 표정, 몸짓, 게임 상황을 추측하지 말고 시각 정보가 없다고 uncertaintiesKo에 적으세요."
     : "\n대표 화면에서 실제로 확인되는 것만 서술하세요. 작아서 선명하게 읽히지 않는 글자는 인용하지 말고, 아바타 이미지의 프레임별 차이만으로 몸짓·행동·감정을 단정하지 마세요. 프레임 사이의 움직임과 인과관계는 보이지 않으므로 대사와 화면 양쪽에서 확인되지 않으면 uncertaintiesKo에 남기세요.";
-  const responseShape = `\n\n다음 JSON 형식만 출력하세요:\n{"segments":[{"relativeStartMs":0,"relativeEndMs":1000,"text":"실제 한국어 발화"}],"eventSummaryKo":"화면 장면·사건·반응 200~300자","reactionSummaryKo":"관찰한 반응 과정","whyGoodClipKo":"클립 가치 또는 제외 이유","uncertaintiesKo":[],"participantPresence":"identified","participantSummaryKo":"확인된 인물 또는 등장인물 없음","identifiedParticipants":[{"displayName":"화면이나 호명으로 확인한 이름","role":"streamer","evidenceBasis":"on-screen-name","evidenceKo":"화면 자막에 이름이 표시됨","confidence":0.9,"relativeTimestampMs":5000,"observedFrameIndices":[0,1]}]}`;
+  const responseShape = `\n\n다음 JSON 형식만 출력하세요:\n{"segments":[{"relativeStartMs":0,"relativeEndMs":1000,"text":"실제 한국어 발화"}],"eventSummaryKo":"전체 흐름 속 화면 장면·사건·반응 200~300자","reactionSummaryKo":"관찰한 반응 과정","whyGoodClipKo":"클립 가치 또는 제외 이유","uncertaintiesKo":[],"participantPresence":"identified","participantSummaryKo":"확인된 인물 또는 등장인물 없음","identifiedParticipants":[{"displayName":"화면이나 호명으로 확인한 이름","role":"streamer","evidenceBasis":"on-screen-name","evidenceKo":"화면 자막에 이름이 표시됨","confidence":0.9,"relativeTimestampMs":5000,"observedFrameIndices":[0,1]}],"clipDecision":"recommend","contextConsistency":"consistent","programMaterial":"streamer-event"}`;
   return {
     model: CANDIDATE_PASS_B_QWEN_MODEL_ID,
     messages: [{
@@ -319,7 +351,7 @@ export function buildCandidatePassBQwenOmniRequestBody(
         ]),
         {
           type: "text",
-          text: `${buildCandidatePassBPrompt(candidateDurationMs, frames.length, castRosterId, outputLanguage)}${qwenGroundingRules}\nDo not mix Chinese or Japanese characters into narrative text.${responseShape}`,
+          text: `${buildCandidatePassBPrompt(candidateDurationMs, frames.length, castRosterId, outputLanguage, context)}${qwenGroundingRules}\nDo not mix Chinese or Japanese characters into narrative text.${responseShape}`,
         },
       ],
     }],

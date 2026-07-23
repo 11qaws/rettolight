@@ -55,6 +55,7 @@ import {
 } from "./candidatePassBWorkerProtocol";
 import { isAnalysisLanguage } from "../domain/analysisLanguage";
 import { isCandidatePassBCastRosterId } from "./participantRoster";
+import { isCandidatePassBContextPacket } from "./candidateFinalVerification";
 
 declare const self: DedicatedWorkerGlobalScope;
 
@@ -239,6 +240,7 @@ function isValidTarget(
       "startMs",
       "endMs",
       "videoFrames",
+      "context",
       "castRosterId",
       "outputLanguage",
     ].includes(key))
@@ -260,6 +262,12 @@ function isValidTarget(
     frame.dataBase64.length > 0 &&
     frame.dataBase64.length <= MAX_CANDIDATE_PASS_B_VIDEO_FRAME_BASE64_LENGTH
   )) {
+    return false;
+  }
+  if (
+    "context" in value &&
+    !isCandidatePassBContextPacket(value.context)
+  ) {
     return false;
   }
   if (
@@ -651,6 +659,7 @@ async function analyzeCandidateWithRemoteAi(
         target.videoFrames ?? [],
         target.castRosterId ?? null,
         target.outputLanguage ?? "ko",
+        target.context ?? null,
       ),
     );
 

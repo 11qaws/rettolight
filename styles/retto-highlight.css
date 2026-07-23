@@ -4940,6 +4940,43 @@
   white-space: pre-line;
 }
 
+.rh-context-cited-summary {
+  margin: 0;
+}
+
+.rh-context-cited-summary-part[data-cited="true"] strong {
+  color: var(--text1);
+  font-weight: 850;
+}
+
+.rh-context-cited-summary-part sup {
+  margin-left: 2px;
+  vertical-align: super;
+}
+
+.rh-context-cited-summary-part sup button {
+  min-width: 19px;
+  height: 19px;
+  padding: 0 5px;
+  border: 1px solid color-mix(in srgb, var(--accentBd) 82%, var(--border));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 11%, var(--bg));
+  color: var(--accentT);
+  font: inherit;
+  font-size: .65rem;
+  font-weight: 900;
+  line-height: 17px;
+  cursor: pointer;
+}
+
+.rh-context-cited-summary-part sup button:hover,
+.rh-context-cited-summary-part sup button:focus-visible {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: white;
+  outline: none;
+}
+
 .rh-context-host-name {
   margin-bottom: 7px;
   color: var(--accentT);
@@ -5256,11 +5293,101 @@
 .rh-candidate-main > .rh-candidate-meta { order: 1; }
 .rh-candidate-main > .rh-candidate-title { order: 2; }
 .rh-candidate-main > .rh-candidate-reason { order: 3; }
-.rh-candidate-main > .rh-gemini-quick-summary { order: 4; }
-.rh-candidate-main > .rh-inline-actions { order: 5; }
-.rh-candidate-main > .rh-boundary-editor { order: 6; }
-.rh-candidate-main > .rh-candidate-evidence { order: 7; }
-.rh-candidate-main > .rh-notice { order: 8; }
+.rh-candidate-main > .rh-candidate-context-chain { order: 4; }
+.rh-candidate-main > .rh-gemini-quick-summary { order: 5; }
+.rh-candidate-main > .rh-inline-actions { order: 6; }
+.rh-candidate-main > .rh-boundary-editor { order: 7; }
+.rh-candidate-main > .rh-candidate-evidence { order: 8; }
+.rh-candidate-main > .rh-notice { order: 9; }
+
+.rh-candidate-context-chain {
+  margin-top: 12px;
+  padding: 14px;
+  border: 1px solid color-mix(in srgb, var(--accentBd) 74%, var(--border));
+  border-radius: var(--rh-radius-md);
+  background: color-mix(in srgb, var(--accent) 4%, var(--bg));
+}
+
+.rh-candidate-context-chain > header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(180px, auto);
+  align-items: start;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.rh-candidate-context-chain > header > div {
+  display: grid;
+  gap: 2px;
+}
+
+.rh-candidate-context-chain > header strong {
+  color: var(--text1);
+  font-size: .875rem;
+}
+
+.rh-candidate-context-chain > header span,
+.rh-candidate-context-sequence article > span {
+  color: var(--text4);
+  font-size: .6875rem;
+  font-weight: 800;
+}
+
+.rh-candidate-context-chain > header > span {
+  max-width: 360px;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--accentT);
+  text-align: right;
+}
+
+.rh-candidate-broadcast-flow,
+.rh-candidate-reference-transcript {
+  display: grid;
+  grid-template-columns: 110px minmax(0, 1fr);
+  gap: 10px;
+  margin: 0;
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
+  color: var(--text2);
+  font-size: .75rem;
+  line-height: 1.6;
+}
+
+.rh-candidate-broadcast-flow strong,
+.rh-candidate-reference-transcript strong {
+  color: var(--text1);
+}
+
+.rh-candidate-context-sequence {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin: 2px 0;
+}
+
+.rh-candidate-context-sequence article {
+  min-width: 0;
+  min-height: 112px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--bg);
+}
+
+.rh-candidate-context-sequence article[data-current="true"] {
+  border-color: color-mix(in srgb, var(--accent) 54%, var(--border));
+  background: color-mix(in srgb, var(--accent) 7%, var(--bg));
+}
+
+.rh-candidate-context-sequence p {
+  margin: 5px 0 0;
+  color: var(--text2);
+  font-size: .75rem;
+  line-height: 1.55;
+}
 
 .rh-inline-actions {
   position: sticky;
@@ -5458,6 +5585,21 @@
   .rh-candidate-card--signal {
     grid-template-columns: 38px minmax(0, 1fr);
     padding: 14px;
+  }
+
+  .rh-candidate-context-chain > header,
+  .rh-candidate-broadcast-flow,
+  .rh-candidate-reference-transcript {
+    grid-template-columns: 1fr;
+  }
+
+  .rh-candidate-context-chain > header > span {
+    max-width: none;
+    text-align: left;
+  }
+
+  .rh-candidate-context-sequence {
+    grid-template-columns: 1fr;
   }
 
   .rh-confidence {
