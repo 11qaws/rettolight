@@ -9,7 +9,7 @@
 - 방송 맥락 결과는 하나의 카드 안에서 `방송 흐름`과 `주 진행자의 진행 방식`으로 역할을 분리했다. 전자는 시간순 사건과 주제 전환만, 후자는 반복 관찰된 말투·상호작용·반응 패턴과 한계만 담는다. 한국어 결과에 의도하지 않은 한자 script가 섞이면 canonical 성공으로 저장하지 않게 후보·전체 맥락 parser를 강화했다.
 - 우상단에 분석 시작 전 한국어/영어 선택을 추가했다. 선택값은 후보 및 전체 맥락 요청에 포함되고 분석 시작 뒤 잠겨 한 세션의 UI와 AI 서술이 섞이지 않는다. 대사 evidence는 편집 근거이므로 원문을 유지한다.
 - 실시간 분석 패널을 1단계 `빠른 탐색`, 2단계 `전체 맥락`, 3단계 `후보 종합`에서 동일하게 사용한다. 1단계는 화면·오디오 worker 비율, 2단계는 전사 수집 5~70%와 맥락 복구/해석 상태, 3단계는 주제 공개와 Pass B 비율을 같은 7px 막대에 투영한다. 전사 완료 뒤 모델 응답을 기다리는 동안 막대가 사라지던 틈은 84% 해석 상태로 유지하되 모델 내부 토큰 진행을 가짜로 세분화하지 않는다.
-- strict TypeScript, ESLint warning 0, 75개 테스트 파일 801개 테스트를 통과했다. production build는 main JS 657.23 kB(190.05 kB gzip), CSS 116.15 kB(19.67 kB gzip)이며 Wrangler dry-run은 231.96 KiB(45.01 KiB gzip)로 통과했다. Worker `ab78ec7a-4c04-487b-85bd-112b11f8e1f8`을 배포한 뒤 `/healthz`의 Qwen·Gemini 준비 상태와 CHZZK replay 13996057 → 교환학생 메인 채널 ID 응답을 운영 origin에서 확인했다. 로컬 브라우저는 v0.3.44, 1,280px 가로 overflow 없음, 2단계 막대 72%·8px 실측, warning/error 0개를 확인했다. Pages commit·workflow·공개 확인은 아래 배포 기록에 이어서 남긴다.
+- strict TypeScript, ESLint warning 0, 75개 테스트 파일 801개 테스트를 통과했다. production build는 main JS 657.23 kB(190.05 kB gzip), CSS 116.15 kB(19.67 kB gzip)이며 Wrangler dry-run은 231.96 KiB(45.01 KiB gzip)로 통과했다. Worker `ab78ec7a-4c04-487b-85bd-112b11f8e1f8`을 배포한 뒤 `/healthz`의 Qwen·Gemini 준비 상태와 CHZZK replay 13996057 → 교환학생 메인 채널 ID 응답을 운영 origin에서 확인했다. 기능 commit `50814ce`의 GitHub Pages workflow `29970192487`은 build·deploy를 모두 통과했고 공개 `index-JY_TUwFi.js`가 v0.3.44를 제공한다. 공개 브라우저에서 1,280px 가로 overflow 없음, 저장 결과의 2단계 막대 72%·8px 실측, warning/error 0개를 확인했다.
 
 ## 2026-07-23 `0.3.42` 원본 확인·분석 타임라인 준비 작업대
 
