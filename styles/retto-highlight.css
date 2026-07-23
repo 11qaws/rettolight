@@ -1544,6 +1544,70 @@
   font-size: .75rem;
 }
 
+.ex-seg {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.ex-seg > button {
+  padding: 6px 12px;
+  border: 0;
+  border-radius: var(--ex-radius-sm);
+  background: transparent;
+  color: var(--text3);
+  font-size: var(--ex-font-xs);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.ex-seg > button:hover {
+  color: var(--text1);
+  background: var(--bg2);
+}
+
+.ex-seg > button.on {
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg));
+  color: var(--accentT);
+}
+
+.ex-seg > button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.ex-seg-keys {
+  margin-left: auto;
+  padding-right: 2px;
+  color: var(--text4);
+  font-size: var(--ex-font-2xs);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.ex-tabpane {
+  margin-top: 12px;
+}
+
+.ex-tabpane-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.rh-candidate-main > .ex-seg { order: 3; }
+.rh-candidate-main > .ex-tabpane { order: 4; }
+
+@media (max-width: 520px) {
+  .ex-seg-keys {
+    display: none;
+  }
+}
+
 .rh-interpretation-badge {
   display: inline-flex;
   padding: 2px 7px;
