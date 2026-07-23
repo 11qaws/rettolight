@@ -372,6 +372,10 @@ import {
   transcriptPhaseFor,
 } from "./app/transcriptPhase";
 import {
+  estimateRemainingMs,
+  formatRemainingLabel,
+} from "./app/progressEstimate";
+import {
   nextUnreviewedCandidateId,
   reviewDecisionAdvances,
 } from "./app/reviewNavigation";
@@ -381,7 +385,7 @@ type AnalysisSelectionSummary = DurableAnalysisSelectionSummary;
 type AnalysisCoverageSummary = DurableAnalysisCoverageSummary;
 type AnalysisGapApprovalEvidence = DurableAnalysisGapApprovalEvidence;
 
-const APP_VERSION = "0.4.3";
+const APP_VERSION = "0.4.4";
 const PERSISTENCE_SCHEMA_VERSION = "0.3.0";
 const SIGNAL_ENGINE_VERSION =
   "streamer-reaction-fast-pass-v5-chat-fallback-music-confirmation";
@@ -446,6 +450,13 @@ function App() {
   const [analysisProgress, setAnalysisProgress] = useState<LocalVideoVisualAnalysisProgress | null>(null);
   const [audioAnalysisProgress, setAudioAnalysisProgress] =
     useState<LocalAudioReactionAnalysisProgress | null>(null);
+  /**
+   * Wall-clock anchor for the fast-scan ETA. A ref (not state) because it is
+   * read once per tick rather than driving its own render; the tick below
+   * is what causes the elapsed-time label to advance.
+   */
+  const analysisStartedAtMsRef = useRef<number | null>(null);
+  const [progressClockNowMs, setProgressClockNowMs] = useState<number | null>(null);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
   const [candidatePassBRun, setCandidatePassBRun] =
     useState<CandidatePassBRunState | null>(null);
@@ -774,6 +785,21 @@ function App() {
     analysisCommitPending,
     runStatus: analysisRun?.status ?? null,
   });
+  useEffect(() => {
+    if (!analysisBusy) {
+      analysisStartedAtMsRef.current = null;
+      setProgressClockNowMs(null);
+      return;
+    }
+    if (analysisStartedAtMsRef.current === null) {
+      analysisStartedAtMsRef.current = Date.now();
+    }
+    setProgressClockNowMs(Date.now());
+    const timer = globalThis.setInterval(() => {
+      setProgressClockNowMs(Date.now());
+    }, 4_000);
+    return () => globalThis.clearInterval(timer);
+  }, [analysisBusy]);
   const candidatePassBBusy =
     candidatePassBStartPending ||
     (candidatePassBRun !== null &&
@@ -1603,20 +1629,23 @@ function App() {
             )}/${timelineSemanticChapters.length} topics on the timeline`)
           : analysisLanguage === "ko" ? detailedReviewPhaseLabel : "Reviewing candidate visuals, dialogue, and participants"
         : analysisLanguage === "ko" ? finalSelectionPhaseLabel : `${remainingReviewCount} candidates awaiting review · ${approvedCount} selected`;
-  const liveAnalysisProgressValue: number =
+  /**
+   * A stalled-looking bar was a fabricated number, not a stall: 0.02, 0.76,
+   * 0.84, 0.72 and 0.08 were constants standing in for stages with no
+   * measured completion fraction. Those branches now return null, and the
+   * `<progress>` elements below render indeterminate (no `value`) instead of
+   * jumping to a number that never moves.
+   */
+  const liveAnalysisProgressValue: number | null =
     liveAnalysisStageNumber === 1
       ? (analysisProgress !== null || audioAnalysisProgress !== null)
         ? ((analysisProgress?.ratio ?? 0) + (audioAnalysisProgress?.ratio ?? 0)) /
           ((analysisProgress === null ? 0 : 1) + (audioAnalysisProgress === null ? 0 : 1))
-        : 0.02
+        : null
       : liveAnalysisStageNumber === 2
       ? broadcastTranscriptStatus === "running"
         ? 0.05 + broadcastTranscriptProgressRatio * 0.65
-        : broadcastContextStatus === "restoring"
-          ? 0.76
-          : broadcastContextStatus === "running"
-            ? 0.84
-            : 0.72
+        : null
       : liveAnalysisStageNumber === 3
         ? !timelineTopicRevealComplete && timelineSemanticChapters.length > 0
           ? Math.min(
@@ -1626,10 +1655,71 @@ function App() {
             )
           : candidatePassBBusy
             ? candidatePassBProgressRatio
-            : 0.08
+            : null
         : orderedCandidates.length === 0
           ? 1
           : reviewedCount / orderedCandidates.length;
+  const liveAnalysisProgressBarProps =
+    liveAnalysisProgressValue === null ? {} : { value: liveAnalysisProgressValue };
+  /**
+   * The fast scan (local CPU) and the uniform transcript prefetch (network,
+   * since 0.4.2) run concurrently, but the entry-workspace panel only ever
+   * showed the scan — the parallel transcript work was invisible until the
+   * scan finished and the stage counter advanced. These three tracks report
+   * what is actually running right now instead of a single serial stage.
+   *
+   * Keep this in sync with MAX_IN_FLIGHT_TRANSCRIPTIONS in
+   * broadcastTranscript.worker.ts; it is not imported because that module is
+   * bundled as a worker entry, not a shared library.
+   */
+  const transcriptMaxConcurrencyLabel = 4;
+  const analysisElapsedMs =
+    analysisStartedAtMsRef.current === null || progressClockNowMs === null
+      ? 0
+      : Math.max(0, progressClockNowMs - analysisStartedAtMsRef.current);
+  const fastScanTrackRatio =
+    analysisProgress !== null || audioAnalysisProgress !== null
+      ? ((analysisProgress?.ratio ?? 0) + (audioAnalysisProgress?.ratio ?? 0)) /
+        ((analysisProgress === null ? 0 : 1) + (audioAnalysisProgress === null ? 0 : 1))
+      : 0;
+  const fastScanTrackStatus =
+    audioAnalysisProgress !== null
+      ? `${formatDuration(audioAnalysisProgress.decodedThroughMs)} / ${formatDuration(audioAnalysisProgress.sourceDurationMs)}`
+      : analysisProgress !== null
+        ? `${analysisProgress.completedSampleCount.toLocaleString("ko-KR")}/${analysisProgress.totalSampleCount.toLocaleString("ko-KR")}`
+        : ui("준비 중", "Preparing");
+  const transcriptTrackDone =
+    broadcastTranscriptStatus === "completed" ||
+    broadcastTranscriptStatus === "completedWithGaps";
+  const transcriptTrackStatus = transcriptTrackDone
+    ? ui("완료", "Complete")
+    : broadcastTranscriptProgress !== null
+      ? ui(
+          `표본 ${Math.min(broadcastTranscriptProgress.totalCount, broadcastTranscriptProgress.completedCount + 1)}/${broadcastTranscriptProgress.totalCount} · 동시 ${transcriptMaxConcurrencyLabel}`,
+          `Sample ${Math.min(broadcastTranscriptProgress.totalCount, broadcastTranscriptProgress.completedCount + 1)}/${broadcastTranscriptProgress.totalCount} · ${transcriptMaxConcurrencyLabel} at once`,
+        )
+      : broadcastTranscriptStatus === "running"
+        ? ui("준비 중", "Preparing")
+        : ui("대기 중", "Waiting");
+  const transcriptTrackRatio = broadcastTranscriptProgressRatio;
+  const chatTrackDone = chatImportStatus !== "reading";
+  const chatTrackStatus =
+    chatImportStatus === "reading"
+      ? ui("읽는 중", "Reading")
+      : chatImport !== null
+        ? ui(
+            `${chatImport.messages.length.toLocaleString("ko-KR")}줄`,
+            `${chatImport.messages.length.toLocaleString("en-US")} lines`,
+          )
+        : chatImportStatus === "failed"
+          ? ui("가져오기 실패 · 계속 진행", "Import failed · continuing")
+          : ui("선택 사항", "Optional");
+  const progressRemainingEstimate = estimateRemainingMs({
+    sourceDurationMs: boundarySourceDurationMs,
+    elapsedMs: analysisElapsedMs,
+    ratio: analysisProgress !== null || audioAnalysisProgress !== null ? fastScanTrackRatio : null,
+  });
+  const progressRemainingLabel = formatRemainingLabel(progressRemainingEstimate);
   const liveAnalysisPhaseSteps = [
     {
       number: 1,
@@ -6445,45 +6535,44 @@ function App() {
             )}
             {analysisBusy && (
               <section
-                className="rh-live-analysis-panel"
+                className="rh-live-analysis-panel rh-progress-tracks-panel"
                 data-state="active"
                 aria-label="현재 AI 분석 진행 상황"
                 aria-live="polite"
               >
-                <div className="rh-live-analysis-current">
-                  <span className="rh-live-analysis-number" aria-hidden="true">
-                    {liveAnalysisStageNumber}
-                  </span>
-                  <div>
-                    <p className="rh-eyebrow">{ui("현재 진행", "Current progress")} · {liveAnalysisStageNumber}/4</p>
-                    <strong>{liveAnalysisStageTitle}</strong>
-                    <small>{liveAnalysisStageDetail}</small>
-                  </div>
-                  <span className="rh-live-analysis-mode">{ui("자동 진행", "Automatic")}</span>
+                <div className="rh-progress-head">
+                  <p className="rh-eyebrow">{ui("오늘 방송 분석 중", "Analyzing today's broadcast")}</p>
+                  <span className="rh-progress-eta">{progressRemainingLabel}</span>
                 </div>
-                <progress
-                  className="rh-live-analysis-progress"
-                  max={1}
-                  value={liveAnalysisProgressValue}
-                  aria-label={ui("현재 분석 단계 진행률", "Current analysis stage progress")}
-                />
-                <ol className="rh-live-analysis-rail" aria-label={ui("전체 분석 순서", "Analysis workflow")}>
-                  {liveAnalysisPhaseSteps.map((step) => (
-                    <li key={step.number} data-state={step.state}>
-                      <span aria-hidden="true">{step.number}</span>
-                      <strong>{step.label}</strong>
-                      <small>
-                        {step.state === "complete"
-                          ? ui("완료", "Complete")
-                          : step.state === "active"
-                            ? ui("진행 중", "In progress")
-                            : step.state === "error"
-                              ? ui("확인 필요", "Needs attention")
-                              : ui("다음 단계", "Next")}
-                      </small>
-                    </li>
-                  ))}
-                </ol>
+                <div className="rh-progress-tracks">
+                  <div className="rh-progress-track" data-done={fastScanTrackRatio >= 1}>
+                    <span className="rh-progress-track-label">{ui("반응 신호", "Reaction signals")}</span>
+                    <div className="rh-progress-track-bar">
+                      <i style={{ width: `${Math.round(Math.min(1, Math.max(0, fastScanTrackRatio)) * 100)}%` }} />
+                    </div>
+                    <span className="rh-progress-track-status">{fastScanTrackStatus}</span>
+                  </div>
+                  <div className="rh-progress-track" data-done={transcriptTrackDone}>
+                    <span className="rh-progress-track-label">{ui("대사 인식", "Transcription")}</span>
+                    <div className="rh-progress-track-bar">
+                      <i style={{ width: `${Math.round(Math.min(1, Math.max(0, transcriptTrackRatio)) * 100)}%` }} />
+                    </div>
+                    <span className="rh-progress-track-status">{transcriptTrackStatus}</span>
+                  </div>
+                  <div className="rh-progress-track" data-done={chatTrackDone}>
+                    <span className="rh-progress-track-label">{ui("채팅", "Chat")}</span>
+                    <div className="rh-progress-track-bar">
+                      <i style={{ width: chatTrackDone ? "100%" : "0%" }} />
+                    </div>
+                    <span className="rh-progress-track-status">{chatTrackStatus}</span>
+                  </div>
+                </div>
+                <p className="rh-progress-keepopen">
+                  {ui(
+                    "이 탭을 열어 두면 계속 진행돼요. 닫으면 처음부터 다시 분석해야 해요.",
+                    "Keep this tab open — closing it restarts the analysis from the beginning.",
+                  )}
+                </p>
                 {analysisCanBeCancelled && (
                   <button className="btn btn-secondary rh-live-analysis-cancel" type="button" onClick={cancelAnalysis}>
                     {ui("안전하게 취소", "Cancel safely")}
@@ -6983,7 +7072,7 @@ function App() {
                 <progress
                   className="rh-live-analysis-progress"
                   max={1}
-                  value={liveAnalysisProgressValue}
+                  {...liveAnalysisProgressBarProps}
                   aria-label={ui("현재 분석 단계 진행률", "Current analysis stage progress")}
                 />
                 <ol className="rh-live-analysis-rail" aria-label={ui("전체 분석 순서", "Analysis workflow")}>
