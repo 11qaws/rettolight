@@ -40,8 +40,19 @@ interface ActiveTask {
   readonly identity: BroadcastTranscriptWorkerIdentity;
   cancelled: boolean;
   input: Input<BlobSource> | null;
-  fetchController: AbortController | null;
+  readonly fetchControllers: Set<AbortController>;
 }
+
+/**
+ * How many transcription requests may be in flight at once.
+ *
+ * Decoding a chunk is local CPU work and transcribing it is a remote round
+ * trip, so awaiting each response before decoding the next left one side idle
+ * the whole time. Overlapping them is bounded by the proxy's rate limit
+ * (30 requests per 60 seconds), not by anything in this worker, so a small
+ * window is enough to stay near that ceiling without provoking 429s.
+ */
+const MAX_IN_FLIGHT_TRANSCRIPTIONS = 3;
 
 let activeTask: ActiveTask | null = null;
 
@@ -147,8 +158,10 @@ function isValidCancelRequest(
 }
 
 function disposeTask(task: ActiveTask): void {
-  task.fetchController?.abort();
-  task.fetchController = null;
+  for (const controller of task.fetchControllers) {
+    controller.abort();
+  }
+  task.fetchControllers.clear();
   if (task.input !== null) {
     try {
       task.input.dispose();
@@ -309,6 +322,7 @@ async function runAnalyze(
     let successfulCount = 0;
     let processedCount = 0;
     let gapCount = 0;
+    const inFlight = new Set<Promise<void>>();
     const chronologicalChunks = [...request.chunks].sort(
       (left, right) =>
         left.sourceStartMs - right.sourceStartMs ||
@@ -369,48 +383,66 @@ async function runAnalyze(
         CANDIDATE_PASS_B_SAMPLE_RATE_HZ,
       );
       pcm.fill(0);
-      task.fetchController = new AbortController();
-      let semanticSeed = false;
-      try {
-        const result = await requestBroadcastTranscriptQwenChunk(
-          encodeCandidatePassBBase64(wav),
-          chunk.sourceStartMs,
-          durationMs,
-          { signal: task.fetchController.signal },
-        );
+      const audioBase64 = encodeCandidatePassBBase64(wav);
+      wav.fill(0);
+
+      const controller = new AbortController();
+      task.fetchControllers.add(controller);
+      const chunkId = chunk.chunkId;
+      const inFlightRequest = (async (): Promise<void> => {
+        try {
+          const result = await requestBroadcastTranscriptQwenChunk(
+            audioBase64,
+            chunk.sourceStartMs,
+            durationMs,
+            { signal: controller.signal },
+          );
+          if (task.cancelled) return;
+          successfulCount += 1;
+          post({
+            type: "broadcast-transcript-partial",
+            identity: task.identity,
+            chunkId,
+            result,
+          });
+          // Pulling neighbours forward is a recall heuristic, never a scoring
+          // input, so applying it when the response lands rather than before
+          // the next decode costs nothing but the ordering of exploration.
+          if (shouldExpandBroadcastContextChunk(result) && pendingChunks.length > 0) {
+            pendingChunks = [
+              ...prioritizeAdjacentTranscriptChunks(
+                pendingChunks,
+                chronologicalChunks,
+                chunkId,
+              ),
+            ];
+          }
+        } catch {
+          if (task.cancelled) return;
+          gapCount += 1;
+          post({
+            type: "broadcast-transcript-gap",
+            identity: task.identity,
+            chunkId,
+            reason: "transcription-failed",
+          });
+        } finally {
+          task.fetchControllers.delete(controller);
+          processedCount += 1;
+        }
+      })();
+      inFlight.add(inFlightRequest);
+      // The body swallows its own failures, so settling always means done.
+      void inFlightRequest.then(() => inFlight.delete(inFlightRequest));
+
+      if (inFlight.size >= MAX_IN_FLIGHT_TRANSCRIPTIONS) {
+        await Promise.race(inFlight);
         if (task.cancelled) return;
-        successfulCount += 1;
-        semanticSeed = shouldExpandBroadcastContextChunk(result);
-        post({
-          type: "broadcast-transcript-partial",
-          identity: task.identity,
-          chunkId: chunk.chunkId,
-          result,
-        });
-      } catch {
-        if (task.cancelled) return;
-        gapCount += 1;
-        post({
-          type: "broadcast-transcript-gap",
-          identity: task.identity,
-          chunkId: chunk.chunkId,
-          reason: "transcription-failed",
-        });
-      } finally {
-        task.fetchController = null;
-        wav.fill(0);
-      }
-      processedCount += 1;
-      if (semanticSeed && pendingChunks.length > 0) {
-        pendingChunks = [
-          ...prioritizeAdjacentTranscriptChunks(
-            pendingChunks,
-            chronologicalChunks,
-            chunk.chunkId,
-          ),
-        ];
       }
     }
+
+    await Promise.all(inFlight);
+    if (task.cancelled) return;
     post({
       type: "broadcast-transcript-complete",
       identity: task.identity,
@@ -460,7 +492,7 @@ self.addEventListener("message", (event: MessageEvent<unknown>) => {
     identity: value.identity,
     cancelled: false,
     input: null,
-    fetchController: null,
+    fetchControllers: new Set<AbortController>(),
   };
   activeTask = task;
   void runAnalyze(value, task);
