@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>ExClipper phase board</title>
+<!--
+  Phase board. The body used to size itself from whatever screen it held, so
+  it grew and shrank as the workflow advanced — a frame that changes shape is
+  not a device. Both iframes below run the same viewport; if the body is
+  genuinely fixed, the two frames must be pixel-identical in size no matter
+  how much content each screen carries.
+-->
+<style>
+  body { margin:0; padding:16px; background:#20222b; color:#cfd3e0;
+         font:12px ui-monospace,monospace; display:flex; gap:16px; align-items:flex-start }
+  figure { margin:0; display:flex; flex-direction:column; gap:6px }
+  iframe { border:0; background:#fff; border-radius:6px; display:block }
+</style>
+</head>
+<body>
+  <figure><figcaption>review — tall content</figcaption>
+    <iframe src="./surface-harness.html" width="1280" height="820"></iframe></figure>
+  <figure><figcaption>start — short content</figcaption>
+    <iframe src="./phase-start.html" width="1280" height="820"></iframe></figure>
+</body>
+</html>

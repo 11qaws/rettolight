@@ -53,7 +53,6 @@
   --ex-body-lo: #0d0e13;
   --ex-body-edge: rgba(255, 255, 255, .16);
   --ex-bezel: 13px;
-  --ex-desk-pad: clamp(14px, 2.2vh, 30px);
 }
 
 [data-theme="dark"] {
@@ -1158,11 +1157,20 @@
 
 @media (min-width: 1101px) {
   /* The desk: a lit surface, not a flat fill. The vignette is what stops
-   * the body from looking pasted onto a colour swatch. */
+   * the body from looking pasted onto a colour swatch.
+   *
+   * The body is 16:10 and keeps a 5% margin down each side. Its size is
+   * resolved here rather than by the flex layout because the canvas inside
+   * needs to derive its own height from it — whichever constraint binds,
+   * width or height, both agree on one number. */
   .rh-app {
-    display: flex;
+    --ex-device-w: min(80vw, calc(80dvh * 16 / 10));
+    --ex-device-h: calc(var(--ex-device-w) * 10 / 16);
+
+    display: grid;
+    place-content: center;
     height: 100dvh;
-    padding: var(--ex-desk-pad);
+    padding: 10dvh 10vw;
     background:
       radial-gradient(120% 90% at 50% -10%,
         color-mix(in srgb, var(--ex-bg) 62%, var(--ex-bg2)) 0%, transparent 62%),
@@ -1175,9 +1183,9 @@
   .ex-device {
     position: relative;
     display: flex;
-    flex: 1 1 auto;
+    width: var(--ex-device-w);
+    height: var(--ex-device-h);
     min-height: 0;
-    margin: auto;
     padding: var(--ex-bezel);
     border-radius: 30px;
     background: linear-gradient(168deg, var(--ex-body) 0%, var(--ex-body-lo) 100%);
@@ -1265,13 +1273,15 @@
 
   /* Overlays anchor to the viewport, so they must be pulled inside the
    * bezel by hand or they float over the body. */
+  /* Overlays anchor to the viewport, so they are pulled onto the device by
+   * hand: half the leftover space, plus the bezel. */
   .rh-app .rh-review-undo {
-    right: calc(var(--ex-desk-pad) + var(--ex-bezel) + 18px);
-    bottom: calc(var(--ex-desk-pad) + var(--ex-bezel) + 18px);
+    right: calc((100vw - var(--ex-device-w)) / 2 + var(--ex-bezel) + 18px);
+    bottom: calc((100dvh - var(--ex-device-h)) / 2 + var(--ex-bezel) + 18px);
   }
 
   .rh-app .rh-shortcut-overlay {
-    inset: var(--ex-desk-pad);
+    inset: calc((100dvh - var(--ex-device-h)) / 2) calc((100vw - var(--ex-device-w)) / 2);
     border-radius: 30px;
   }
 
@@ -1305,8 +1315,8 @@
     align-items: stretch;
     gap: 0;
     position: relative;
-    height: calc(100dvh - var(--ex-desk-pad) * 2 - var(--ex-bezel) * 2 - 118px);
-    min-height: 470px;
+    height: calc(var(--ex-device-h) - var(--ex-bezel) * 2 - 118px);
+    min-height: 0;
     width: 100%;
     padding: var(--ex-space-lg);
     border: 1px solid var(--ex-line);
