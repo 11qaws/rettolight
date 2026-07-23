@@ -46,13 +46,19 @@ interface ActiveTask {
 /**
  * How many transcription requests may be in flight at once.
  *
- * Decoding a chunk is local CPU work and transcribing it is a remote round
- * trip, so awaiting each response before decoding the next left one side idle
- * the whole time. Overlapping them is bounded by the proxy's rate limit
- * (30 requests per 60 seconds), not by anything in this worker, so a small
- * window is enough to stay near that ceiling without provoking 429s.
+ * Overlapping decode with the remote round trip is the obvious win, but the
+ * binding constraint is not this worker or the proxy rate limit: it is the
+ * Cloudflare isolate's 128 MB memory ceiling, which is the same on the free
+ * and paid plans. Each 90-second chunk arrives as 3.84 MB of base64 inside a
+ * JSON body, and decoding then parsing it costs roughly 19 MB per request.
+ * Measured against production, two concurrent requests already return empty
+ * 503s with no CORS headers, so the window stays at one until the proxy can
+ * accept the audio without materialising it as a string twice.
+ *
+ * The real speed-up for a captioned broadcast is the caption path, which
+ * skips transcription altogether.
  */
-const MAX_IN_FLIGHT_TRANSCRIPTIONS = 3;
+const MAX_IN_FLIGHT_TRANSCRIPTIONS = 1;
 
 let activeTask: ActiveTask | null = null;
 
