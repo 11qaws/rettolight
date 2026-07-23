@@ -2214,3 +2214,12 @@ name. Candidate identity never changes score, eligibility, approval, or clip bou
 It is display evidence only. The fixed roster ID is expanded server-side, and arbitrary
 browser-supplied roster text is rejected. Repeated names may be grouped in presentation,
 but the original per-candidate evidence, relative timestamp, and uncertainty remain.
+
+## 28. `0.4.2` 병렬 전사 프리페치 계약
+
+- 전사 파이프라인은 두 위상으로 나뉜다. `uniform`은 분석 실행이 `running`이 되는 순간 균등 표본만으로 시작하고, `event-boost`는 빠른 탐색 완료 뒤 반응 정점 주변 표본을 더한다. 위상 판정과 시작 허용 규칙은 `src/app/transcriptPhase.ts`가 소유하며 단위 테스트로 고정한다.
+- 지출 동의는 실행 시작 버튼이다. 파일 선택만으로는 어떤 전사도 시작하지 않는다 (`analysisRunStatus === "running"` 요구).
+- 실행 중인 전사 pass는 절대 선점되지 않는다. 위상 전환은 이전 pass의 terminal 이후에만 시작하므로, 위상 변경으로 과금 중인 청크가 중단되는 일이 없다. 인수인계는 기존 체크포인트-재개 계약(§20)이 담당한다: 다음 위상은 저장된 chapter 범위를 빼고 남은 구간만 전사한다.
+- 위상별 operation key는 `runId:fingerprint:phase`다. 같은 위상은 재진입하지 않고, 새 실행은 이전 실행의 fence를 상속하지 않는다.
+- 전체 맥락 추론은 `analysisComplete` 이전에는 시작하지 않는다. uniform 전용 지도는 미완성 그림이며, 여기에 추론을 지출하면 event-boost 뒤 재지출이 필요해진다. 탐색 완료가 지도를 봉인한다.
+- 실행 취소는 전사 프리페치도 함께 중단한다(같은 동의에 대한 지출이므로). 취소 뒤 fence는 비워지지만 실행이 live가 아니므로 게이트가 재시작을 막는다.

@@ -1,0 +1,260 @@
+/*
+ * ExClipper tablet skin.
+ *
+ * Loaded last, so it owns the final say. The StreamSaver snapshot gave the
+ * app a homepage grammar — hero paddings, card shadows, a dashboard status
+ * strip. This file replaces that with an instrument grammar: a quiet desk
+ * ground, flat surfaces, one accent, tabular timecodes. Values come from
+ * DESIGN_SPEC_2026-07-23 and stay on the --ex-* scales.
+ *
+ * This is a skin pass: it restyles existing markup only. The structural
+ * rebuild (16:9 surface, dossier tabs) lands per-screen afterwards.
+ */
+
+:root {
+  --ex-bg: #fbfcfe;
+  --ex-bg2: #f3f6fa;
+  --ex-bg3: #e9eef6;
+  --ex-line: #dde5ef;
+  --ex-line2: #c3cfde;
+  --ex-ink: #10203a;
+  --ex-ink2: #3a4a63;
+  --ex-ink3: #66768f;
+  --ex-ink4: #93a1b6;
+  --ex-accent: #2563eb;
+  --ex-accent-ink: #1d4ed8;
+  --ex-accent-bg: #e9f0fe;
+  --ex-accent-line: #bcd2f8;
+  --ex-ok: #15803d;
+  --ex-ok-bg: #eaf7ef;
+  --ex-ok-line: #b5e2c6;
+  --ex-warn: #b45309;
+  --ex-warn-bg: #fdf6e7;
+  --ex-warn-line: #f0d9a8;
+  --ex-bad: #b91c1c;
+  --ex-bad-bg: #fdeeee;
+  --ex-bad-line: #f2c4c4;
+  --ex-stage: #06090f;
+}
+
+[data-theme="dark"] {
+  --ex-bg: #0d1526;
+  --ex-bg2: #131d31;
+  --ex-bg3: #1a2740;
+  --ex-line: #243350;
+  --ex-line2: #334565;
+  --ex-ink: #e8eef8;
+  --ex-ink2: #bccadf;
+  --ex-ink3: #8ba3c4;
+  --ex-ink4: #5f7495;
+  --ex-accent: #6ea8ff;
+  --ex-accent-ink: #8ebbff;
+  --ex-accent-bg: #16264a;
+  --ex-accent-line: #2c4577;
+  --ex-ok: #7ee2a8;
+  --ex-ok-bg: #0e2b1c;
+  --ex-ok-line: #1e4d33;
+  --ex-warn: #f5c76b;
+  --ex-warn-bg: #33250d;
+  --ex-warn-line: #5c451c;
+  --ex-bad: #f79a9a;
+  --ex-bad-bg: #3a1414;
+  --ex-bad-line: #642727;
+}
+
+/* Rebind the inherited StreamSaver variables to the ExClipper palette so the
+ * 888 existing rules repaint without being rewritten one by one. */
+:root,
+[data-theme="light"] {
+  --bg: var(--ex-bg);
+  --bg2: var(--ex-bg2);
+  --bg3: var(--ex-bg3);
+  --border: var(--ex-line);
+  --border2: var(--ex-line2);
+  --text: var(--ex-ink);
+  --text2: var(--ex-ink2);
+  --text3: var(--ex-ink3);
+  --text4: var(--ex-ink4);
+  --accent: var(--ex-accent);
+  --accentBg: var(--ex-accent-bg);
+  --accentBd: var(--ex-accent-line);
+  --rh-warning: var(--ex-warn);
+  --rh-warning-bg: var(--ex-warn-bg);
+  --rh-warning-border: var(--ex-warn-line);
+  --rh-danger: var(--ex-bad);
+  --rh-danger-bg: var(--ex-bad-bg);
+  --rh-danger-border: var(--ex-bad-line);
+  --rh-success: var(--ex-ok);
+  --rh-success-bg: var(--ex-ok-bg);
+  --rh-success-border: var(--ex-ok-line);
+}
+
+[data-theme="dark"] {
+  --bg: var(--ex-bg);
+  --bg2: var(--ex-bg2);
+  --bg3: var(--ex-bg3);
+  --border: var(--ex-line);
+  --border2: var(--ex-line2);
+  --text: var(--ex-ink);
+  --text2: var(--ex-ink2);
+  --text3: var(--ex-ink3);
+  --text4: var(--ex-ink4);
+  --accent: var(--ex-accent);
+  --accentBg: var(--ex-accent-bg);
+  --accentBd: var(--ex-accent-line);
+}
+
+/* ── Desk ground ──────────────────────────────────────────────
+ * The app sits on bg2; surfaces are bg. That inversion alone kills most of
+ * the homepage feel — pages float on white, instruments sit on a desk. */
+body,
+.rh-app {
+  background: var(--ex-bg2);
+}
+
+/* ── App bar, not a website header ──────────────────────────── */
+.rh-app > header {
+  background: color-mix(in srgb, var(--ex-bg2) 92%, transparent);
+  border-bottom: 1px solid var(--ex-line);
+}
+
+.rh-header-inner {
+  padding-block: 8px;
+}
+
+.rh-header-title {
+  font-size: var(--ex-font-md);
+  font-weight: 600;
+  color: var(--ex-ink3);
+}
+
+.rh-privacy-pill {
+  border: 1px solid var(--ex-line);
+  background: var(--ex-bg);
+  color: var(--ex-ink3);
+}
+
+/* The StreamSaver dashboard strip is the loudest homepage artifact. The
+ * stepper already carries the same orientation. */
+.status-bar {
+  display: none;
+}
+
+/* ── Surfaces: flat, bordered, quiet ────────────────────────── */
+.rh-panel,
+.rh-project-context,
+.rh-recovery-panel {
+  border: 1px solid var(--ex-line);
+  border-radius: var(--ex-radius-lg);
+  background: var(--ex-bg);
+  box-shadow: none;
+}
+
+.rh-candidate-card,
+.rh-source-card,
+.rh-recovery-item {
+  border: 1px solid var(--ex-line);
+  border-radius: var(--ex-radius-lg);
+  background: var(--ex-bg);
+  box-shadow: none;
+}
+
+.rh-preview-panel,
+.rh-candidate-timeline {
+  box-shadow: none;
+  border: 1px solid var(--ex-line);
+  background: var(--ex-bg);
+}
+
+/* ── Controls ───────────────────────────────────────────────── */
+.rh-app .btn {
+  min-height: 40px;
+  border-radius: 10px;
+  border: 1px solid var(--ex-line2);
+  background: var(--ex-bg);
+  color: var(--ex-ink);
+  font-weight: 600;
+  box-shadow: none;
+  transition: background var(--ex-motion-fast) var(--ex-motion-ease),
+    border-color var(--ex-motion-fast) var(--ex-motion-ease);
+}
+
+.rh-app .btn:hover {
+  background: var(--ex-bg2);
+  border-color: var(--ex-line2);
+}
+
+.rh-app .btn-primary {
+  background: var(--ex-accent);
+  border-color: var(--ex-accent);
+  color: #fff;
+}
+
+.rh-app .btn-primary:hover {
+  background: var(--ex-accent);
+  filter: brightness(1.06);
+}
+
+.rh-app .btn-primary:disabled,
+.rh-app .btn:disabled {
+  filter: none;
+  opacity: 0.5;
+}
+
+.rh-primary-action {
+  min-height: 48px;
+  border-radius: 12px;
+}
+
+.theme-btn,
+.rh-language-switch button {
+  border-radius: 9px;
+}
+
+/* ── Timecodes are instrument readouts ──────────────────────── */
+.rh-candidate-meta strong,
+.rh-approved-timeline strong,
+.rh-source-range-title strong,
+.rh-confidence strong,
+.rh-summary-item dd,
+.rh-timeline-axis span {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Progress: one accent, no gradients ─────────────────────── */
+progress.rh-live-analysis-progress,
+progress.rh-analysis-progress {
+  accent-color: var(--ex-accent);
+}
+
+/* ── Notices: tone triads from the single semantic set ──────── */
+.rh-notice {
+  border-radius: var(--ex-radius-md);
+}
+
+/* ── Stepper: orientation, not decoration ───────────────────── */
+.rh-stepper {
+  gap: var(--ex-space-lg);
+}
+
+.rh-step {
+  color: var(--ex-ink4);
+  font-weight: 600;
+}
+
+.rh-step[aria-current="step"] {
+  color: var(--ex-accent-ink);
+}
+
+/* ── Footer: a colophon, not a site footer ──────────────────── */
+.rh-footer {
+  border-top: none;
+  color: var(--ex-ink4);
+  font-size: var(--ex-font-2xs);
+}
+
+/* ── Focus: one ring everywhere ─────────────────────────────── */
+.rh-app :focus-visible {
+  outline: 2px solid var(--ex-accent);
+  outline-offset: 2px;
+}

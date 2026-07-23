@@ -6,6 +6,7 @@ import AppErrorBoundary from "./AppErrorBoundary";
 import "../styles/streamsaver-reference.css";
 import "../styles/exclipper-foundation.css";
 import "../styles/retto-highlight.css";
+import "../styles/exclipper-app.css";
 
 const rootElement = document.getElementById("root");
 

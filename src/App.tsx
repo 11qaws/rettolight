@@ -367,6 +367,11 @@ import {
   summarizeFinalVerificationGaps,
 } from "./app/finalVerificationGapSummary";
 import {
+  canStartTranscriptRun,
+  transcriptOperationKey,
+  transcriptPhaseFor,
+} from "./app/transcriptPhase";
+import {
   nextUnreviewedCandidateId,
   reviewDecisionAdvances,
 } from "./app/reviewNavigation";
@@ -376,7 +381,7 @@ type AnalysisSelectionSummary = DurableAnalysisSelectionSummary;
 type AnalysisCoverageSummary = DurableAnalysisCoverageSummary;
 type AnalysisGapApprovalEvidence = DurableAnalysisGapApprovalEvidence;
 
-const APP_VERSION = "0.4.1";
+const APP_VERSION = "0.4.2";
 const PERSISTENCE_SCHEMA_VERSION = "0.3.0";
 const SIGNAL_ENGINE_VERSION =
   "streamer-reaction-fast-pass-v5-chat-fallback-music-confirmation";
@@ -3042,6 +3047,17 @@ function App() {
     }
     setAnalysisCancelPending(true);
     controller.abort();
+    // The uniform transcript prefetch spends against the same consent as the
+    // run, so cancelling the run stops it too. The fence stays cleared and the
+    // gate blocks a restart because the run is no longer live.
+    if (broadcastTranscriptAbortController.current !== null) {
+      broadcastTranscriptAbortController.current.abort();
+      broadcastTranscriptAbortController.current = null;
+      autoBroadcastTranscriptSourceRef.current = null;
+      setBroadcastTranscriptStatus("idle");
+      setBroadcastTranscriptProgress(null);
+      setBroadcastTranscriptError(null);
+    }
   };
 
   const applyCandidatePassBEvent = useCallback(
@@ -5177,6 +5193,11 @@ function App() {
       analysisRun?.inputSignature ??
       sourceContentFingerprint;
     if (
+      // Whole-context reasoning is billed once per map. During the parallel
+      // prelude the transcript map is uniform-only and candidates are absent,
+      // so reasoning here would spend on an incomplete picture and then spend
+      // again. The scan completing is what seals the map.
+      !analysisComplete ||
       runId === null ||
       inputSignature === null ||
       boundarySourceDurationMs <= 0 ||
@@ -5437,6 +5458,7 @@ function App() {
         }
       });
   }, [
+    analysisComplete,
     analysisRun?.inputSignature,
     boundarySourceDurationMs,
     boundedBroadcastContextChapters,
@@ -5769,7 +5791,11 @@ function App() {
       analysisRun?.inputSignature ??
       sourceContentFingerprint;
     if (
-      !analysisComplete ||
+      !canStartTranscriptRun({
+        analysisComplete,
+        analysisRunStatus: analysisRun?.status ?? null,
+        broadcastTranscriptStatus,
+      }) ||
       runId === null ||
       inputSignature === null ||
       sourceFile === null ||
@@ -5780,7 +5806,12 @@ function App() {
       return;
     }
 
-    const operationKey = `${runId}:${sourceContentFingerprint}`;
+    const transcriptPhase = transcriptPhaseFor(analysisComplete);
+    const operationKey = transcriptOperationKey(
+      runId,
+      sourceContentFingerprint,
+      transcriptPhase,
+    );
     if (autoBroadcastTranscriptSourceRef.current === operationKey) {
       return;
     }
@@ -6113,6 +6144,7 @@ function App() {
   }, [
     analysisComplete,
     analysisRun?.inputSignature,
+    analysisRun?.status,
     broadcastContextSamplingPlan,
     broadcastTranscriptStatus,
     currentAnalysisRunId,
