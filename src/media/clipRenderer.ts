@@ -21,6 +21,7 @@ export interface ClipRenderRequest {
   readonly range: ClipTimeRange;
   readonly candidateNumber: number;
   readonly outputKind?: ClipOutputKind;
+  readonly title?: string | undefined;
   readonly signal?: AbortSignal;
   readonly onProgress?: (progress: ClipRenderProgress) => void;
 }
@@ -85,16 +86,54 @@ function clipTimePart(milliseconds: number): string {
     .join("-");
 }
 
-export function buildClipFileName(
+const UNSAFE_FILENAME_CHARS = /[\\/:*?"<>|]/gu;
+const SLUG_MAX_LENGTH = 40;
+
+/**
+ * A title turned into filesystem-safe text for a clip's base filename.
+ * Returns "" for a title that has no safe characters left (an emoji-only
+ * title, for example) so the caller can fall back to the timecode form.
+ */
+function slugifyTitle(title: string): string {
+  return title
+    .normalize("NFC")
+    .replace(UNSAFE_FILENAME_CHARS, "")
+    .trim()
+    .replace(/\s+/gu, "-")
+    .replace(/-+/gu, "-")
+    .replace(/^-+|-+$/gu, "")
+    .slice(0, SLUG_MAX_LENGTH);
+}
+
+/**
+ * The shared filename stem (no extension) for a candidate's clip, subtitle
+ * track, and thumbnail — keeping the three files grouped under the same
+ * base name in a downloads folder. Falls back to the original timecode form
+ * when no title is given, so filenames stay stable for callers that predate
+ * H-3 titling.
+ */
+export function buildClipBaseName(
   candidateNumber: number,
   range: ClipTimeRange,
-  outputKind: ClipOutputKind,
+  title?: string,
 ): string {
   validateClipTimeRange(range);
   if (!Number.isSafeInteger(candidateNumber) || candidateNumber <= 0) {
     throw new RangeError("Candidate number must be a positive safe integer.");
   }
-  return `exclipper-${String(candidateNumber).padStart(2, "0")}-${clipTimePart(range.startMs)}-${clipTimePart(range.endMs)}.${outputKind}`;
+  const slug = title !== undefined ? slugifyTitle(title) : "";
+  const stem =
+    slug.length > 0 ? slug : `${clipTimePart(range.startMs)}-${clipTimePart(range.endMs)}`;
+  return `exclipper-${String(candidateNumber).padStart(2, "0")}-${stem}`;
+}
+
+export function buildClipFileName(
+  candidateNumber: number,
+  range: ClipTimeRange,
+  outputKind: ClipOutputKind,
+  title?: string,
+): string {
+  return `${buildClipBaseName(candidateNumber, range, title)}.${outputKind}`;
 }
 
 function throwIfAborted(signal: AbortSignal | undefined): void {
@@ -165,7 +204,7 @@ export async function renderHighlightClip(
     const mimeType = format.mimeType;
     return {
       blob: new Blob([buffer], { type: mimeType }),
-      fileName: buildClipFileName(request.candidateNumber, request.range, outputKind),
+      fileName: buildClipFileName(request.candidateNumber, request.range, outputKind, request.title),
       mimeType,
       durationMs: request.range.endMs - request.range.startMs,
     };

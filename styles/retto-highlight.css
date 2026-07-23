@@ -1660,9 +1660,65 @@
 }
 
 .rh-candidate-title {
-  margin: 0 0 4px;
+  margin: 0;
   font-size: .9375rem;
   font-weight: 650;
+}
+
+.rh-candidate-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 4px;
+  min-width: 0;
+}
+
+.rh-candidate-title-number {
+  flex: 0 0 auto;
+  color: var(--text4);
+  font-size: .8125rem;
+  font-weight: 700;
+}
+
+.rh-candidate-title-row .rh-candidate-title {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rh-candidate-title-input {
+  min-width: 0;
+  flex: 1 1 auto;
+  padding: 4px 8px;
+  border: 1px solid var(--accentBd);
+  border-radius: var(--ex-radius-sm);
+  background: var(--bg);
+  color: var(--text1);
+  font-size: .9375rem;
+  font-weight: 650;
+}
+
+.rh-candidate-title-input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.rh-candidate-title-edit {
+  flex: 0 0 auto;
+  padding: 3px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--ex-radius-sm);
+  background: transparent;
+  color: var(--text3);
+  font-size: var(--ex-font-2xs);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.rh-candidate-title-edit:hover {
+  border-color: var(--accentBd);
+  color: var(--text1);
 }
 
 .rh-candidate-reason {
@@ -3578,13 +3634,25 @@
 
 .rh-export-actions {
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+  flex-direction: column;
+  gap: 10px;
   margin-top: 16px;
 }
 
 .rh-export-actions .rh-primary-action {
   margin-top: 0;
+}
+
+.rh-export-main-action {
+  width: 100%;
+  min-height: 52px;
+  font-size: .9375rem;
+}
+
+.rh-export-secondary-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .rh-advanced-export {
@@ -5921,7 +5989,7 @@
 }
 
 .rh-candidate-main > .rh-candidate-meta { order: 1; }
-.rh-candidate-main > .rh-candidate-title { order: 2; }
+.rh-candidate-main > .rh-candidate-title-row { order: 2; }
 .rh-candidate-main > .rh-candidate-reason { order: 3; }
 .rh-candidate-main > .rh-candidate-context-chain { order: 4; }
 .rh-candidate-main > .rh-gemini-quick-summary { order: 5; }

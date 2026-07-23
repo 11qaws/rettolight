@@ -77,8 +77,11 @@ const selection: DurableAnalysisSelectionSummary = {
 function approved(
   proposal: UnifiedHighlightCandidate,
   boundaryRevision: CandidateBoundaryRevision | null = null,
+  title?: string,
 ): ApprovedHighlightExportCandidate {
-  return { proposal, boundaryRevision };
+  return title === undefined
+    ? { proposal, boundaryRevision }
+    : { proposal, boundaryRevision, title };
 }
 
 function request(candidates: readonly UnifiedHighlightCandidate[]): HighlightExportRequest {
@@ -110,14 +113,35 @@ describe("highlight export", () => {
     expect(file.content.indexOf("00:00:05")).toBeLessThan(
       file.content.indexOf("00:01:10"),
     );
-    expect(file.content).toContain('"AI가 고른 이유"');
+    expect(file.content).toContain('"제목","시작","끝","길이","이유","메모"');
   });
 
-  it("escapes quotes and neutralizes spreadsheet formulas", () => {
-    const file = createHighlightExportFile(
-      "csv",
-      request([candidate("formula", 5_000, '=HYPERLINK("bad")')]),
-    );
+  it("uses a user-edited title in CSV and JSON, falling back to the AI title otherwise", () => {
+    const untitledRequest: HighlightExportRequest = {
+      ...request([]),
+      candidates: [approved(candidate("untitled", 5_000))],
+    };
+    const titledRequest: HighlightExportRequest = {
+      ...request([]),
+      candidates: [approved(candidate("titled", 5_000), null, "칼국수 먹방 사건")],
+    };
+
+    const untitledCsv = createHighlightExportFile("csv", untitledRequest).content;
+    const titledCsv = createHighlightExportFile("csv", titledRequest).content;
+    expect(titledCsv).toContain("칼국수 먹방 사건");
+    expect(untitledCsv).not.toContain("칼국수 먹방 사건");
+
+    const titledJson = JSON.parse(
+      createHighlightExportFile("json", titledRequest).content,
+    ) as { candidates: Array<Record<string, unknown>> };
+    expect(titledJson.candidates[0]).toMatchObject({ title: "칼국수 먹방 사건" });
+  });
+
+  it("escapes quotes and neutralizes spreadsheet formulas in a user-edited title", () => {
+    const file = createHighlightExportFile("csv", {
+      ...request([]),
+      candidates: [approved(candidate("formula", 5_000), null, '=HYPERLINK("bad")')],
+    });
 
     expect(file.content).toContain("'=HYPERLINK");
     expect(file.content).toContain('""bad""');
@@ -170,12 +194,12 @@ describe("highlight export", () => {
       },
     };
 
-    const csv = createHighlightExportFile("csv", request([proposal]));
+    const markdown = createHighlightExportFile("markdown", request([proposal]));
 
-    expect(csv.content).toContain("혼합 방송 오디오 신호");
-    expect(csv.content).toContain("서로 다른 작성자 표기 18개");
-    expect(csv.content).not.toContain("스트리머 오디오 반응");
-    expect(csv.content).not.toContain("참여자 18명");
+    expect(markdown.content).toContain("혼합 방송 오디오 신호");
+    expect(markdown.content).toContain("서로 다른 작성자 표기 18개");
+    expect(markdown.content).not.toContain("스트리머 오디오 반응");
+    expect(markdown.content).not.toContain("참여자 18명");
   });
 
   it("keeps the privacy-safe JSON contract and approved state", () => {
@@ -302,7 +326,6 @@ describe("highlight export", () => {
     const clipboard = createHighlightClipboardText(adjustedRequest.candidates);
 
     expect(csv.content).toContain('"00:00:55"');
-    expect(csv.content).toContain('"사용자 조정"');
     expect(markdown.content).toContain("00:00:55–00:01:45");
     expect(markdown.content).toContain("AI 제안 구간: 00:01:00–00:01:45");
     expect(json.candidates[0]).toMatchObject({

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   ClipRenderError,
+  buildClipBaseName,
   buildClipFileName,
   inferClipOutputKind,
   validateClipTimeRange,
@@ -22,6 +23,37 @@ describe("clip renderer helpers", () => {
         "mp4",
       ),
     ).toBe("exclipper-03-01-01-01-01-02-01.mp4");
+  });
+
+  it("slugifies a title into the base filename when one is given", () => {
+    expect(
+      buildClipBaseName(3, { startMs: 3_661_000, endMs: 3_721_000 }, "칼국수 먹방 사건"),
+    ).toBe("exclipper-03-칼국수-먹방-사건");
+    expect(
+      buildClipFileName(3, { startMs: 3_661_000, endMs: 3_721_000 }, "mp4", "칼국수 먹방 사건"),
+    ).toBe("exclipper-03-칼국수-먹방-사건.mp4");
+  });
+
+  it("falls back to the timecode form for an empty or unsafe-only title", () => {
+    expect(buildClipBaseName(3, { startMs: 3_661_000, endMs: 3_721_000 }, "")).toBe(
+      "exclipper-03-01-01-01-01-02-01",
+    );
+    expect(buildClipBaseName(3, { startMs: 3_661_000, endMs: 3_721_000 }, "   ")).toBe(
+      "exclipper-03-01-01-01-01-02-01",
+    );
+    expect(buildClipBaseName(3, { startMs: 3_661_000, endMs: 3_721_000 }, "///???")).toBe(
+      "exclipper-03-01-01-01-01-02-01",
+    );
+  });
+
+  it("strips filesystem-unsafe characters and caps the slug length", () => {
+    const longTitle = "a".repeat(60);
+    expect(buildClipBaseName(1, { startMs: 0, endMs: 1_000 }, longTitle)).toBe(
+      `exclipper-01-${"a".repeat(40)}`,
+    );
+    expect(
+      buildClipBaseName(1, { startMs: 0, endMs: 1_000 }, 'bad/name:with*chars?"<>|'),
+    ).toBe("exclipper-01-badnamewithchars");
   });
 
   it("rejects invalid ranges before opening media", () => {

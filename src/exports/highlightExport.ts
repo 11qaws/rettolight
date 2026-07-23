@@ -15,6 +15,8 @@ export type HighlightExportFormat = "csv" | "markdown" | "json";
 export interface ApprovedHighlightExportCandidate {
   readonly proposal: UnifiedHighlightCandidate;
   readonly boundaryRevision: CandidateBoundaryRevision | null;
+  /** User-edited title, if the editor renamed this candidate. Falls back to the AI narrative title. */
+  readonly title?: string;
 }
 
 export interface HighlightExportRequest {
@@ -175,54 +177,34 @@ function csvCell(value: string | number): string {
   return `"${safeValue.replace(/"/gu, '""')}"`;
 }
 
+function candidateExportTitle(
+  exportCandidate: ApprovedHighlightExportCandidate,
+  narrative: ReturnType<typeof buildHighlightNarrative>,
+): string {
+  return exportCandidate.title?.trim() || narrative.title;
+}
+
+/**
+ * Six columns instead of the original seventeen: title/start/end/length/why/
+ * note. The full field set (signal breakdown, evidence, AI-proposed range,
+ * etc) stays available in the JSON export for anyone who needs it — this
+ * file is meant to be readable directly in a spreadsheet.
+ */
 function createCsv(candidates: readonly ApprovedHighlightExportCandidate[]): string {
-  const header = [
-    "순서",
-    "시작",
-    "끝",
-    "길이",
-    "가장 강한 순간",
-    "AI가 고른 이유",
-    "신호",
-    "근거 요약",
-    "상대 점수",
-    "사건 단서 (재생 확인 필요)",
-    "혼합 방송 오디오 반응 단서",
-    "채팅 반응 단서",
-    "추천 이유",
-    "해석 수준",
-    "구간 기준",
-    "AI 제안 시작",
-    "AI 제안 끝",
-  ];
-  const rows = chronologicalCandidates(candidates).map((exportCandidate, index) => {
+  const header = ["제목", "시작", "끝", "길이", "이유", "메모"];
+  const rows = chronologicalCandidates(candidates).map((exportCandidate) => {
     const candidate = exportCandidate.proposal;
     const range = exportRangeProjection(exportCandidate);
     const narrative = buildHighlightNarrative(candidate);
     return [
-      index + 1,
+      candidateExportTitle(exportCandidate, narrative),
       formatHighlightTimecode(range.effectiveRange.startMs),
       formatHighlightTimecode(range.effectiveRange.endMs),
       formatHighlightTimecode(
         range.effectiveRange.endMs - range.effectiveRange.startMs,
       ),
-      formatHighlightTimecode(candidate.peakMs),
-      candidate.reason,
-      signalLabel(candidate),
-      evidenceLabel(candidate),
-      Math.round(candidate.score * 100),
-      narrative.event,
-      narrative.streamerReaction,
-      narrative.audienceReaction,
       narrative.whyRecommended,
-      narrative.basisLabel,
-      range.provenance === "aiProposal"
-        ? "AI 제안"
-        : range.provenance === "userResetToAi"
-          ? "사용자가 AI 제안으로 되돌림"
-          : "사용자 조정",
-      formatHighlightTimecode(range.proposalRange.startMs),
-      formatHighlightTimecode(range.proposalRange.endMs),
+      narrative.reviewHint,
     ];
   });
 
@@ -343,8 +325,10 @@ function createJson(request: HighlightExportRequest): string {
         const candidate = exportCandidate.proposal;
         const { id, peakMs, score, signalKinds, evidence } = candidate;
         const range = exportRangeProjection(exportCandidate);
+        const narrative = buildHighlightNarrative(candidate);
         return {
           id,
+          title: candidateExportTitle(exportCandidate, narrative),
           proposalRange: range.proposalRange,
           effectiveRange: range.effectiveRange,
           rangeProvenance: range.provenance,
@@ -353,7 +337,7 @@ function createJson(request: HighlightExportRequest): string {
           score,
           signalKinds,
           evidence,
-          interpretation: buildHighlightNarrative(candidate),
+          interpretation: narrative,
           reviewState: "approved" as const,
         };
       },

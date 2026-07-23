@@ -230,6 +230,10 @@ import {
   type SourceCheckState,
 } from "./domain/sourceCheck";
 import {
+  assessClipSubtitleCoverage,
+  buildClipSrt,
+} from "./exports/clipSubtitles";
+import {
   createHighlightClipboardText,
   createHighlightExportFile,
   type ApprovedHighlightExportCandidate,
@@ -389,7 +393,7 @@ type AnalysisSelectionSummary = DurableAnalysisSelectionSummary;
 type AnalysisCoverageSummary = DurableAnalysisCoverageSummary;
 type AnalysisGapApprovalEvidence = DurableAnalysisGapApprovalEvidence;
 
-const APP_VERSION = "0.4.6";
+const APP_VERSION = "0.4.7";
 const PERSISTENCE_SCHEMA_VERSION = "0.3.0";
 const SIGNAL_ENGINE_VERSION =
   "streamer-reaction-fast-pass-v5-chat-fallback-music-confirmation";
@@ -566,6 +570,14 @@ function App() {
    * boundaries or review state.
    */
   const [dossierTab, setDossierTab] = useState<DossierTab>("summary");
+  /**
+   * User-edited candidate titles. View-only — never persisted to IndexedDB or
+   * exports beyond the current session's downloads; a refresh reverts to the
+   * AI headline. Only exports read this map, so an empty entry always falls
+   * back to the AI headline rather than needing a migration path.
+   */
+  const [candidateTitleById, setCandidateTitleById] = useState<Record<string, string>>({});
+  const [editingCandidateTitle, setEditingCandidateTitle] = useState(false);
   const [clipDownloadStatusById, setClipDownloadStatusById] =
     useState<ClipDownloadStatusById>({});
   const [clipDownloadErrorById, setClipDownloadErrorById] =
@@ -1459,6 +1471,9 @@ function App() {
     approvedCandidates.map((proposal) => ({
       proposal,
       boundaryRevision: boundaryRevisions[proposal.id] ?? null,
+      ...(candidateTitleById[proposal.id] !== undefined
+        ? { title: candidateTitleById[proposal.id] }
+        : {}),
     }));
   const approvedCount = approvedCandidates.length;
   const rejectedCount = orderedCandidates.filter(
@@ -1818,6 +1833,10 @@ function App() {
     }
     setPreviewCandidateId(orderedCandidates[0]?.id ?? null);
   }, [orderedCandidates, previewCandidateId]);
+
+  useEffect(() => {
+    setEditingCandidateTitle(false);
+  }, [focusedCandidateId]);
 
   useEffect(() => {
     if (focusedCandidateId === null || sourcePreviewUrl === null) {
@@ -5161,6 +5180,7 @@ function App() {
         sourceFile,
         range,
         candidateNumber,
+        title: candidateTitleById[candidate.id],
         signal,
         onProgress: ({ ratio }: ClipRenderProgress) => {
           if (isCurrentJob()) {
@@ -5217,6 +5237,7 @@ function App() {
     const controller = new AbortController();
     clipRenderAbortController.current = controller;
     setClipBatchError(null);
+    void downloadCandidateThumbnail(candidate);
     void renderAndDownloadClip(
       candidate,
       candidateNumberFor(candidate.id),
@@ -5226,6 +5247,71 @@ function App() {
         clipRenderAbortController.current = null;
       }
     });
+  };
+
+  const downloadCandidateSubtitles = async (candidate: ReviewedCandidate): Promise<void> => {
+    const range = effectiveCandidateRange(candidate, boundaryRevisions[candidate.id]);
+    const presentation = buildCandidatePassBPresentation(
+      candidate.id,
+      buildHighlightNarrative(candidate),
+      candidatePassBEvidenceById[candidate.id]?.candidateId === candidate.id
+        ? candidatePassBEvidenceById[candidate.id]
+        : undefined,
+    );
+    const availability = assessClipSubtitleCoverage(presentation.cues, {
+      startMs: range.startMs,
+      endMs: range.endMs,
+    });
+    if (!availability.available) {
+      return;
+    }
+    const srt = buildClipSrt(presentation.cues, { startMs: range.startMs, endMs: range.endMs });
+    const { buildClipBaseName } = await import("./media/clipRenderer");
+    const baseName = buildClipBaseName(
+      candidateNumberFor(candidate.id),
+      range,
+      candidateTitleById[candidate.id],
+    );
+    const blob = new Blob([srt], { type: "text/srt;charset=utf-8" });
+    let objectUrl: string | null = null;
+    try {
+      objectUrl = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = objectUrl;
+      anchor.download = `${baseName}.srt`;
+      anchor.hidden = true;
+      document.body.append(anchor);
+      anchor.click();
+      anchor.remove();
+      const urlToRelease = objectUrl;
+      globalThis.setTimeout(() => URL.revokeObjectURL(urlToRelease), 10_000);
+      objectUrl = null;
+    } catch {
+      if (objectUrl !== null) {
+        URL.revokeObjectURL(objectUrl);
+      }
+    }
+  };
+
+  const downloadCandidateThumbnail = async (candidate: ReviewedCandidate): Promise<void> => {
+    const frame = candidateTimelineFramesById[candidate.id]?.[0];
+    if (frame === undefined) {
+      return;
+    }
+    const range = effectiveCandidateRange(candidate, boundaryRevisions[candidate.id]);
+    const { buildClipBaseName } = await import("./media/clipRenderer");
+    const baseName = buildClipBaseName(
+      candidateNumberFor(candidate.id),
+      range,
+      candidateTitleById[candidate.id],
+    );
+    const anchor = document.createElement("a");
+    anchor.href = `data:${frame.mimeType};base64,${frame.dataBase64}`;
+    anchor.download = `${baseName}.jpg`;
+    anchor.hidden = true;
+    document.body.append(anchor);
+    anchor.click();
+    anchor.remove();
   };
 
   const downloadApprovedClips = (): void => {
@@ -5259,6 +5345,7 @@ function App() {
         if (controller.signal.aborted) {
           break;
         }
+        void downloadCandidateThumbnail(candidate);
         const completed = await renderAndDownloadClip(
           candidate,
           candidateNumberFor(candidate.id),
@@ -8834,6 +8921,10 @@ function App() {
                       candidate,
                       boundaryRevision,
                     );
+                    const subtitleAvailability = assessClipSubtitleCoverage(
+                      narrative.cues,
+                      { startMs: effectiveRange.startMs, endMs: effectiveRange.endMs },
+                    );
                     const evidenceExplanationProjection =
                       buildCandidateEvidenceExplanationWithFallback({
                         candidate,
@@ -8917,6 +9008,16 @@ function App() {
                                 : "이 구간 클립 다운로드"}
                           </button>
                           <button
+                            className="btn btn-secondary"
+                            type="button"
+                            aria-label={`후보 ${index + 1} 자막 파일 다운로드`}
+                            title={subtitleAvailability.available ? undefined : subtitleAvailability.reason}
+                            disabled={!subtitleAvailability.available}
+                            onClick={() => void downloadCandidateSubtitles(candidate)}
+                          >
+                            자막 받기 (.srt)
+                          </button>
+                          <button
                             className="btn btn-primary"
                             type="button"
                             aria-label={
@@ -8963,12 +9064,45 @@ function App() {
                             단축키 <kbd>?</kbd>
                           </button>
                         </div>
-                        <h4
-                          className="rh-candidate-title"
+                        <div
+                          className="rh-candidate-title-row"
                           id={candidateElementId("candidate-title", candidate.id)}
                         >
-                          후보 {index + 1} · {evidenceExplanation.headline}
-                        </h4>
+                          <span className="rh-candidate-title-number">후보 {index + 1}</span>
+                          {editingCandidateTitle ? (
+                            <input
+                              className="rh-candidate-title-input"
+                              autoFocus
+                              maxLength={80}
+                              value={candidateTitleById[candidate.id] ?? evidenceExplanation.headline}
+                              aria-label={ui("후보 제목 편집", "Edit candidate title")}
+                              onChange={(event) => {
+                                const nextValue = event.target.value;
+                                setCandidateTitleById((current) => ({
+                                  ...current,
+                                  [candidate.id]: nextValue,
+                                }));
+                              }}
+                              onBlur={() => setEditingCandidateTitle(false)}
+                              onKeyDown={(event) => {
+                                if (event.key === "Enter" || event.key === "Escape") {
+                                  event.currentTarget.blur();
+                                }
+                              }}
+                            />
+                          ) : (
+                            <h4 className="rh-candidate-title">
+                              {candidateTitleById[candidate.id] ?? evidenceExplanation.headline}
+                            </h4>
+                          )}
+                          <button
+                            type="button"
+                            className="rh-candidate-title-edit"
+                            onClick={() => setEditingCandidateTitle((current) => !current)}
+                          >
+                            {editingCandidateTitle ? ui("완료", "Done") : ui("제목 편집", "Edit title")}
+                          </button>
+                        </div>
                         <div
                           className="ex-seg"
                           role="tablist"
@@ -9670,7 +9804,7 @@ function App() {
 
                   <div className="rh-export-actions">
                     <button
-                      className="btn btn-primary rh-primary-action"
+                      className="btn btn-primary rh-primary-action rh-export-main-action"
                       type="button"
                       disabled={
                         sourceFile === null ||
@@ -9688,30 +9822,32 @@ function App() {
                             ? "원본 연결 후 클립 전체 다운로드"
                             : "승인한 클립 전체 다운로드"}
                     </button>
-                    <button
-                      className="btn btn-primary rh-primary-action"
-                      type="button"
-                      disabled={approvedCount === 0}
-                      onClick={() => exportCandidates("csv")}
-                    >
-                      Excel용 시간표 받기 (.csv)
-                    </button>
-                    <button
-                      className="btn btn-secondary"
-                      type="button"
-                      disabled={approvedCount === 0}
-                      onClick={() => void copyApprovedTimecodes()}
-                    >
-                      타임코드 복사
-                    </button>
-                    <button
-                      className="btn btn-secondary"
-                      type="button"
-                      disabled={approvedCount === 0}
-                      onClick={() => exportCandidates("markdown")}
-                    >
-                      읽기 좋은 목록 (.md)
-                    </button>
+                    <div className="rh-export-secondary-row">
+                      <button
+                        className="btn btn-secondary"
+                        type="button"
+                        disabled={approvedCount === 0}
+                        onClick={() => exportCandidates("csv")}
+                      >
+                        Excel용 시간표 (.csv)
+                      </button>
+                      <button
+                        className="btn btn-secondary"
+                        type="button"
+                        disabled={approvedCount === 0}
+                        onClick={() => void copyApprovedTimecodes()}
+                      >
+                        타임코드 복사
+                      </button>
+                      <button
+                        className="btn btn-secondary"
+                        type="button"
+                        disabled={approvedCount === 0}
+                        onClick={() => exportCandidates("markdown")}
+                      >
+                        읽기 좋은 목록 (.md)
+                      </button>
+                    </div>
                   </div>
 
                   {clipBatchStatus === "rendering" && (
