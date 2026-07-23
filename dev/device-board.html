@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>ExClipper device board</title>
+<!--
+  Breakpoint board. Chrome's desktop window has a ~500px floor, so narrow
+  viewports can't be tested with --window-size. Each iframe below gets a real
+  viewport of its own, which makes phone and tablet-portrait genuinely
+  measurable in a single screenshot.
+-->
+<style>
+  body { margin:0; padding:16px; background:#20222b; color:#cfd3e0;
+         font:12px ui-monospace,monospace; display:flex; gap:16px; align-items:flex-start }
+  figure { margin:0; display:flex; flex-direction:column; gap:6px }
+  iframe { border:0; background:#fff; border-radius:6px; display:block }
+</style>
+</head>
+<body>
+  <figure><figcaption>tablet portrait · 834×1100</figcaption>
+    <iframe src="./surface-harness.html" width="834" height="1100"></iframe></figure>
+  <figure><figcaption>phone · 390×1100</figcaption>
+    <iframe src="./surface-harness.html" width="390" height="1100"></iframe></figure>
+  <figure><figcaption>phone landscape · 740×420</figcaption>
+    <iframe src="./surface-harness.html" width="740" height="420"></iframe></figure>
+</body>
+</html>

@@ -394,7 +394,7 @@ type AnalysisSelectionSummary = DurableAnalysisSelectionSummary;
 type AnalysisCoverageSummary = DurableAnalysisCoverageSummary;
 type AnalysisGapApprovalEvidence = DurableAnalysisGapApprovalEvidence;
 
-const APP_VERSION = "0.5.0";
+const APP_VERSION = "0.5.1";
 const PERSISTENCE_SCHEMA_VERSION = "0.3.0";
 const SIGNAL_ENGINE_VERSION =
   "streamer-reaction-fast-pass-v5-chat-fallback-music-confirmation";
@@ -7998,9 +7998,9 @@ function App() {
                         <span>{formatDuration(boundarySourceDurationMs)}</span>
                       </div>
                       <span className="ex-sur-head-chip">
-                        후보 {previewCandidateNumber > 0 ? previewCandidateNumber : orderedCandidates.length > 0 ? 1 : 0}/{orderedCandidates.length}
-                        {" · 남음 "}
-                        {remainingReviewCount}
+                        후보 <b>{previewCandidateNumber > 0 ? previewCandidateNumber : orderedCandidates.length > 0 ? 1 : 0}/{orderedCandidates.length}</b>
+                        {" · 남음 "}<b>{remainingReviewCount}</b>
+                        {" · 사용 "}<b>{approvedCount}</b>
                       </span>
                     </div>
                   )}
