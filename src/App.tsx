@@ -1,4 +1,5 @@
 import {
+  Fragment,
   useCallback,
   useEffect,
   useMemo,
@@ -211,7 +212,6 @@ import {
 } from "./domain/candidatePassBRun";
 import {
   applyCandidateBoundaryCommand,
-  BOUNDARY_NUDGE_MS,
   candidateRangeWasAdjusted,
   createCandidateBoundaryRevision,
   effectiveCandidateRange,
@@ -8882,52 +8882,32 @@ function App() {
 
                     {focusedCandidate !== null && (
                       <div className="ex-trim" aria-label="시작·끝 다듬기">
-                        <span className="ex-trim-label">시작</span>
-                        <button
-                          type="button"
-                          aria-label={`후보 ${previewCandidateNumber} 시작을 앞으로`}
-                          onClick={() => nudgeCandidateBoundary(focusedCandidate, "SHIFT_START", -5_000)}
-                        >
-                          −{BOUNDARY_NUDGE_MS / 1_000}초
-                        </button>
-                        <button
-                          type="button"
-                          aria-label={`후보 ${previewCandidateNumber} 시작을 뒤로`}
-                          onClick={() => nudgeCandidateBoundary(focusedCandidate, "SHIFT_START", 5_000)}
-                        >
-                          +{BOUNDARY_NUDGE_MS / 1_000}초
-                        </button>
-                        <button
-                          type="button"
-                          disabled={sourcePreviewUrl === null}
-                          onClick={() => setBoundaryFromPlayerPosition(focusedCandidate, "SET_START_FROM_PLAYER")}
-                        >
-                          재생 위치로
-                        </button>
-                        <span className="ex-trim-sep" aria-hidden="true" />
-                        <span className="ex-trim-label">끝</span>
-                        <button
-                          type="button"
-                          aria-label={`후보 ${previewCandidateNumber} 끝을 앞으로`}
-                          onClick={() => nudgeCandidateBoundary(focusedCandidate, "SHIFT_END", -5_000)}
-                        >
-                          −{BOUNDARY_NUDGE_MS / 1_000}초
-                        </button>
-                        <button
-                          type="button"
-                          aria-label={`후보 ${previewCandidateNumber} 끝을 뒤로`}
-                          onClick={() => nudgeCandidateBoundary(focusedCandidate, "SHIFT_END", 5_000)}
-                        >
-                          +{BOUNDARY_NUDGE_MS / 1_000}초
-                        </button>
-                        <button
-                          type="button"
-                          disabled={sourcePreviewUrl === null}
-                          onClick={() => setBoundaryFromPlayerPosition(focusedCandidate, "SET_END_FROM_PLAYER")}
-                        >
-                          재생 위치로
-                        </button>
-                        <span className="ex-trim-sep" aria-hidden="true" />
+                        {([
+                          { edge: "시작", shift: "SHIFT_START", fromPlayer: "SET_START_FROM_PLAYER" },
+                          { edge: "끝", shift: "SHIFT_END", fromPlayer: "SET_END_FROM_PLAYER" },
+                        ] as const).map(({ edge, shift, fromPlayer }) => (
+                          <Fragment key={edge}>
+                            <span className="ex-trim-label">{edge}</span>
+                            {([-5_000, 5_000] as const).map((deltaMs) => (
+                              <button
+                                key={deltaMs}
+                                type="button"
+                                aria-label={`후보 ${previewCandidateNumber} ${edge}을 ${deltaMs < 0 ? "앞" : "뒤"}으로`}
+                                onClick={() => nudgeCandidateBoundary(focusedCandidate, shift, deltaMs)}
+                              >
+                                {deltaMs < 0 ? "−" : "+"}{Math.abs(deltaMs) / 1_000}초
+                              </button>
+                            ))}
+                            <button
+                              type="button"
+                              disabled={sourcePreviewUrl === null}
+                              onClick={() => setBoundaryFromPlayerPosition(focusedCandidate, fromPlayer)}
+                            >
+                              재생 위치로
+                            </button>
+                            <span className="ex-trim-sep" aria-hidden="true" />
+                          </Fragment>
+                        ))}
                         <button
                           type="button"
                           disabled={!focusedBoundaryTouched || !focusedRangeAdjusted}

@@ -61,6 +61,55 @@
   --ex-body-edge: rgba(255, 255, 255, .1);
 }
 
+/* ── Scroll surfaces ───────────────────────────────────────────────────
+ * A default OS scrollbar is the one piece of chrome that gives away that
+ * this is a web page rather than a device, so every scroll area in the app
+ * gets the same themed treatment — the screen, the dossier's 단서 pane, the
+ * map sheet, and any panel that scrolls on its own. Both engines are covered:
+ * `scrollbar-*` for Gecko, `::-webkit-scrollbar` for Blink and WebKit. */
+
+.rh-app,
+.rh-app * {
+  scrollbar-width: thin;
+  scrollbar-color: var(--ex-line2) transparent;
+}
+
+.rh-app ::-webkit-scrollbar,
+.rh-app::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.rh-app ::-webkit-scrollbar-track,
+.rh-app::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.rh-app ::-webkit-scrollbar-thumb,
+.rh-app::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background: var(--ex-line2);
+  background-clip: content-box;
+}
+
+.rh-app ::-webkit-scrollbar-thumb:hover,
+.rh-app::-webkit-scrollbar-thumb:hover {
+  background: var(--ex-ink4);
+  background-clip: content-box;
+}
+
+.rh-app ::-webkit-scrollbar-corner,
+.rh-app::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* The stage is the one dark surface, so it needs the inverted thumb. */
+.rh-app .ex-stage ::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, .24);
+  background-clip: content-box;
+}
+
 /* Timecodes and counts are data, not prose. */
 .rh-app .ex-tc,
 .rh-app .ex-pos-tc,
@@ -89,6 +138,7 @@
   /* The body. Machined edge: a bright hairline along the top where the
    * chamfer would catch the light, fading out by the sides. */
   .ex-device {
+    position: relative;
     display: flex;
     flex: 1 1 auto;
     max-width: 1560px;
@@ -119,10 +169,6 @@
     transform: translate(-50%, -50%);
   }
 
-  .ex-device {
-    position: relative;
-  }
-
   /* The screen. Recessed under the bezel — the inner shadow is what sells
    * glass sitting below the body rather than printed on it. */
   .ex-device-screen {
@@ -147,18 +193,6 @@
     min-height: 0;
     overflow-y: auto;
     overscroll-behavior: contain;
-    scrollbar-width: thin;
-  }
-
-  .ex-screen::-webkit-scrollbar {
-    width: 10px;
-  }
-
-  .ex-screen::-webkit-scrollbar-thumb {
-    border: 3px solid transparent;
-    border-radius: 999px;
-    background: var(--ex-line2);
-    background-clip: content-box;
   }
 
   /* The header is a screen bar now, not a website masthead. */
@@ -1001,7 +1035,6 @@
   .rh-app .ex-pane[data-pane="clues"] {
     overflow-y: auto;
     overscroll-behavior: contain;
-    scrollbar-width: thin;
     padding-right: var(--ex-space-2xs);
   }
 
