@@ -1,0 +1,1503 @@
+/*
+ * ExClipper — the instrument.
+ *
+ * Built from DESIGN_SPEC_2026-07-23 §3.1 and the 0.4 visual mockup rather than
+ * from the styles that preceded it. Loads last, so it owns the final say.
+ *
+ * The idea, stated once so the rest of the file reads as consequences:
+ *
+ *   ExClipper is not a page. It is a device sitting on a desk. The app lives
+ *   behind glass in a machined body; the body never moves and never scrolls —
+ *   only what is on the screen does. Inside, two protagonists: the video and
+ *   the narrative. Everything else retreats into the dossier's tabs, behind a
+ *   fold, or into a sheet.
+ *
+ * Consequences that recur below:
+ *   - The desk (bg2) is behind the device. The screen carries its own ground,
+ *     and cards float on that. Never card-on-card.
+ *   - The review screen is a fixed 16:9 canvas. Every field has a copy budget;
+ *     what overflows is clipped, not scrolled.
+ *   - The body is only rendered where it can be honest — at desktop widths.
+ *     Below that the app unwraps into an ordinary document (§10).
+ */
+
+/* ══ 1. Tokens the spec called for but that never landed ═══════════════
+ * DESIGN_SPEC §2.1 raised radius to 7/10/14/20 for the tablet card feel and
+ * tinted shadows with the ink hue instead of slate. Correcting them at token
+ * level repaints every rule that consumes the scale — which is the point.
+ * Softness has to be systemic or it reads as decoration. */
+
+:root {
+  --rh-radius-sm: 7px;
+  --rh-radius-md: 10px;
+  --rh-radius-lg: 14px;
+  --rh-radius-xl: 20px;
+
+  --ex-sh1: 0 1px 3px rgba(23, 22, 46, .07);
+  --ex-sh2: 0 10px 30px rgba(23, 22, 46, .09);
+  --ex-sh3: 0 22px 52px rgba(23, 22, 46, .18);
+
+  --ex-elev-1: var(--ex-sh1);
+  --ex-elev-2: var(--ex-sh2);
+  --ex-elev-3: var(--ex-sh3);
+
+  --ex-mono: ui-monospace, "Cascadia Mono", "D2Coding", Consolas, monospace;
+  --ex-motion-sheet: 260ms cubic-bezier(.32, .72, 0, 1);
+
+  /* Device body. Cool near-black; the screen is the only light source. */
+  --ex-body: #1c1e26;
+  --ex-body-lo: #0d0e13;
+  --ex-body-edge: rgba(255, 255, 255, .16);
+  --ex-bezel: 13px;
+}
+
+[data-theme="dark"] {
+  --ex-sh1: 0 1px 2px rgba(0, 0, 0, .4);
+  --ex-sh2: 0 6px 20px rgba(0, 0, 0, .45);
+  --ex-sh3: 0 18px 44px rgba(0, 0, 0, .55);
+
+  --ex-body: #24262f;
+  --ex-body-lo: #14151b;
+  --ex-body-edge: rgba(255, 255, 255, .1);
+}
+
+/* Timecodes and counts are data, not prose. */
+.rh-app .ex-tc,
+.rh-app .ex-pos-tc,
+.rh-app .ex-sur-head-chip b,
+.rh-app .ex-stage-hud {
+  font-family: var(--ex-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -.01em;
+}
+
+/* ══ 2. The desk and the device ════════════════════════════════════════ */
+
+@media (min-width: 1101px) {
+  /* The desk: a lit surface, not a flat fill. The vignette is what stops the
+   * body from looking pasted onto a colour swatch. */
+  .rh-app {
+    display: flex;
+    height: 100dvh;
+    padding: clamp(14px, 2.2vh, 30px);
+    background:
+      radial-gradient(120% 90% at 50% -10%, color-mix(in srgb, var(--ex-bg) 62%, var(--ex-bg2)) 0%, transparent 62%),
+      var(--ex-bg2);
+    overflow: hidden;
+  }
+
+  /* The body. Machined edge: a bright hairline along the top where the
+   * chamfer would catch the light, fading out by the sides. */
+  .ex-device {
+    display: flex;
+    flex: 1 1 auto;
+    max-width: 1560px;
+    min-height: 0;
+    margin: auto;
+    padding: var(--ex-bezel);
+    border-radius: 30px;
+    background: linear-gradient(168deg, var(--ex-body) 0%, var(--ex-body-lo) 100%);
+    box-shadow:
+      inset 0 1px 0 var(--ex-body-edge),
+      inset 0 0 0 1px rgba(255, 255, 255, .045),
+      0 1px 2px rgba(12, 14, 22, .5),
+      0 18px 40px -12px rgba(12, 14, 22, .5),
+      0 48px 90px -30px rgba(12, 14, 22, .55);
+  }
+
+  /* The camera. Small enough to be furniture, not ornament. */
+  .ex-device::before {
+    content: "";
+    position: absolute;
+    top: calc(var(--ex-bezel) / 2);
+    left: 50%;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #0a0b0f;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .1);
+    transform: translate(-50%, -50%);
+  }
+
+  .ex-device {
+    position: relative;
+  }
+
+  /* The screen. Recessed under the bezel — the inner shadow is what sells
+   * glass sitting below the body rather than printed on it. */
+  .ex-device-screen {
+    display: grid;
+    grid-template-columns: 60px minmax(0, 1fr);
+    flex: 1 1 auto;
+    min-width: 0;
+    min-height: 0;
+    border-radius: 18px;
+    background: var(--ex-bg2);
+    box-shadow:
+      inset 0 0 0 1px rgba(0, 0, 0, .55),
+      inset 0 2px 6px rgba(0, 0, 0, .28);
+    overflow: hidden;
+  }
+
+  /* Only the screen contents move. */
+  .ex-screen {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+  }
+
+  .ex-screen::-webkit-scrollbar {
+    width: 10px;
+  }
+
+  .ex-screen::-webkit-scrollbar-thumb {
+    border: 3px solid transparent;
+    border-radius: 999px;
+    background: var(--ex-line2);
+    background-clip: content-box;
+  }
+
+  /* The header is a screen bar now, not a website masthead. */
+  .rh-app > .ex-device .ex-screen > header {
+    position: sticky;
+    top: 0;
+    z-index: 30;
+    flex: 0 0 auto;
+    border-bottom: 1px solid var(--ex-line);
+    background: color-mix(in srgb, var(--ex-bg2) 88%, transparent);
+    backdrop-filter: blur(12px);
+  }
+
+  .rh-app .ex-screen > .rh-shell {
+    width: 100%;
+    max-width: 1240px;
+    padding: 0 28px 56px;
+  }
+
+  /* Overlays are anchored to the viewport, so they must be pulled inside the
+   * bezel by hand or they float over the body. */
+  .rh-app .rh-review-undo {
+    right: calc(clamp(14px, 2.2vh, 30px) + var(--ex-bezel) + 18px);
+    bottom: calc(clamp(14px, 2.2vh, 30px) + var(--ex-bezel) + 18px);
+  }
+
+  .rh-app .rh-shortcut-overlay {
+    inset: clamp(14px, 2.2vh, 30px);
+    border-radius: 30px;
+  }
+}
+
+/* ══ 3. The rail — a painted column, the way the samples build it ══════
+ * Every tablet reference shares this: navigation is not a bare strip of icons
+ * in the margin, it is a saturated rounded column standing inside the screen,
+ * with the active item punched out of it in white. That single element is
+ * what reads as "tablet app" before any other detail lands, so it carries the
+ * signature colour rather than borrowing the neutral ground. */
+
+.rh-app .ex-rail {
+  gap: var(--ex-space-xs);
+  margin: 0;
+  padding: var(--ex-space-md) 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  overflow: visible;
+}
+
+@media (min-width: 1101px) {
+  .rh-app .ex-device-screen > .ex-rail {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--ex-space-sm);
+    margin: var(--ex-space-sm);
+    padding: var(--ex-space-md) 0;
+    border: 0;
+    border-radius: var(--rh-radius-xl);
+    background: linear-gradient(170deg, var(--ex-accent) 0%, color-mix(in srgb, var(--ex-accent) 82%, #2a1f7a) 100%);
+    box-shadow: var(--ex-sh2);
+  }
+
+  .rh-app .ex-device-screen > .ex-rail .ex-rail-steps {
+    flex-direction: column;
+    gap: var(--ex-space-2xs);
+  }
+
+  /* On the painted column the brand mark inverts: white plate, accent letter. */
+  .rh-app .ex-device-screen > .ex-rail .ex-rail-brand {
+    background: rgba(255, 255, 255, .96);
+    color: var(--ex-accent);
+  }
+
+  .rh-app .ex-device-screen > .ex-rail .ex-rail-step > button {
+    color: rgba(255, 255, 255, .72);
+  }
+
+  .rh-app .ex-device-screen > .ex-rail .ex-rail-step > button:hover:not(:disabled) {
+    background: rgba(255, 255, 255, .16);
+    color: #fff;
+  }
+
+  .rh-app .ex-device-screen > .ex-rail .ex-rail-step > button[aria-current="step"] {
+    background: #fff;
+    color: var(--ex-accent);
+    box-shadow: 0 2px 8px rgba(12, 14, 22, .18);
+  }
+
+  .rh-app .ex-device-screen
+    > .ex-rail
+    .ex-rail-step
+    > button[data-complete="true"]:not([aria-current="step"]) {
+    color: rgba(255, 255, 255, .96);
+  }
+
+  .rh-app .ex-device-screen > .ex-rail .ex-rail-step > button:disabled {
+    color: rgba(255, 255, 255, .34);
+  }
+
+  .rh-app .ex-device-screen > .ex-rail .ex-rail-theme {
+    color: rgba(255, 255, 255, .72);
+  }
+
+  .rh-app .ex-device-screen > .ex-rail .ex-rail-theme:hover {
+    background: rgba(255, 255, 255, .16);
+    color: #fff;
+  }
+}
+
+.rh-app .ex-rail-brand {
+  width: 34px;
+  height: 34px;
+  margin-bottom: var(--ex-space-2xs);
+  border-radius: 11px;
+  font-size: .9375rem;
+  box-shadow: var(--ex-sh1);
+}
+
+.rh-app .ex-rail-step > button {
+  width: 38px;
+  height: 38px;
+  border: 0;
+  border-radius: 12px;
+  color: var(--ex-ink4);
+  transition: background var(--ex-motion-fast), color var(--ex-motion-fast);
+}
+
+.rh-app .ex-rail-step > button svg {
+  width: 18px;
+  height: 18px;
+}
+
+.rh-app .ex-rail-step > button:hover:not(:disabled) {
+  border: 0;
+  background: var(--ex-bg3);
+  color: var(--ex-ink2);
+}
+
+.rh-app .ex-rail-step > button[aria-current="step"] {
+  border: 0;
+  background: var(--ex-accent-bg);
+  color: var(--ex-accent-ink);
+}
+
+.rh-app .ex-rail-step > button[data-complete="true"]:not([aria-current="step"]) {
+  color: var(--ex-ok);
+}
+
+.rh-app .ex-rail-theme {
+  width: 38px;
+  height: 38px;
+  border: 0;
+  border-radius: 12px;
+  background: none;
+  color: var(--ex-ink4);
+}
+
+.rh-app .ex-rail-theme:hover {
+  background: var(--ex-bg3);
+  color: var(--ex-ink2);
+}
+
+/* ══ 4. The review canvas ══════════════════════════════════════════════
+ * A fixed 16:9 sheet of glass within the screen. Height is driven so the
+ * aspect ratio derives the width — that way it can never overflow the
+ * device, whatever the viewport. */
+
+@media (min-width: 1101px) {
+  .rh-app .rh-timeline-review-layout[data-review-ready="true"] {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    position: relative;
+    height: clamp(430px, calc(100dvh - 268px), 760px);
+    aspect-ratio: 16 / 9;
+    width: auto;
+    max-width: 100%;
+    margin-inline: auto;
+    padding: var(--ex-space-md) var(--ex-space-lg);
+    border: 1px solid var(--ex-line);
+    border-radius: var(--rh-radius-xl);
+    background: var(--ex-bg);
+    box-shadow: var(--ex-sh2);
+    overflow: hidden;
+  }
+
+  /* ── 4.1 Surface header — the tablet greeting row, for a broadcast ── */
+
+  .rh-app .ex-sur-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--ex-space-sm);
+    flex: 0 0 auto;
+  }
+
+  .rh-app .ex-sur-head-title {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    min-width: 0;
+  }
+
+  /* The samples' greeting row, carrying a broadcast instead of a name. */
+  .rh-app .ex-sur-head-title strong {
+    overflow: hidden;
+    color: var(--ex-ink);
+    font-size: 1.25rem;
+    font-weight: 800;
+    letter-spacing: -.018em;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .rh-app .ex-sur-head-title span {
+    flex: 0 0 auto;
+    color: var(--ex-ink3);
+    font-size: .78125rem;
+  }
+
+  .rh-app .ex-sur-head-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--ex-space-2xs);
+    flex: 0 0 auto;
+    padding: 4px 11px;
+    border: 1px solid var(--ex-line);
+    border-radius: var(--rh-radius-md);
+    background: var(--ex-bg2);
+    color: var(--ex-ink2);
+    font-size: .78125rem;
+    font-weight: 600;
+  }
+
+  .rh-app .ex-sur-head-chip b {
+    color: var(--ex-ink);
+  }
+
+  /* ── 4.2 Position strip — 6px where a 196px timeline used to be ──
+   * It answers "where in the broadcast". What happened there is the map's
+   * job, and the map is a sheet. */
+
+  .rh-app .ex-pos {
+    position: relative;
+    flex: 0 0 auto;
+    height: 16px;
+    margin-top: var(--ex-space-sm);
+  }
+
+  .rh-app .ex-pos-rail {
+    position: absolute;
+    inset: 5px 0 auto 0;
+    height: 6px;
+    border-radius: 3px;
+    background: var(--ex-bg3);
+    overflow: hidden;
+  }
+
+  /* 30-minute ticks, drawn rather than marked up. */
+  .rh-app .ex-pos-rail::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: repeating-linear-gradient(
+      90deg,
+      transparent 0 calc(6.25% - 1px),
+      var(--ex-line) calc(6.25% - 1px) 6.25%
+    );
+  }
+
+  .rh-app .ex-pos-marker {
+    position: absolute;
+    top: 3px;
+    width: 10px;
+    height: 10px;
+    padding: 0;
+    border: 2px solid var(--ex-bg);
+    border-radius: 50%;
+    background: var(--ex-ink4);
+    cursor: pointer;
+    transform: translateX(-50%);
+    transition: background var(--ex-motion-fast), transform var(--ex-motion-fast);
+  }
+
+  .rh-app .ex-pos-marker:hover {
+    background: var(--ex-ink3);
+    transform: translateX(-50%) scale(1.2);
+  }
+
+  .rh-app .ex-pos-marker[data-state="approved"] {
+    background: var(--ex-ok);
+  }
+
+  .rh-app .ex-pos-marker[data-state="rejected"] {
+    background: var(--ex-line2);
+  }
+
+  .rh-app .ex-pos-marker[data-current="true"] {
+    top: 0;
+    z-index: 2;
+    width: 16px;
+    height: 16px;
+    background: var(--ex-accent);
+    box-shadow: 0 0 0 4px var(--ex-accent-bg);
+  }
+
+  .rh-app .ex-pos-meta {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--ex-space-sm);
+    flex: 0 0 auto;
+    margin-top: 10px;
+    color: var(--ex-ink3);
+    font-size: .78125rem;
+  }
+
+  .rh-app .ex-map-toggle {
+    padding: 2px 0;
+    border: 0;
+    background: none;
+    color: var(--ex-ink3);
+    font-size: .78125rem;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .rh-app .ex-map-toggle::before {
+    content: "▸";
+    display: inline-block;
+    margin-right: var(--ex-space-2xs);
+    font-size: .625rem;
+    transition: transform var(--ex-motion-fast);
+  }
+
+  .rh-app .ex-map-toggle[aria-expanded="true"]::before {
+    transform: rotate(90deg);
+  }
+
+  .rh-app .ex-map-toggle:hover {
+    color: var(--ex-ink);
+  }
+
+  /* ── 4.3 Workspace — the two protagonists, 58 / 42 ── */
+
+  .rh-app .ex-ws {
+    display: grid;
+    grid-template-columns: 58fr 42fr;
+    gap: var(--ex-space-lg);
+    flex: 1 1 auto;
+    align-items: stretch;
+    min-height: 0;
+    margin-top: var(--ex-space-md);
+  }
+
+  .rh-app .ex-stagewrap {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+  }
+
+  /* ── 4.4 Stage — the video at the size of its own importance ── */
+
+  .rh-app .ex-stage {
+    position: relative;
+    flex: 1 1 auto;
+    min-height: 0;
+    border-radius: var(--rh-radius-lg);
+    background: var(--ex-stage);
+    box-shadow: var(--ex-sh2);
+    overflow: hidden;
+  }
+
+  .rh-app .ex-stage video,
+  .rh-app .ex-stage .rh-preview-video {
+    display: block;
+    width: 100%;
+    height: 100%;
+    max-height: none;
+    border-radius: 0;
+    background: var(--ex-stage);
+    object-fit: contain;
+  }
+
+  .rh-app .ex-stage-empty {
+    display: grid;
+    place-content: center;
+    gap: var(--ex-space-xs);
+    height: 100%;
+    padding: var(--ex-space-lg);
+    text-align: center;
+  }
+
+  .rh-app .ex-stage-empty strong {
+    color: #f2f4f8;
+    font-size: .9375rem;
+  }
+
+  .rh-app .ex-stage-empty p {
+    margin: 0;
+    color: #9aa6bb;
+    font-size: .8125rem;
+  }
+
+  .rh-app .ex-stage-preparing {
+    position: absolute;
+    inset: auto var(--ex-space-sm) var(--ex-space-sm) var(--ex-space-sm);
+    display: flex;
+    align-items: center;
+    gap: var(--ex-space-xs);
+    padding: 8px 12px;
+    border-radius: var(--rh-radius-md);
+    background: rgba(6, 9, 15, .78);
+    color: #dbe4f0;
+    font-size: .75rem;
+    backdrop-filter: blur(4px);
+  }
+
+  /* ── 4.5 Decision dock — detached instrument under the video ──
+   * Reading the evidence is optional; deciding is not. The dock never
+   * scrolls away because the canvas never scrolls. */
+
+  .rh-app .ex-dock {
+    display: grid;
+    grid-template-columns: 1fr 52px 1.4fr;
+    gap: 10px;
+    flex: 0 0 auto;
+    margin-top: var(--ex-space-sm);
+    padding: var(--ex-space-xs);
+    border: 1px solid var(--ex-line);
+    border-radius: var(--rh-radius-lg);
+    background: var(--ex-bg);
+    box-shadow: var(--ex-sh2);
+  }
+
+  .rh-app .ex-dock > button {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--ex-space-xs);
+    min-height: 40px;
+    padding: 0 var(--ex-space-md);
+    border: 1px solid var(--ex-line2);
+    border-radius: var(--rh-radius-md);
+    background: var(--ex-bg);
+    color: var(--ex-ink);
+    font-size: .875rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background var(--ex-motion-fast), border-color var(--ex-motion-fast);
+  }
+
+  .rh-app .ex-dock > button:hover:not(:disabled) {
+    background: var(--ex-bg2);
+  }
+
+  .rh-app .ex-dock > button:disabled {
+    opacity: .5;
+    cursor: not-allowed;
+  }
+
+  .rh-app .ex-dock > button kbd {
+    position: absolute;
+    top: 50%;
+    right: 9px;
+    transform: translateY(-50%);
+  }
+
+  .rh-app .ex-dock-play {
+    padding: 0;
+    font-size: 1rem;
+  }
+
+  .rh-app .ex-dock-approve {
+    border-color: var(--ex-accent);
+    background: var(--ex-accent);
+    color: #fff;
+  }
+
+  .rh-app .ex-dock-approve:hover:not(:disabled) {
+    background: var(--ex-accent);
+    filter: brightness(1.06);
+  }
+
+  .rh-app .ex-dock-approve kbd {
+    border-color: rgba(255, 255, 255, .4);
+    background: rgba(255, 255, 255, .14);
+    color: #fff;
+  }
+
+  /* ── 4.6 Nav row ── */
+
+  .rh-app .ex-navrow {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex: 0 0 auto;
+    margin-top: 10px;
+    color: var(--ex-ink3);
+    font-size: .8125rem;
+  }
+
+  .rh-app .ex-navrow button {
+    padding: var(--ex-space-2xs) var(--ex-space-xs);
+    border: 0;
+    border-radius: var(--rh-radius-sm);
+    background: none;
+    color: var(--ex-ink3);
+    font-size: .8125rem;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .rh-app .ex-navrow button:hover:not(:disabled) {
+    background: var(--ex-bg2);
+    color: var(--ex-ink);
+  }
+
+  .rh-app .ex-navrow button:disabled {
+    opacity: .4;
+    cursor: not-allowed;
+  }
+
+  /* ── 4.7 Trim — it operates the player, so it lives under the player ── */
+
+  .rh-app .ex-trim {
+    display: flex;
+    align-items: center;
+    gap: var(--ex-space-xs);
+    flex: 0 0 auto;
+    flex-wrap: wrap;
+    margin-top: 10px;
+    padding: var(--ex-space-xs) 10px;
+    border: 1px solid var(--ex-line);
+    border-radius: var(--rh-radius-md);
+    background: var(--ex-bg2);
+  }
+
+  .rh-app .ex-trim-label {
+    margin-right: 2px;
+    color: var(--ex-ink4);
+    font-size: .71875rem;
+    font-weight: 700;
+    letter-spacing: .04em;
+  }
+
+  .rh-app .ex-trim button {
+    min-height: 30px;
+    padding: 0 10px;
+    border: 1px solid var(--ex-line2);
+    border-radius: var(--rh-radius-sm);
+    background: var(--ex-bg);
+    color: var(--ex-ink);
+    font-size: .78125rem;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .rh-app .ex-trim button:hover:not(:disabled) {
+    background: var(--ex-bg3);
+  }
+
+  .rh-app .ex-trim button:disabled {
+    opacity: .5;
+    cursor: not-allowed;
+  }
+
+  .rh-app .ex-trim-sep {
+    width: 1px;
+    height: 18px;
+    background: var(--ex-line2);
+  }
+
+  .rh-app .ex-trim-feedback {
+    flex: 1 0 100%;
+    margin: 0;
+    color: var(--ex-ink3);
+    font-size: .75rem;
+  }
+
+  .rh-app .ex-trim-feedback[data-tone="danger"] {
+    color: var(--ex-bad);
+  }
+
+  /* ── 4.7b Per-candidate outputs, quiet by design ──
+   * These act on the clip, so they sit with the player rather than in the
+   * dossier — but they are not decisions, so they stay text-weight. */
+
+  .rh-app .ex-outrow {
+    display: flex;
+    align-items: center;
+    gap: var(--ex-space-xs);
+    flex: 0 0 auto;
+    flex-wrap: wrap;
+    margin-top: var(--ex-space-xs);
+  }
+
+  .rh-app .ex-outrow button {
+    min-height: 28px;
+    padding: 0 10px;
+    border: 1px solid transparent;
+    border-radius: var(--rh-radius-sm);
+    background: none;
+    color: var(--ex-ink3);
+    font-size: .75rem;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .rh-app .ex-outrow button:hover:not(:disabled) {
+    border-color: var(--ex-line);
+    background: var(--ex-bg2);
+    color: var(--ex-ink);
+  }
+
+  .rh-app .ex-outrow button:disabled {
+    opacity: .45;
+    cursor: not-allowed;
+  }
+
+  /* ── 4.8 Dossier — the case file, clipped to its own frame ── */
+
+  .rh-app .ex-dossier {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+    border: 1px solid var(--ex-line);
+    border-radius: 16px;
+    background: var(--ex-bg);
+    box-shadow: var(--ex-sh1);
+    overflow: hidden;
+  }
+
+  .rh-app .ex-dossier-main {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+    padding: var(--ex-space-sm) var(--ex-space-md);
+    overflow: hidden;
+  }
+
+  /* The candidate card kept its element but lost its own chrome: inside the
+   * dossier it *is* the dossier, so the frame belongs to the parent. */
+  .rh-app .ex-dossier-main .rh-candidate-card {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: none;
+    box-shadow: none;
+    overflow: hidden;
+  }
+
+  .rh-app .ex-dossier-main .rh-candidate-main {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  /* The ordinal is already in the surface header chip, and the peak time is
+   * already the current marker on the strip. Saying either again inside the
+   * card spends budget on nothing. */
+  .rh-app .ex-dossier-main .rh-candidate-number,
+  .rh-app .ex-dossier-main .rh-confidence {
+    display: none;
+  }
+
+  .rh-app .ex-ttl {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex: 0 0 auto;
+    min-width: 0;
+  }
+
+  .rh-app .ex-ttl h4 {
+    overflow: hidden;
+    min-width: 0;
+    margin: 0;
+    color: var(--ex-ink);
+    font-size: 1.3125rem;
+    font-weight: 800;
+    letter-spacing: -.015em;
+    line-height: 1.3;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .rh-app .ex-ttl-input {
+    flex: 1 1 auto;
+    min-width: 0;
+    padding: 2px 8px;
+    border: 1px solid var(--ex-accent-line);
+    border-radius: var(--rh-radius-sm);
+    background: var(--ex-bg);
+    color: var(--ex-ink);
+    font-family: inherit;
+    font-size: 1.3125rem;
+    font-weight: 800;
+    letter-spacing: -.015em;
+  }
+
+  .rh-app .ex-ttl-edit {
+    flex: 0 0 auto;
+    padding: 2px 6px;
+    border: 0;
+    border-radius: var(--rh-radius-sm);
+    background: none;
+    color: var(--ex-ink4);
+    font-size: .8125rem;
+    cursor: pointer;
+  }
+
+  .rh-app .ex-ttl-edit:hover {
+    background: var(--ex-bg2);
+    color: var(--ex-ink2);
+  }
+
+  .rh-app .ex-meta {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex: 0 0 auto;
+    flex-wrap: wrap;
+    margin-top: var(--ex-space-xs);
+  }
+
+  .rh-app .ex-meta .ex-tc {
+    padding: 3px 9px;
+    border: 1px solid var(--ex-line);
+    border-radius: var(--rh-radius-sm);
+    background: var(--ex-bg2);
+    color: var(--ex-ink2);
+    font-size: .8125rem;
+  }
+
+  .rh-app .ex-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--ex-space-2xs);
+    padding: 3px 10px;
+    border: 1px solid var(--ex-line2);
+    border-radius: 999px;
+    background: var(--ex-bg2);
+    color: var(--ex-ink3);
+    font-size: .75rem;
+    font-weight: 700;
+  }
+
+  .rh-app .ex-badge[data-kind="ai"] {
+    border-color: var(--ex-accent-line);
+    background: var(--ex-accent-bg);
+    color: var(--ex-accent-ink);
+  }
+
+  .rh-app .ex-badge[data-kind="ok"] {
+    border-color: var(--ex-ok-line);
+    background: var(--ex-ok-bg);
+    color: var(--ex-ok);
+  }
+
+  /* ── 4.9 Bookmark tabs as a segmented pill ──
+   * The tabs dwell across candidates on purpose: keeping 단서 open while
+   * paging with ←/→ is how evidence gets compared without a mouse. That
+   * behaviour is the whole reason these are tabs and not a popover. */
+
+  .rh-app .ex-bmk {
+    display: flex;
+    align-items: center;
+    gap: var(--ex-space-3xs);
+    flex: 0 0 auto;
+    width: max-content;
+    max-width: 100%;
+    margin-top: var(--ex-space-sm);
+    padding: var(--ex-space-3xs);
+    border-radius: 12px;
+    background: var(--ex-bg3);
+  }
+
+  .rh-app .ex-bmk button {
+    padding: var(--ex-space-2xs) var(--ex-space-md);
+    border: 0;
+    border-radius: 9px;
+    background: none;
+    color: var(--ex-ink3);
+    font-size: .78125rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition: color var(--ex-motion-fast), background var(--ex-motion-fast),
+      box-shadow var(--ex-motion-fast);
+  }
+
+  .rh-app .ex-bmk button:hover {
+    color: var(--ex-ink);
+  }
+
+  .rh-app .ex-bmk button[aria-selected="true"] {
+    background: var(--ex-bg);
+    color: var(--ex-accent-ink);
+    box-shadow: var(--ex-sh1);
+  }
+
+  .rh-app .ex-bmk-keys {
+    margin-left: var(--ex-space-xs);
+    padding-right: var(--ex-space-2xs);
+    color: var(--ex-ink4);
+    font-size: .625rem;
+    line-height: 1.3;
+    white-space: nowrap;
+  }
+
+  /* ── 4.10 Panes — each is one page inside its copy budget ── */
+
+  .rh-app .ex-pane {
+    flex: 1 1 auto;
+    min-height: 0;
+    margin-top: var(--ex-space-sm);
+    overflow: hidden;
+  }
+
+  /*
+   * Deliberate exception to "no inner scroll". 요약 and 맥락 are written to a
+   * copy budget, so clipping them is honest — the text is authored to fit.
+   * 단서 is a *list*: its length is whatever the analysis found, and there is
+   * no sheet to spill into yet. Clipping it would hide evidence with no way
+   * to reach it, which is worse than a scrollbar. Revisit once the diagnostic
+   * sheet exists (PART E).
+   */
+  .rh-app .ex-pane[data-pane="clues"] {
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+    padding-right: var(--ex-space-2xs);
+  }
+
+  .rh-app .ex-pane-label {
+    margin: 0 0 var(--ex-space-xs);
+    color: var(--ex-ink4);
+    font-size: .75rem;
+    font-weight: 700;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+  }
+
+  .rh-app .ex-lede p {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+    overflow: hidden;
+    margin: 0;
+    max-width: 40em;
+    color: var(--ex-ink);
+    font-size: 1rem;
+    line-height: 1.78;
+  }
+
+  .rh-app .ex-quote {
+    margin-top: var(--ex-space-md);
+  }
+
+  .rh-app .ex-quote blockquote {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    overflow: hidden;
+    margin: 0;
+    padding: var(--ex-space-sm) var(--ex-space-md);
+    border-left: 3px solid var(--ex-accent-line);
+    border-radius: 0 10px 10px 0;
+    background: var(--ex-bg2);
+    color: var(--ex-ink2);
+    font-size: .90625rem;
+    line-height: 1.7;
+  }
+
+  .rh-app .ex-caveat {
+    margin: var(--ex-space-md) 0 0;
+    color: var(--ex-ink4);
+    font-size: .78125rem;
+  }
+
+  /* Context tab: a vertical run of steps on a connecting spine. */
+  .rh-app .ex-step {
+    position: relative;
+    display: grid;
+    grid-template-columns: 14px minmax(0, 1fr);
+    gap: var(--ex-space-sm);
+    padding: 7px 0;
+  }
+
+  .rh-app .ex-step::before {
+    content: "";
+    position: absolute;
+    top: 22px;
+    bottom: -8px;
+    left: 6px;
+    width: 2px;
+    background: var(--ex-line);
+  }
+
+  .rh-app .ex-step:last-child::before {
+    display: none;
+  }
+
+  .rh-app .ex-step-dot {
+    width: 10px;
+    height: 10px;
+    margin-top: 7px;
+    border-radius: 50%;
+    background: var(--ex-ink4);
+  }
+
+  .rh-app .ex-step[data-now="true"] .ex-step-dot {
+    background: var(--ex-accent);
+    box-shadow: 0 0 0 4px var(--ex-accent-bg);
+  }
+
+  .rh-app .ex-step-label {
+    color: var(--ex-ink4);
+    font-size: .71875rem;
+    font-weight: 700;
+    letter-spacing: .04em;
+  }
+
+  .rh-app .ex-step[data-now="true"] .ex-step-label {
+    color: var(--ex-accent-ink);
+  }
+
+  .rh-app .ex-step p {
+    overflow: hidden;
+    margin: 0;
+    max-width: 40em;
+    color: var(--ex-ink2);
+    font-size: .875rem;
+    line-height: 1.7;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .rh-app .ex-step[data-now="true"] p {
+    color: var(--ex-ink);
+  }
+
+  /* Clues tab: evidence groups divided by hairlines, not boxed. */
+  .rh-app .ex-ev {
+    padding: 10px 0 var(--ex-space-2xs);
+    border-top: 1px solid var(--ex-line);
+  }
+
+  .rh-app .ex-ev:first-child {
+    padding-top: 2px;
+    border-top: 0;
+  }
+
+  .rh-app .ex-ev h5 {
+    margin: 0 0 10px;
+    color: var(--ex-ink4);
+    font-size: .75rem;
+    font-weight: 700;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+  }
+
+  .rh-app .ex-ev ul {
+    display: grid;
+    gap: var(--ex-space-xs);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .rh-app .ex-ev li {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    color: var(--ex-ink2);
+    font-size: .8125rem;
+    line-height: 1.6;
+  }
+
+  .rh-app .ex-ev-jump {
+    flex: 0 0 auto;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--ex-accent-ink);
+    font-family: var(--ex-mono);
+    font-size: .75rem;
+    font-variant-numeric: tabular-nums;
+    cursor: pointer;
+  }
+
+  .rh-app .ex-ev-jump:hover {
+    text-decoration: underline;
+  }
+
+  .rh-app .ex-ev-kind {
+    flex: 0 0 auto;
+    color: var(--ex-ink3);
+    font-size: .75rem;
+  }
+
+  .rh-app .ex-ev-text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* Anything past the budget opens the sheet instead of growing the pane. */
+  .rh-app .ex-more {
+    display: flex;
+    align-items: center;
+    gap: var(--ex-space-xs);
+    width: 100%;
+    margin-top: var(--ex-space-sm);
+    padding: 10px var(--ex-space-sm);
+    border: 1px solid var(--ex-line);
+    border-radius: var(--rh-radius-md);
+    background: var(--ex-bg2);
+    color: var(--ex-ink2);
+    font-size: .8125rem;
+    font-weight: 600;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .rh-app .ex-more::after {
+    content: "→";
+    margin-left: auto;
+    color: var(--ex-ink4);
+  }
+
+  .rh-app .ex-more:hover {
+    border-color: var(--ex-line2);
+    background: var(--ex-bg3);
+  }
+
+  /* ── 4.11 Map sheet — broadcast-wide context, off-canvas by default ── */
+
+  .rh-app .rh-timeline-review-layout[data-review-ready="true"] > .rh-candidate-timeline {
+    position: absolute;
+    inset: auto 0 0 0;
+    z-index: 21;
+    height: auto;
+    max-height: 62%;
+    margin: 0;
+    border: 0;
+    border-top: 1px solid var(--ex-line);
+    border-radius: var(--rh-radius-xl) var(--rh-radius-xl) 0 0;
+    background: var(--ex-bg);
+    box-shadow: var(--ex-sh3);
+    overflow-y: auto;
+    transform: translateY(102%);
+    transition: transform var(--ex-motion-sheet);
+  }
+
+  .rh-app .rh-timeline-review-layout[data-review-ready="true"]
+    > .rh-candidate-timeline[data-open="true"] {
+    transform: translateY(0);
+  }
+
+  .rh-app .ex-sheet-scrim {
+    position: absolute;
+    inset: 0;
+    z-index: 20;
+    background: rgba(8, 14, 26, .34);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity var(--ex-motion-base);
+  }
+
+  .rh-app .ex-sheet-scrim[data-open="true"] {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .rh-app .ex-map-close {
+    position: absolute;
+    top: var(--ex-space-sm);
+    right: var(--ex-space-sm);
+    z-index: 1;
+    padding: var(--ex-space-2xs) 10px;
+    border: 1px solid var(--ex-line2);
+    border-radius: var(--rh-radius-sm);
+    background: var(--ex-bg);
+    color: var(--ex-ink3);
+    font-size: .75rem;
+    font-weight: 700;
+    cursor: pointer;
+  }
+
+  .rh-app .ex-map-close:hover {
+    border-color: var(--ex-accent-line);
+    color: var(--ex-ink);
+  }
+}
+
+/* ══ 5. Progress — concurrent tracks ═══════════════════════════════════ */
+
+.rh-app .rh-progress-tracks-panel {
+  border: 1px solid var(--ex-line);
+  border-radius: var(--rh-radius-lg);
+  background: var(--ex-bg);
+  box-shadow: var(--ex-sh1);
+}
+
+.rh-app .rh-progress-track {
+  grid-template-columns: 88px minmax(0, 1fr) 150px;
+  gap: 14px;
+}
+
+.rh-app .rh-progress-track-label {
+  color: var(--ex-ink2);
+  font-size: .84375rem;
+  font-weight: 700;
+}
+
+.rh-app .rh-progress-track-bar {
+  height: 8px;
+  border-radius: 4px;
+  background: var(--ex-bg3);
+}
+
+.rh-app .rh-progress-track-bar > i {
+  border-radius: 4px;
+  background: var(--ex-accent);
+}
+
+.rh-app .rh-progress-track[data-done="true"] .rh-progress-track-bar > i {
+  background: var(--ex-ok);
+}
+
+.rh-app .rh-progress-track-status {
+  color: var(--ex-ink3);
+  font-size: .78125rem;
+  text-align: right;
+}
+
+/* Early candidates are an invitation, not a warning. */
+.rh-app .rh-early-candidates {
+  border-color: var(--ex-accent-line);
+  border-radius: var(--rh-radius-md);
+  background: var(--ex-accent-bg);
+}
+
+.rh-app .rh-early-candidates > summary {
+  color: var(--ex-ink);
+}
+
+/* ══ 6. Start — the spec panel is the pitch ════════════════════════════ */
+
+.rh-app .rh-spec-panel {
+  gap: 0;
+  padding: var(--ex-space-2xs) 22px;
+  border: 1px solid var(--ex-line);
+  border-radius: var(--rh-radius-lg);
+  background: var(--ex-bg);
+}
+
+.rh-app .rh-spec-panel > .rh-eyebrow,
+.rh-app .rh-spec-panel > h3 {
+  margin-top: var(--ex-space-md);
+}
+
+.rh-app .rh-spec-list {
+  gap: 0;
+  margin-top: var(--ex-space-sm);
+}
+
+.rh-app .rh-spec-list > div {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr);
+  gap: var(--ex-space-md);
+  padding: var(--ex-space-md) 0;
+  border-bottom: 1px solid var(--ex-line);
+}
+
+.rh-app .rh-spec-list > div:last-child {
+  border-bottom: 0;
+}
+
+.rh-app .rh-spec-list dt {
+  padding-top: 2px;
+  color: var(--ex-ink4);
+  font-size: .78125rem;
+  font-weight: 700;
+}
+
+.rh-app .rh-spec-list dd {
+  margin: 0;
+  color: var(--ex-ink2);
+  font-size: .875rem;
+  line-height: 1.7;
+}
+
+.rh-app .rh-spec-duration {
+  padding: 0 0 var(--ex-space-md);
+  border-top: 0;
+  color: var(--ex-ink3);
+}
+
+/* ══ 7. Export — one bundle, then the collaboration row ════════════════ */
+
+.rh-app .rh-export-actions {
+  gap: var(--ex-space-sm);
+}
+
+.rh-app .rh-export-main-action {
+  min-height: 52px;
+  border-radius: 12px;
+  font-size: .9375rem;
+}
+
+.rh-app .rh-approved-timeline {
+  border: 1px solid var(--ex-line);
+  border-radius: var(--rh-radius-lg);
+  overflow: hidden;
+}
+
+/* ══ 8. Shared controls ════════════════════════════════════════════════ */
+
+.rh-app kbd {
+  border-radius: 5px;
+  font-size: .6875rem;
+}
+
+.rh-app :focus-visible {
+  outline: 2px solid var(--ex-accent);
+  outline-offset: 2px;
+}
+
+/* ══ 9. Reduced motion ═════════════════════════════════════════════════ */
+
+@media (prefers-reduced-motion: reduce) {
+  .rh-app .rh-candidate-timeline,
+  .rh-app .ex-sheet-scrim,
+  .rh-app .ex-pos-marker,
+  .rh-app .ex-bmk button,
+  .rh-app .ex-map-toggle::before {
+    transition: none;
+  }
+}
+
+/* ══ 10. Below the device breakpoint ═══════════════════════════════════
+ * A hand-held body drawn on a hand-held screen is a lie, and a fixed canvas
+ * on a short viewport hides content. So the app unwraps: no body, no glass,
+ * ordinary document flow, and the copy budgets stop being load-bearing. */
+
+@media (max-width: 1100px) {
+  .ex-device,
+  .ex-device-screen,
+  .ex-screen {
+    display: contents;
+  }
+
+  /* `display: contents` drops the box but keeps generated content, so the
+     camera would survive as a stray dot with no body around it. */
+  .ex-device::before {
+    display: none;
+  }
+
+  .rh-app .ex-sur-head,
+  .rh-app .ex-pos,
+  .rh-app .ex-pos-meta,
+  .rh-app .ex-sheet-scrim,
+  .rh-app .ex-map-close {
+    display: none;
+  }
+
+  .rh-app .ex-ws {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--ex-space-lg);
+  }
+
+  .rh-app .ex-stage {
+    aspect-ratio: 16 / 9;
+    border-radius: var(--rh-radius-lg);
+    background: var(--ex-stage);
+    overflow: hidden;
+  }
+
+  .rh-app .ex-stage video,
+  .rh-app .ex-stage .rh-preview-video {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+  }
+
+  .rh-app .ex-dock {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--ex-space-xs);
+    margin-top: var(--ex-space-sm);
+  }
+
+  .rh-app .ex-dock > button {
+    flex: 1 1 auto;
+    min-height: 44px;
+  }
+
+  .rh-app .ex-trim {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--ex-space-xs);
+    margin-top: var(--ex-space-sm);
+  }
+
+  .rh-app .ex-dossier {
+    border: 1px solid var(--ex-line);
+    border-radius: 16px;
+    background: var(--ex-bg);
+  }
+
+  .rh-app .ex-dossier-main {
+    padding: var(--ex-space-md);
+  }
+
+  .rh-app .ex-lede p,
+  .rh-app .ex-quote blockquote {
+    display: block;
+    -webkit-line-clamp: none;
+    overflow: visible;
+  }
+
+  .rh-app .ex-step p,
+  .rh-app .ex-ev-text {
+    overflow: visible;
+    white-space: normal;
+  }
+}

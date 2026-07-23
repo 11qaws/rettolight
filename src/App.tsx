@@ -232,6 +232,7 @@ import {
 import {
   assessClipSubtitleCoverage,
   buildClipSrt,
+  type ClipSubtitleAvailability,
 } from "./exports/clipSubtitles";
 import {
   createHighlightClipboardText,
@@ -393,7 +394,7 @@ type AnalysisSelectionSummary = DurableAnalysisSelectionSummary;
 type AnalysisCoverageSummary = DurableAnalysisCoverageSummary;
 type AnalysisGapApprovalEvidence = DurableAnalysisGapApprovalEvidence;
 
-const APP_VERSION = "0.4.8";
+const APP_VERSION = "0.5.0";
 const PERSISTENCE_SCHEMA_VERSION = "0.3.0";
 const SIGNAL_ENGINE_VERSION =
   "streamer-reaction-fast-pass-v5-chat-fallback-music-confirmation";
@@ -4618,6 +4619,34 @@ function App() {
   const reviewShortcutsActive =
     contextualCandidatePublicationReady && orderedCandidates.length > 0;
 
+  /*
+   * Derived state for the focused candidate, hoisted out of the card render.
+   * The decision dock and the trim row live beside the video in the left
+   * column while the card renders in the right one, so these can no longer be
+   * computed inside the candidate `.map()` — they are needed on both sides.
+   */
+  const focusedBoundaryRevision =
+    focusedCandidate === null ? null : boundaryRevisions[focusedCandidate.id] ?? null;
+  const focusedRange =
+    focusedCandidate === null
+      ? null
+      : effectiveCandidateRange(focusedCandidate, focusedBoundaryRevision);
+  const focusedRangeAdjusted = candidateRangeWasAdjusted(focusedBoundaryRevision);
+  const focusedBoundaryTouched = (focusedBoundaryRevision?.revision ?? 0) > 0;
+  const focusedSubtitleAvailability: ClipSubtitleAvailability =
+    focusedCandidate === null || focusedRange === null
+      ? { available: false }
+      : assessClipSubtitleCoverage(
+          buildCandidatePassBPresentation(
+            focusedCandidate.id,
+            buildHighlightNarrative(focusedCandidate),
+            candidatePassBEvidenceById[focusedCandidate.id]?.candidateId === focusedCandidate.id
+              ? candidatePassBEvidenceById[focusedCandidate.id]
+              : undefined,
+          ).cues,
+          { startMs: focusedRange.startMs, endMs: focusedRange.endMs },
+        );
+
   const togglePreviewPlayback = (candidate: ReviewedCandidate): void => {
     const player = previewVideo.current;
     if (sourcePreviewUrl === null || player === null) {
@@ -6432,6 +6461,80 @@ function App() {
 
   return (
     <div className="rh-app">
+      {/* The body. Below the device breakpoint these two wrappers collapse to
+          `display: contents`, so the markup is identical either way. */}
+      <div className="ex-device">
+        <div className="ex-device-screen">
+      <nav className="ex-rail" aria-label={ui("작업 단계", "Workflow steps")}>
+        <span className="ex-rail-brand" aria-hidden="true">E</span>
+        <ol className="ex-rail-steps">
+          {[
+            {
+              label:
+                openedRecoveredResult !== null && !sourceReady && candidates.length > 0
+                  ? ui("원본 연결(선택)", "Connect source (optional)")
+                  : ui("원본 고르기", "Choose source"),
+              icon: (
+                <path d="M3 6.5a1.5 1.5 0 0 1 1.5-1.5h4l2 2.4h8.5A1.5 1.5 0 0 1 20.5 9v9a1.5 1.5 0 0 1-1.5 1.5H4.5A1.5 1.5 0 0 1 3 18V6.5Z" />
+              ),
+            },
+            {
+              label: ui("AI가 먼저 찾기", "AI discovery"),
+              icon: <path d="M4 15V9M8.5 18V6M13 20.5V3.5M17.5 15.5V8.5M21 12.5v-1" />,
+            },
+            {
+              label: ui("후보 검토", "Review candidates"),
+              icon: (
+                <>
+                  <rect x="3.5" y="3.5" width="17" height="17" rx="3" />
+                  <path d="M10.3 8.6v6.8l5.7-3.4-5.7-3.4Z" />
+                </>
+              ),
+            },
+            {
+              label: ui("결과 받기", "Export results"),
+              icon: <path d="M12 3.5v11.3M7.3 10.3 12 15l4.7-4.7M4.5 18.5h15" />,
+            },
+          ].map(({ label, icon }, index) => {
+            const step = (index + 1) as 1 | 2 | 3 | 4;
+            const complete = step < currentStep;
+            const reachable = step <= currentStep;
+            return (
+              <li key={label} className="ex-rail-step">
+                <button
+                  type="button"
+                  data-step={step}
+                  data-complete={complete}
+                  aria-current={step === currentStep ? "step" : undefined}
+                  disabled={!reachable}
+                  title={label}
+                  onClick={() => focusRailStep(step)}
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    {icon}
+                  </svg>
+                  <span className="rh-screen-reader-only">
+                    {label}
+                    {complete && ui(" 완료", " complete")}
+                  </span>
+                </button>
+              </li>
+            );
+          })}
+        </ol>
+        <span className="ex-rail-fill" aria-hidden="true" />
+        <button
+          className="ex-rail-theme"
+          type="button"
+          aria-label={theme === "light"
+            ? ui("어두운 화면으로 바꾸기", "Use dark theme")
+            : ui("밝은 화면으로 바꾸기", "Use light theme")}
+          onClick={() => setTheme((current) => (current === "light" ? "dark" : "light"))}
+        >
+          <span aria-hidden="true">{theme === "light" ? "☾" : "☀"}</span>
+        </button>
+      </nav>
+      <div className="ex-screen">
       <header>
         <div className="header-inner rh-header-inner">
           <h1>
@@ -6502,80 +6605,6 @@ function App() {
       )}
 
       <main className="rh-shell">
-        <nav className="ex-rail" aria-label={ui("작업 단계", "Workflow steps")}>
-          <span className="ex-rail-brand" aria-hidden="true">E</span>
-          <ol className="ex-rail-steps">
-            {[
-              {
-                label:
-                  openedRecoveredResult !== null && !sourceReady && candidates.length > 0
-                    ? ui("원본 연결(선택)", "Connect source (optional)")
-                    : ui("원본 고르기", "Choose source"),
-                icon: (
-                  <path d="M3 6.5a1.5 1.5 0 0 1 1.5-1.5h4l2 2.4h8.5A1.5 1.5 0 0 1 20.5 9v9a1.5 1.5 0 0 1-1.5 1.5H4.5A1.5 1.5 0 0 1 3 18V6.5Z" />
-                ),
-              },
-              {
-                label: ui("AI가 먼저 찾기", "AI discovery"),
-                icon: (
-                  <path d="M4 15V9M8.5 18V6M13 20.5V3.5M17.5 15.5V8.5M21 12.5v-1" />
-                ),
-              },
-              {
-                label: ui("후보 검토", "Review candidates"),
-                icon: (
-                  <>
-                    <rect x="3.5" y="3.5" width="17" height="17" rx="3" />
-                    <path d="M10.3 8.6v6.8l5.7-3.4-5.7-3.4Z" />
-                  </>
-                ),
-              },
-              {
-                label: ui("결과 받기", "Export results"),
-                icon: (
-                  <path d="M12 3.5v11.3M7.3 10.3 12 15l4.7-4.7M4.5 18.5h15" />
-                ),
-              },
-            ].map(({ label, icon }, index) => {
-              const step = (index + 1) as 1 | 2 | 3 | 4;
-              const complete = step < currentStep;
-              const reachable = step <= currentStep;
-              return (
-                <li key={label} className="ex-rail-step">
-                  <button
-                    type="button"
-                    data-step={step}
-                    data-complete={complete}
-                    aria-current={step === currentStep ? "step" : undefined}
-                    disabled={!reachable}
-                    title={label}
-                    onClick={() => focusRailStep(step)}
-                  >
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                      {icon}
-                    </svg>
-                    <span className="rh-screen-reader-only">
-                      {label}
-                      {complete && ui(" 완료", " complete")}
-                    </span>
-                  </button>
-                </li>
-              );
-            })}
-          </ol>
-          <span className="ex-rail-fill" aria-hidden="true" />
-          <button
-            className="ex-rail-theme"
-            type="button"
-            aria-label={theme === "light"
-              ? ui("어두운 화면으로 바꾸기", "Use dark theme")
-              : ui("밝은 화면으로 바꾸기", "Use light theme")}
-            onClick={() => setTheme((current) => (current === "light" ? "dark" : "light"))}
-          >
-            <span aria-hidden="true">{theme === "light" ? "☾" : "☀"}</span>
-          </button>
-        </nav>
-
         <div className="ex-shell-content">
         {showRecoveryPanel && (
         <details
@@ -7976,43 +8005,40 @@ function App() {
                     </div>
                   )}
                   {contextualCandidatePublicationReady && orderedCandidates.length > 0 && (
-                    <div className="ex-strip" aria-label="방송 전체에서 후보 위치">
-                      <div className="ex-strip-rail" aria-hidden="true">
-                        <span className="ex-strip-rail-line" />
+                    <>
+                      <div className="ex-pos" aria-label="방송 전체에서 후보 위치">
+                        <span className="ex-pos-rail" aria-hidden="true" />
                         {orderedCandidates.map((candidate, stripIndex) => (
                           <button
                             key={candidate.id}
                             type="button"
-                            className="ex-strip-marker"
+                            className="ex-pos-marker"
                             data-state={candidate.reviewState}
                             data-current={candidate.id === focusedCandidateId}
                             style={{
                               left: `${candidateStripPositionPercent(candidate.peakMs, boundarySourceDurationMs)}%`,
                             }}
                             title={`후보 ${stripIndex + 1} · ${formatDuration(candidate.peakMs)}`}
+                            aria-label={`후보 ${stripIndex + 1}로 이동`}
                             onClick={() => focusCandidateForReview(candidate)}
                           />
                         ))}
                       </div>
-                      <div className="ex-strip-meta">
+                      <div className="ex-pos-meta">
                         <button
                           type="button"
-                          className="ex-strip-map-toggle"
+                          className="ex-map-toggle"
                           aria-keyshortcuts="M"
                           aria-expanded={mapSheetOpen}
                           onClick={() => setMapSheetOpen((open) => !open)}
                         >
-                          ▸ 방송 지도 <kbd>M</kbd>
+                          방송 지도 <kbd>M</kbd>
                         </button>
-                        {focusedCandidateId !== null && (
-                          <span className="ex-strip-timecode">
-                            {formatDuration(
-                              candidates.find(({ id }) => id === focusedCandidateId)?.peakMs ?? 0,
-                            )}
-                          </span>
-                        )}
+                        <span className="ex-pos-tc">
+                          {formatDuration(focusedCandidate?.peakMs ?? 0)} / {formatDuration(boundarySourceDurationMs)}
+                        </span>
                       </div>
-                    </div>
+                    </>
                   )}
                   {contextualCandidatePublicationReady && (
                     <div
@@ -8709,13 +8735,119 @@ function App() {
                   </section>
                   {contextualCandidatePublicationReady && (
                   <section
-                    className="rh-review-rail"
+                    className="ex-ws"
                     aria-label="선택한 후보 영상과 편집 판단"
                   >
-                  <div className="rh-review-editor">
-                    <nav className="rh-candidate-navigation" aria-label="후보 이동">
+                  <div className="ex-stagewrap">
+                    <div className="ex-stage">
+                      {sourcePreviewUrl !== null ? (
+                        <>
+                          <video
+                            ref={previewVideo}
+                            className="rh-preview-video"
+                            controls
+                            playsInline
+                            preload="metadata"
+                            src={sourcePreviewUrl}
+                            onPlay={(event) => {
+                              if (
+                                previewRequestedCandidateIdRef.current === null ||
+                                previewPreparedCandidateIdRef.current !==
+                                  previewRequestedCandidateIdRef.current
+                              ) {
+                                event.currentTarget.pause();
+                              }
+                            }}
+                            onTimeUpdate={(event) => {
+                              const activeCandidate = candidates.find(({ id }) => id === focusedCandidateId);
+                              const activeRange =
+                                activeCandidate === undefined
+                                  ? null
+                                  : effectiveCandidateRange(
+                                      activeCandidate,
+                                      boundaryRevisions[activeCandidate.id],
+                                    );
+                              if (
+                                activeRange !== null &&
+                                event.currentTarget.currentTime * 1_000 >= activeRange.endMs
+                              ) {
+                                event.currentTarget.pause();
+                              }
+                            }}
+                          >
+                            이 브라우저는 영상 미리보기를 지원하지 않아요.
+                          </video>
+                          {focusedCandidateId !== null &&
+                            previewPreparedCandidateId !== focusedCandidateId && (
+                              <div className="ex-stage-preparing" role="status">
+                                <strong>검토 화면 준비 중</strong>
+                                <span>소리 없이 시작점에 맞추는 중이에요.</span>
+                              </div>
+                            )}
+                        </>
+                      ) : (
+                        <div className="ex-stage-empty">
+                          <strong>원본을 연결하면 여기서 바로 재생할 수 있어요.</strong>
+                          <p>AI 설명과 시간표 검토는 지금도 가능합니다.</p>
+                          <button className="btn btn-primary" type="button" onClick={focusSourceSection}>
+                            원본 다시 연결
+                          </button>
+                        </div>
+                      )}
+                    </div>
+
+                    {focusedCandidate !== null && (
+                      <div className="ex-dock" aria-label="후보 판단">
+                        <button
+                          type="button"
+                          aria-label={
+                            focusedCandidate.reviewState === "rejected"
+                              ? `후보 ${previewCandidateNumber} 다시 검토`
+                              : `후보 ${previewCandidateNumber} 제외`
+                          }
+                          aria-keyshortcuts="R"
+                          onClick={() =>
+                            reviewCandidateAndAdvance(
+                              focusedCandidate,
+                              focusedCandidate.reviewState === "rejected" ? "unreviewed" : "rejected",
+                            )
+                          }
+                        >
+                          {focusedCandidate.reviewState === "rejected" ? "다시 검토" : "빼기"} <kbd>R</kbd>
+                        </button>
+                        <button
+                          type="button"
+                          className="ex-dock-play"
+                          aria-label={`후보 ${previewCandidateNumber} 구간 재생`}
+                          aria-keyshortcuts="Space"
+                          disabled={sourcePreviewUrl === null}
+                          onClick={() => playCandidate(focusedCandidate)}
+                        >
+                          ▶
+                        </button>
+                        <button
+                          type="button"
+                          className="ex-dock-approve"
+                          aria-label={
+                            focusedCandidate.reviewState === "approved"
+                              ? `후보 ${previewCandidateNumber} 승인 취소`
+                              : `후보 ${previewCandidateNumber} 사용하기`
+                          }
+                          aria-keyshortcuts="A"
+                          onClick={() =>
+                            reviewCandidateAndAdvance(
+                              focusedCandidate,
+                              focusedCandidate.reviewState === "approved" ? "unreviewed" : "approved",
+                            )
+                          }
+                        >
+                          {focusedCandidate.reviewState === "approved" ? "승인 취소" : "사용할게요"} <kbd>A</kbd>
+                        </button>
+                      </div>
+                    )}
+
+                    <div className="ex-navrow">
                       <button
-                        className="btn btn-secondary"
                         type="button"
                         disabled={previousFocusedCandidate === null}
                         onClick={() => {
@@ -8724,11 +8856,18 @@ function App() {
                           }
                         }}
                       >
-                        이전 후보
+                        ← 이전 후보
                       </button>
-                      <span>{previewCandidateNumber} / {orderedCandidates.length}</span>
                       <button
-                        className="btn btn-secondary"
+                        type="button"
+                        aria-label="검토 단축키 안내 열기"
+                        aria-keyshortcuts="?"
+                        aria-expanded={shortcutHelpOpen}
+                        onClick={() => setShortcutHelpOpen(true)}
+                      >
+                        단축키 <kbd>?</kbd>
+                      </button>
+                      <button
                         type="button"
                         disabled={nextFocusedCandidate === null}
                         onClick={() => {
@@ -8737,98 +8876,122 @@ function App() {
                           }
                         }}
                       >
-                        다음 후보
+                        다음 후보 →
                       </button>
-                    </nav>
-                    <aside className="rh-preview-panel" aria-label="선택한 후보 미리보기">
-                      <div className="rh-preview-heading">
-                        <div>
-                          <p className="rh-eyebrow">선택한 후보 재생</p>
-                          <strong>
-                            {previewCandidateNumber > 0
-                              ? `후보 ${previewCandidateNumber} / ${orderedCandidates.length}`
-                              : "타임라인에서 후보를 골라 주세요"}
-                          </strong>
-                        </div>
-                        {focusedCandidateId !== null && (
-                          <span className="rh-preview-state">
-                            {candidates.find(({ id }) => id === focusedCandidateId)?.reviewState === "approved"
-                              ? "사용"
-                              : candidates.find(({ id }) => id === focusedCandidateId)?.reviewState === "rejected"
-                                ? "제외"
-                                : "검토 전"}
-                          </span>
+                    </div>
+
+                    {focusedCandidate !== null && (
+                      <div className="ex-trim" aria-label="시작·끝 다듬기">
+                        <span className="ex-trim-label">시작</span>
+                        <button
+                          type="button"
+                          aria-label={`후보 ${previewCandidateNumber} 시작을 앞으로`}
+                          onClick={() => nudgeCandidateBoundary(focusedCandidate, "SHIFT_START", -5_000)}
+                        >
+                          −{BOUNDARY_NUDGE_MS / 1_000}초
+                        </button>
+                        <button
+                          type="button"
+                          aria-label={`후보 ${previewCandidateNumber} 시작을 뒤로`}
+                          onClick={() => nudgeCandidateBoundary(focusedCandidate, "SHIFT_START", 5_000)}
+                        >
+                          +{BOUNDARY_NUDGE_MS / 1_000}초
+                        </button>
+                        <button
+                          type="button"
+                          disabled={sourcePreviewUrl === null}
+                          onClick={() => setBoundaryFromPlayerPosition(focusedCandidate, "SET_START_FROM_PLAYER")}
+                        >
+                          재생 위치로
+                        </button>
+                        <span className="ex-trim-sep" aria-hidden="true" />
+                        <span className="ex-trim-label">끝</span>
+                        <button
+                          type="button"
+                          aria-label={`후보 ${previewCandidateNumber} 끝을 앞으로`}
+                          onClick={() => nudgeCandidateBoundary(focusedCandidate, "SHIFT_END", -5_000)}
+                        >
+                          −{BOUNDARY_NUDGE_MS / 1_000}초
+                        </button>
+                        <button
+                          type="button"
+                          aria-label={`후보 ${previewCandidateNumber} 끝을 뒤로`}
+                          onClick={() => nudgeCandidateBoundary(focusedCandidate, "SHIFT_END", 5_000)}
+                        >
+                          +{BOUNDARY_NUDGE_MS / 1_000}초
+                        </button>
+                        <button
+                          type="button"
+                          disabled={sourcePreviewUrl === null}
+                          onClick={() => setBoundaryFromPlayerPosition(focusedCandidate, "SET_END_FROM_PLAYER")}
+                        >
+                          재생 위치로
+                        </button>
+                        <span className="ex-trim-sep" aria-hidden="true" />
+                        <button
+                          type="button"
+                          disabled={!focusedBoundaryTouched || !focusedRangeAdjusted}
+                          onClick={() => resetCandidateBoundary(focusedCandidate)}
+                        >
+                          AI 제안으로
+                        </button>
+                        {boundaryFeedback?.candidateId === focusedCandidate.id && (
+                          <p
+                            className="ex-trim-feedback"
+                            data-tone={boundaryFeedback.tone}
+                            role="status"
+                            aria-live="polite"
+                          >
+                            {boundaryFeedback.message}
+                          </p>
                         )}
                       </div>
-                      {sourcePreviewUrl !== null ? (
-                      <div
-                        className="rh-preview-media"
-                        data-ready={
-                          focusedCandidateId !== null &&
-                          previewPreparedCandidateId === focusedCandidateId
-                        }
-                      >
-                        <video
-                          ref={previewVideo}
-                          className="rh-preview-video"
-                          controls
-                          playsInline
-                          preload="metadata"
-                          src={sourcePreviewUrl}
-                          onPlay={(event) => {
-                            if (
-                              previewRequestedCandidateIdRef.current === null ||
-                              previewPreparedCandidateIdRef.current !==
-                                previewRequestedCandidateIdRef.current
-                            ) {
-                              event.currentTarget.pause();
-                            }
-                          }}
-                          onTimeUpdate={(event) => {
-                            const activeCandidate = candidates.find(({ id }) => id === focusedCandidateId);
-                            const activeRange =
-                              activeCandidate === undefined
-                                ? null
-                                : effectiveCandidateRange(
-                                    activeCandidate,
-                                    boundaryRevisions[activeCandidate.id],
-                                  );
-                            if (
-                              activeRange !== null &&
-                              event.currentTarget.currentTime * 1_000 >= activeRange.endMs
-                            ) {
-                              event.currentTarget.pause();
-                            }
-                          }}
+                    )}
+
+                    {/* Per-candidate outputs sit with the player, not in the
+                        dossier: they act on this clip, the way trim does. */}
+                    {focusedCandidate !== null && (
+                      <div className="ex-outrow">
+                        <button
+                          type="button"
+                          aria-label={`후보 ${previewCandidateNumber} 클립 파일 다운로드`}
+                          disabled={
+                            sourceFile === null ||
+                            clipBatchStatus === "rendering" ||
+                            clipDownloadStatusById[focusedCandidate.id] === "rendering"
+                          }
+                          onClick={() => downloadCandidateClip(focusedCandidate)}
                         >
-                          이 브라우저는 영상 미리보기를 지원하지 않아요.
-                        </video>
-                        {focusedCandidateId !== null &&
-                          previewPreparedCandidateId !== focusedCandidateId && (
-                            <div className="rh-preview-preparing" role="status">
-                              <span aria-hidden="true" />
-                              <strong>검토 화면 준비 중</strong>
-                              <small>소리를 재생하지 않고 후보 시작점에 맞추고 있어요.</small>
-                            </div>
-                          )}
+                          {clipDownloadStatusById[focusedCandidate.id] === "rendering"
+                            ? `클립 ${Math.round((clipDownloadProgressById[focusedCandidate.id] ?? 0) * 100)}%`
+                            : clipDownloadStatusById[focusedCandidate.id] === "completed"
+                              ? "클립 다시 받기"
+                              : "클립 받기"}
+                        </button>
+                        <button
+                          type="button"
+                          aria-label={`후보 ${previewCandidateNumber} 자막 파일 다운로드`}
+                          title={
+                            focusedSubtitleAvailability.available
+                              ? undefined
+                              : focusedSubtitleAvailability.reason
+                          }
+                          disabled={!focusedSubtitleAvailability.available}
+                          onClick={() => void downloadCandidateSubtitles(focusedCandidate)}
+                        >
+                          자막 .srt
+                        </button>
+                        {clipDownloadErrorById[focusedCandidate.id] !== undefined && (
+                          <p className="ex-trim-feedback" data-tone="danger" role="alert">
+                            {clipDownloadErrorById[focusedCandidate.id]}
+                          </p>
+                        )}
                       </div>
-                      ) : (
-                        <div className="rh-preview-unavailable">
-                          <strong>원본을 연결하면 여기서 바로 재생할 수 있어요.</strong>
-                          <p>AI 설명과 시간표 검토는 지금도 가능합니다.</p>
-                          <button className="btn btn-primary" type="button" onClick={focusSourceSection}>
-                            원본 다시 연결
-                          </button>
-                        </div>
-                      )}
-                      <p className="rh-preview-help">
-                        후보를 누르면 이 창에 일시정지 상태로 준비합니다. 준비 완료 뒤 재생을 눌러 확인하세요.
-                      </p>
-                    </aside>
+                    )}
                   </div>
-                  <div className="rh-candidate-column">
+                  <div className="ex-dossier">
                   <div
-                    className="rh-candidate-list"
+                    className="ex-dossier-main"
                     role="list"
                     aria-label="현재 검토 중인 클립 후보"
                   >
@@ -8952,10 +9115,6 @@ function App() {
                       candidate,
                       boundaryRevision,
                     );
-                    const subtitleAvailability = assessClipSubtitleCoverage(
-                      narrative.cues,
-                      { startMs: effectiveRange.startMs, endMs: effectiveRange.endMs },
-                    );
                     const evidenceExplanationProjection =
                       buildCandidateEvidenceExplanationWithFallback({
                         candidate,
@@ -8971,7 +9130,6 @@ function App() {
                         evidenceExplanationProjection.explanationRange,
                         candidate.peakMs,
                       );
-                    const rangeAdjusted = candidateRangeWasAdjusted(boundaryRevision);
                     const boundaryTouched = (boundaryRevision?.revision ?? 0) > 0;
                     const approvedAfterEdit =
                       candidate.reviewState === "approved" &&
@@ -8990,119 +9148,13 @@ function App() {
                     >
                       <div className="rh-candidate-number" aria-hidden="true">#{index + 1}</div>
                       <div className="rh-candidate-main">
-                        <div className="rh-candidate-meta">
-                          <strong>{formatDuration(effectiveRange.startMs)}–{formatDuration(effectiveRange.endMs)}</strong>
-                          <span className="rh-review-badge" data-state={candidate.reviewState}>
-                            {candidate.reviewState === "approved" ? "사용하기로 함" : candidate.reviewState === "rejected" ? "제외함" : "검토 전"}
-                          </span>
-                          {aiProjection !== undefined && (
-                            <span
-                              className="rh-context-projection-badge"
-                              data-disposition={aiProjection}
-                            >
-                              {aiProjection === "recommended"
-                                ? "AI 추천"
-                                : aiProjection === "needs-review"
-                                  ? "AI 추가 확인"
-                                  : aiProjection === "deprioritized"
-                                    ? "AI 낮은 우선순위"
-                                    : "AI 근거 부족"}
-                            </span>
-                          )}
-                        </div>
-                        <div className="rh-inline-actions rh-candidate-decision-bar">
-                          <button
-                            className="btn btn-secondary"
-                            type="button"
-                            aria-label={`후보 ${index + 1} 구간 바로 보기`}
-                            aria-keyshortcuts="Space"
-                            disabled={sourcePreviewUrl === null}
-                            onClick={() => playCandidate(candidate)}
-                          >
-                            {sourcePreviewUrl === null ? "원본 연결 후 재생" : "이 구간 재생"}
-                          </button>
-                          <button
-                            className="btn btn-secondary"
-                            type="button"
-                            aria-label={`후보 ${index + 1} 클립 파일 다운로드`}
-                            disabled={
-                              sourceFile === null ||
-                              clipBatchStatus === "rendering" ||
-                              clipDownloadStatusById[candidate.id] === "rendering"
-                            }
-                            onClick={() => downloadCandidateClip(candidate)}
-                          >
-                            {clipDownloadStatusById[candidate.id] === "rendering"
-                              ? `클립 만드는 중 ${Math.round((clipDownloadProgressById[candidate.id] ?? 0) * 100)}%`
-                              : clipDownloadStatusById[candidate.id] === "completed"
-                                ? "클립 다시 다운로드"
-                                : "이 구간 클립 다운로드"}
-                          </button>
-                          <button
-                            className="btn btn-secondary"
-                            type="button"
-                            aria-label={`후보 ${index + 1} 자막 파일 다운로드`}
-                            title={subtitleAvailability.available ? undefined : subtitleAvailability.reason}
-                            disabled={!subtitleAvailability.available}
-                            onClick={() => void downloadCandidateSubtitles(candidate)}
-                          >
-                            자막 받기 (.srt)
-                          </button>
-                          <button
-                            className="btn btn-primary"
-                            type="button"
-                            aria-label={
-                              candidate.reviewState === "approved"
-                                ? `후보 ${index + 1} 승인 취소`
-                                : `후보 ${index + 1} 사용하기`
-                            }
-                            aria-keyshortcuts="A"
-                            onClick={() =>
-                              reviewCandidateAndAdvance(
-                                candidate,
-                                candidate.reviewState === "approved" ? "unreviewed" : "approved",
-                              )
-                            }
-                          >
-                            {candidate.reviewState === "approved" ? "승인 취소" : "사용할게요"}
-                          </button>
-                          <button
-                            className="btn btn-secondary"
-                            type="button"
-                            aria-label={
-                              candidate.reviewState === "rejected"
-                                ? `후보 ${index + 1} 다시 검토`
-                                : `후보 ${index + 1} 제외`
-                            }
-                            aria-keyshortcuts="R"
-                            onClick={() =>
-                              reviewCandidateAndAdvance(
-                                candidate,
-                                candidate.reviewState === "rejected" ? "unreviewed" : "rejected",
-                              )
-                            }
-                          >
-                            {candidate.reviewState === "rejected" ? "다시 검토" : "빼기"}
-                          </button>
-                          <button
-                            className="rh-shortcut-hint"
-                            type="button"
-                            aria-label="검토 단축키 안내 열기"
-                            aria-keyshortcuts="?"
-                            aria-expanded={shortcutHelpOpen}
-                            onClick={() => setShortcutHelpOpen(true)}
-                          >
-                            단축키 <kbd>?</kbd>
-                          </button>
-                        </div>
                         <div
-                          className="rh-candidate-title-row"
+                          className="ex-ttl"
                           id={candidateElementId("candidate-title", candidate.id)}
                         >
-                          <span className="rh-candidate-title-number">후보 {index + 1}</span>
                           {editingCandidateTitle ? (
                             <input
-                              className="rh-candidate-title-input"
+                              className="ex-ttl-input"
                               autoFocus
                               maxLength={80}
                               value={candidateTitleById[candidate.id] ?? evidenceExplanation.headline}
@@ -9122,20 +9174,47 @@ function App() {
                               }}
                             />
                           ) : (
-                            <h4 className="rh-candidate-title">
-                              {candidateTitleById[candidate.id] ?? evidenceExplanation.headline}
-                            </h4>
+                            <h4>{candidateTitleById[candidate.id] ?? evidenceExplanation.headline}</h4>
                           )}
                           <button
                             type="button"
-                            className="rh-candidate-title-edit"
+                            className="ex-ttl-edit"
+                            aria-label={ui("후보 제목 편집", "Edit candidate title")}
                             onClick={() => setEditingCandidateTitle((current) => !current)}
                           >
-                            {editingCandidateTitle ? ui("완료", "Done") : ui("제목 편집", "Edit title")}
+                            {editingCandidateTitle ? ui("완료", "Done") : "✎"}
                           </button>
                         </div>
+                        <div className="ex-meta">
+                          <span className="ex-tc">
+                            {formatDuration(effectiveRange.startMs)} – {formatDuration(effectiveRange.endMs)}
+                            {" · "}
+                            {Math.round((effectiveRange.endMs - effectiveRange.startMs) / 1_000)}초
+                          </span>
+                          <span
+                            className="ex-badge"
+                            data-kind={candidate.reviewState === "approved" ? "ok" : "st"}
+                          >
+                            {candidate.reviewState === "approved"
+                              ? "사용하기로 함"
+                              : candidate.reviewState === "rejected"
+                                ? "제외함"
+                                : "검토 전"}
+                          </span>
+                          {aiProjection !== undefined && (
+                            <span className="ex-badge" data-kind="ai">
+                              {aiProjection === "recommended"
+                                ? "AI 추천"
+                                : aiProjection === "needs-review"
+                                  ? "AI 추가 확인"
+                                  : aiProjection === "deprioritized"
+                                    ? "AI 낮은 우선순위"
+                                    : "AI 근거 부족"}
+                            </span>
+                          )}
+                        </div>
                         <div
-                          className="ex-seg"
+                          className="ex-bmk"
                           role="tablist"
                           aria-label={`후보 ${index + 1} 상세 정보 탭`}
                         >
@@ -9172,70 +9251,70 @@ function App() {
                           >
                             맥락
                           </button>
-                          <span className="ex-seg-keys">
+                          <span className="ex-bmk-keys">
                             <kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> · <kbd>D</kbd> 순환
                           </span>
                         </div>
                         {dossierTab === "summary" && (
                           <div
-                            className="ex-tabpane"
+                            className="ex-pane"
                             data-pane="summary"
                             role="tabpanel"
                             aria-labelledby={candidateElementId("dossier-tab-summary", candidate.id)}
                           >
-                            <p className="rh-candidate-reason">
-                              <strong>먼저 볼 이유</strong>
-                              {evidenceExplanation.whyWorthReviewing.text}
-                            </p>
-                            <p className="rh-candidate-reference-transcript">
-                              <strong>확인한 대사</strong>
-                              {candidateContext.transcriptKo}
-                            </p>
-                            <p className="rh-candidate-verify-note">
+                            <div className="ex-lede">
+                              <p className="ex-pane-label">왜 이 장면인가</p>
+                              <p>{evidenceExplanation.whyWorthReviewing.text}</p>
+                            </div>
+                            <div className="ex-quote">
+                              <p className="ex-pane-label">확인한 대사</p>
+                              <blockquote>{candidateContext.transcriptKo}</blockquote>
+                            </div>
+                            <p className="ex-caveat">
                               AI 단서는 참고용이에요. 재생해서 직접 확인한 뒤 판단해 주세요.
                             </p>
                           </div>
                         )}
                         {dossierTab === "context" && (
-                          <section
-                            className="ex-tabpane rh-candidate-context-chain"
+                          <div
+                            className="ex-pane"
                             data-pane="context"
                             role="tabpanel"
                             aria-labelledby={candidateElementId("dossier-tab-context", candidate.id)}
                           >
-                            <header>
+                            <p className="ex-pane-label">구간 흐름</p>
+                            <div className="ex-step">
+                              <span className="ex-step-dot" aria-hidden="true" />
                               <div>
-                                <strong>전체 방송 안에서 이 장면</strong>
-                                <span>맥락·대사·화면 4장·대표 썸네일 검증 완료</span>
-                              </div>
-                              <span>{candidateContext.topicContextKo}</span>
-                            </header>
-                            <p className="rh-candidate-broadcast-flow">
-                              <strong>전체 방송 흐름</strong>
-                              {candidateContext.broadcastSummaryKo}
-                            </p>
-                            <div className="rh-candidate-context-sequence">
-                              <article>
-                                <span>직전 흐름</span>
+                                <div className="ex-step-label">직전</div>
                                 <p>{candidateContext.beforeContextKo}</p>
-                              </article>
-                              <article data-current="true">
-                                <span>검증된 후보 상황</span>
+                              </div>
+                            </div>
+                            <div className="ex-step" data-now="true">
+                              <span className="ex-step-dot" aria-hidden="true" />
+                              <div>
+                                <div className="ex-step-label">지금 이 장면</div>
                                 <p>
                                   {candidateGeminiInsight?.eventSummaryKo ??
                                     candidateContext.contextVerdictKo}
                                 </p>
-                              </article>
-                              <article>
-                                <span>직후 흐름</span>
-                                <p>{candidateContext.afterContextKo}</p>
-                              </article>
+                              </div>
                             </div>
-                          </section>
+                            <div className="ex-step">
+                              <span className="ex-step-dot" aria-hidden="true" />
+                              <div>
+                                <div className="ex-step-label">직후</div>
+                                <p>{candidateContext.afterContextKo}</p>
+                              </div>
+                            </div>
+                            <p className="ex-caveat">
+                              주제 구간: {candidateContext.topicContextKo}
+                            </p>
+                          </div>
                         )}
                         {dossierTab === "clues" && (
                         <div
-                          className="ex-tabpane"
+                          className="ex-pane"
                           data-pane="clues"
                           role="tabpanel"
                           aria-labelledby={candidateElementId("dossier-tab-clues", candidate.id)}
@@ -9247,7 +9326,7 @@ function App() {
                             candidateAudioEventOutcome !== undefined ||
                             boundaryTouched ||
                             approvedAfterEdit) && (
-                            <div className="ex-tabpane-badges">
+                            <div className="ex-pane-badges">
                               {narrative.basis === "visual-exploration" && (
                                 <span className="rh-interpretation-badge" data-basis={narrative.basis}>
                                   {narrative.basisLabel}
@@ -9615,132 +9694,6 @@ function App() {
                           </div>
                         </div>
                         )}
-                        <details className="rh-boundary-editor">
-                          <summary
-                            id={candidateElementId(
-                              "candidate-boundary-summary",
-                              candidate.id,
-                            )}
-                            aria-label={`후보 ${index + 1} 시작·끝 다듬기`}
-                          >
-                            시작·끝 다듬기
-                          </summary>
-                          <div className="rh-boundary-editor-body">
-                            <div className="rh-boundary-range-summary">
-                              <span>
-                                현재 사용할 구간
-                                <strong>
-                                  {formatDuration(effectiveRange.startMs)}–{formatDuration(effectiveRange.endMs)}
-                                </strong>
-                              </span>
-                              <span>
-                                AI 제안
-                                <strong>
-                                  {formatDuration(candidate.startMs)}–{formatDuration(candidate.endMs)}
-                                </strong>
-                              </span>
-                            </div>
-                            <p className="rh-help">
-                              이 후보만 바뀌며 AI가 처음 고른 구간은 그대로 보관돼요. 클립은 30초~1분 안에서 반응 정점을 포함합니다.
-                            </p>
-                            <div className="rh-boundary-control-grid">
-                              <fieldset>
-                                <legend>시작 위치</legend>
-                                <div className="rh-boundary-buttons">
-                                  <button
-                                    className="btn btn-secondary"
-                                    type="button"
-                                    aria-label={`후보 ${index + 1} 시작을 5초 앞으로`}
-                                    onClick={() => nudgeCandidateBoundary(candidate, "SHIFT_START", -5_000)}
-                                  >
-                                    {BOUNDARY_NUDGE_MS / 1_000}초 앞
-                                  </button>
-                                  <button
-                                    className="btn btn-secondary"
-                                    type="button"
-                                    aria-label={`후보 ${index + 1} 시작을 5초 뒤로`}
-                                    onClick={() => nudgeCandidateBoundary(candidate, "SHIFT_START", 5_000)}
-                                  >
-                                    {BOUNDARY_NUDGE_MS / 1_000}초 뒤
-                                  </button>
-                                  <button
-                                    className="btn btn-secondary"
-                                    type="button"
-                                    aria-label={`후보 ${index + 1}의 현재 재생 위치를 시작으로`}
-                                    disabled={sourcePreviewUrl === null}
-                                    onClick={() => setBoundaryFromPlayerPosition(candidate, "SET_START_FROM_PLAYER")}
-                                  >
-                                    재생 위치를 시작으로
-                                  </button>
-                                </div>
-                              </fieldset>
-                              <fieldset>
-                                <legend>끝 위치</legend>
-                                <div className="rh-boundary-buttons">
-                                  <button
-                                    className="btn btn-secondary"
-                                    type="button"
-                                    aria-label={`후보 ${index + 1} 끝을 5초 앞으로`}
-                                    onClick={() => nudgeCandidateBoundary(candidate, "SHIFT_END", -5_000)}
-                                  >
-                                    {BOUNDARY_NUDGE_MS / 1_000}초 앞
-                                  </button>
-                                  <button
-                                    className="btn btn-secondary"
-                                    type="button"
-                                    aria-label={`후보 ${index + 1} 끝을 5초 뒤로`}
-                                    onClick={() => nudgeCandidateBoundary(candidate, "SHIFT_END", 5_000)}
-                                  >
-                                    {BOUNDARY_NUDGE_MS / 1_000}초 뒤
-                                  </button>
-                                  <button
-                                    className="btn btn-secondary"
-                                    type="button"
-                                    aria-label={`후보 ${index + 1}의 현재 재생 위치를 끝으로`}
-                                    disabled={sourcePreviewUrl === null}
-                                    onClick={() => setBoundaryFromPlayerPosition(candidate, "SET_END_FROM_PLAYER")}
-                                  >
-                                    재생 위치를 끝으로
-                                  </button>
-                                </div>
-                              </fieldset>
-                            </div>
-                            <div className="rh-boundary-footer">
-                              <button
-                                className="btn btn-secondary"
-                                type="button"
-                                aria-label={`후보 ${index + 1}을 AI 제안 구간으로 되돌리기`}
-                                disabled={!boundaryTouched || !rangeAdjusted}
-                                onClick={() => resetCandidateBoundary(candidate)}
-                              >
-                                AI 제안으로 되돌리기
-                              </button>
-                              {sourcePreviewUrl === null && (
-                                <span>재생 위치 지정은 원본을 다시 연결하면 사용할 수 있어요.</span>
-                              )}
-                            </div>
-                            {boundaryFeedback?.candidateId === candidate.id && (
-                              <p
-                                className="rh-boundary-feedback"
-                                data-tone={boundaryFeedback.tone}
-                                role="status"
-                                aria-live="polite"
-                              >
-                                {boundaryFeedback.message}
-                              </p>
-                            )}
-                          </div>
-                        </details>
-                        {clipDownloadStatusById[candidate.id] === "completed" && (
-                          <p className="rh-notice" data-tone="success" role="status">
-                            이 후보의 영상 클립 다운로드를 시작했어요.
-                          </p>
-                        )}
-                        {clipDownloadErrorById[candidate.id] !== undefined && (
-                          <p className="rh-notice" data-tone="danger" role="alert">
-                            {clipDownloadErrorById[candidate.id]}
-                          </p>
-                        )}
                       </div>
                       <div className="rh-confidence">
                         <span>{candidate.evidence.audio === undefined ? "가장 강한 순간" : "반응 정점"}</span>
@@ -9952,6 +9905,9 @@ function App() {
         </footer>
         </div>
       </main>
+      </div>
+        </div>
+      </div>
 
       {reviewUndo !== null && (
         <ReviewUndoToast
