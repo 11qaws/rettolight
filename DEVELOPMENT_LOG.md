@@ -7,7 +7,7 @@
 - 같은 화면 묶음에서 결정한 대표 썸네일 timestamp, 네 화면, 오디오 결과와 context schema를 모두 확인한 뒤에만 verification receipt를 발급한다. final publication은 receipt와 `recommend + consistent + streamer-event`를 모두 요구하며 빠른 후보, 의미 후보, 과거 승인 상태가 이 guard를 우회하지 않는다.
 - 후보 상세에 전체 방송 흐름과 `직전 → 검증된 상황 → 직후`, 확인 대사를 고정 정보 구조로 추가했다. 방송 흐름 요약에서는 최종 후보와 연결된 서술을 굵게 표시하고 실제 candidate ID에서 계산한 클릭 가능한 윗첨자 번호를 붙인다. 요약이 사건을 생략한 경우 검증된 후보 상황을 주석 문장으로 보충해 모든 최종 후보가 방송 서술과 양방향으로 연결된다.
 - 후보 insight 저장 schema를 `1.5.0`으로 올려 verification receipt와 새 판정 필드를 보존했다. context-aware Qwen revision은 v7, Gemini revision은 v8, routing revision은 v8로 분리해 이전 유료 결과를 새 완전 검증 결과로 relabel하지 않는다.
-- 최종 release gate는 strict TypeScript, ESLint warning 0, 78개 테스트 파일 807개 테스트, production Vite build와 Wrangler dry-run을 통과했다. main JS는 670.13 kB(193.46 kB gzip), CSS는 118.89 kB(20.08 kB gzip), Worker upload는 239.70 KiB(46.57 KiB gzip)다. 로컬 브라우저에서 v0.3.45, 가로 overflow 0, warning/error 로그 0을 확인했다. 이번 요청에는 배포 지시가 없으므로 commit·push·실제 Worker/Pages 배포는 실행하지 않았다.
+- 최종 release gate는 strict TypeScript, ESLint warning 0, 78개 테스트 파일 807개 테스트, production Vite build와 Wrangler dry-run을 통과했다. main JS는 670.19 kB(193.51 kB gzip), CSS는 118.89 kB(20.08 kB gzip), Worker upload는 239.70 KiB(46.57 KiB gzip)다. 로컬 브라우저에서 v0.3.45, 가로 overflow 0, warning/error 로그 0을 확인했다. Worker `bdf53a89-2de3-4616-9efb-3ceb1925e0c1` 배포 뒤 `/healthz` 200, production Origin preflight 204, 1초 canonical WAV 실요청의 Qwen context-verified v7 구조화 응답 200을 확인했다. 기능 commit `c7f636b`의 GitHub Pages workflow `29999885869`는 build·deploy를 모두 통과했고 공개 루트·직접 진입·`index-Dv6LRMYS.js`·`index-CqKQah3A.css`가 HTTP 200을 반환했으며 공개 JavaScript가 `0.3.45`를 제공한다.
 
 ## 2026-07-23 `0.3.44` 화면 필수 AI 큐·통합 검토 작업면·전 단계 진행률
 
